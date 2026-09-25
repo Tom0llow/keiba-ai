@@ -1,0 +1,45 @@
+# Project-local Codex configuration.
+#
+# Network policy:
+# - ordinary workspace sandbox commands stay offline
+# - autonomous Git/GitHub operations must use the reviewed wrapper copies in
+#   the protected Codex user guard store through its generated absolute-path
+#   rule; `.git/codex-guard/` contains only repository invocation metadata
+# - direct GitHub CLI access requires approval; ordinary Git inspection stays
+#   inside the sandbox
+# - this avoids exposing credentials to the sandbox and keeps Git/GitHub
+#   mutations behind narrow wrappers.
+
+approval_policy = "on-request"
+approvals_reviewer = "user"
+
+sandbox_mode = "workspace-write"
+web_search = "live"
+
+project_doc_max_bytes = 32768
+project_doc_fallback_filenames = []
+
+[sandbox_workspace_write]
+network_access = false
+writable_roots = []
+
+[windows]
+sandbox = "unelevated"
+
+[shell_environment_policy]
+inherit = "all"
+
+# Keep KEY / SECRET / TOKEN variables out of ordinary Codex subprocesses.
+# GitHub authentication is expected to use the host credential store from
+# allow-listed host-side commands, not GH_TOKEN inside the sandbox.
+ignore_default_excludes = false
+
+[history]
+persistence = "save-all"
+
+[features]
+multi_agent = true
+
+[agents]
+enabled = true
+max_concurrent_threads_per_session = 4

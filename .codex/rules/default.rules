@@ -1,0 +1,300 @@
+# Autonomous development execution policy.
+#
+# Important:
+# - `allow` means run outside the sandbox without an extra approval prompt.
+# - Git/GitHub network operations intentionally rely on these host-side rules.
+# - Windows path/executable spellings are enumerated to avoid accidental
+#   sandbox fallback (`127.0.0.1:9` proxy failures).
+
+# ---------------------------------------------------------------------------
+# Direct GitHub inspection
+# ---------------------------------------------------------------------------
+
+# Do not use `gh auth status` in Codex. In sandbox/headless execution it can
+# produce misleading keyring diagnostics. Authentication is verified by the
+# guarded preflight via an actual API request.
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "auth", "status"],
+    decision = "forbidden",
+    justification = "Use the absolute installed preflight recorded in .git/codex-guard/guard-invocation.json instead of direct gh auth status.",
+)
+
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "repo", "view"],
+    decision = "prompt",
+    justification = "Direct host credential use is not repository-scoped; autonomous work uses the trusted guard.",
+)
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "pr", "view"],
+    decision = "prompt",
+    justification = "Use the installed inspect-pr guard for autonomous PR inspection.",
+)
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "pr", "diff"],
+    decision = "prompt",
+    justification = "Use the installed inspect-pr guard for autonomous PR inspection.",
+)
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "pr", "checks"],
+    decision = "prompt",
+    justification = "Use the installed inspect-pr guard for autonomous PR inspection.",
+)
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "pr", "status"],
+    decision = "prompt",
+    justification = "Direct host credential use is not repository-scoped; autonomous work uses the trusted guard.",
+)
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "run", "list"],
+    decision = "prompt",
+    justification = "Use the installed inspect-ci guard for autonomous CI inspection.",
+)
+prefix_rule(
+    pattern = [["gh", "gh.exe"], "run", "view"],
+    decision = "prompt",
+    justification = "Use the installed inspect-ci guard for autonomous CI inspection.",
+)
+
+# ---------------------------------------------------------------------------
+# Installed guard invocation
+# ---------------------------------------------------------------------------
+
+# Execpolicy matches argv, not the process working directory. A relative
+# `.git/codex-guard` token could therefore resolve inside an attacker-chosen
+# directory before the guard can verify itself. The manual installer writes a
+# clone-bound user-layer rule containing absolute executable and script paths.
+# Relative installed paths always fail closed here.
+prefix_rule(
+    pattern = [
+        ["pwsh", "pwsh.exe", "powershell.exe"],
+        "-NoProfile",
+        "-File",
+        [
+            ".git/codex-guard/scripts/agent/github-preflight.ps1",
+            ".git/codex-guard/scripts/agent/start-task.ps1",
+            ".git/codex-guard/scripts/agent/commit-task.ps1",
+            ".git/codex-guard/scripts/agent/push-task.ps1",
+            ".git/codex-guard/scripts/agent/create-pr.ps1",
+            ".git/codex-guard/scripts/agent/wait-ci.ps1",
+            ".git/codex-guard/scripts/agent/inspect-pr.ps1",
+            ".git/codex-guard/scripts/agent/inspect-ci.ps1",
+            ".git/codex-guard/scripts/agent/merge-ready.ps1",
+            ".git/codex-guard/scripts/agent/merge-task.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\github-preflight.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\start-task.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\commit-task.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\push-task.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\create-pr.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\wait-ci.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\inspect-pr.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\inspect-ci.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\merge-ready.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\merge-task.ps1",
+        ],
+    ],
+    decision = "forbidden",
+    justification = "Use the absolute invocation recorded in .git/codex-guard/guard-invocation.json and installed in the user-layer execpolicy.",
+)
+
+# Workspace copies are reviewable source, never host-executable trust anchors.
+prefix_rule(
+    pattern = [
+        ["pwsh", "pwsh.exe", "powershell.exe"],
+        "-NoProfile",
+        "-File",
+        [
+            "scripts/agent/github-preflight.ps1",
+            "./scripts/agent/github-preflight.ps1",
+            ".\\scripts\\agent\\github-preflight.ps1",
+            "scripts\\agent\\github-preflight.ps1",
+            "scripts/agent/start-task.ps1",
+            "./scripts/agent/start-task.ps1",
+            ".\\scripts\\agent\\start-task.ps1",
+            "scripts\\agent\\start-task.ps1",
+            "scripts/agent/commit-task.ps1",
+            "./scripts/agent/commit-task.ps1",
+            ".\\scripts\\agent\\commit-task.ps1",
+            "scripts\\agent\\commit-task.ps1",
+            "scripts/agent/push-task.ps1",
+            "./scripts/agent/push-task.ps1",
+            ".\\scripts\\agent\\push-task.ps1",
+            "scripts\\agent\\push-task.ps1",
+            "scripts/agent/create-pr.ps1",
+            "./scripts/agent/create-pr.ps1",
+            ".\\scripts\\agent\\create-pr.ps1",
+            "scripts\\agent\\create-pr.ps1",
+            "scripts/agent/wait-ci.ps1",
+            "./scripts/agent/wait-ci.ps1",
+            ".\\scripts\\agent\\wait-ci.ps1",
+            "scripts\\agent\\wait-ci.ps1",
+            "scripts/agent/inspect-pr.ps1",
+            "./scripts/agent/inspect-pr.ps1",
+            ".\\scripts\\agent\\inspect-pr.ps1",
+            "scripts\\agent\\inspect-pr.ps1",
+            "scripts/agent/inspect-ci.ps1",
+            "./scripts/agent/inspect-ci.ps1",
+            ".\\scripts\\agent\\inspect-ci.ps1",
+            "scripts\\agent\\inspect-ci.ps1",
+            "scripts/agent/merge-ready.ps1",
+            "./scripts/agent/merge-ready.ps1",
+            ".\\scripts\\agent\\merge-ready.ps1",
+            "scripts\\agent\\merge-ready.ps1",
+            "scripts/agent/merge-task.ps1",
+            "./scripts/agent/merge-task.ps1",
+            ".\\scripts\\agent\\merge-task.ps1",
+            "scripts\\agent\\merge-task.ps1",
+        ],
+    ],
+    decision = "forbidden",
+    justification = "Use the absolute reviewed copy from guard-invocation.json; workspace scripts are mutable.",
+)
+
+# One-time/admin repository policy must run in a trusted human terminal.
+prefix_rule(
+    pattern = [
+        ["pwsh", "pwsh.exe", "powershell.exe"],
+        "-NoProfile",
+        "-File",
+        [
+            "scripts/github/configure-main-protection.ps1",
+            "./scripts/github/configure-main-protection.ps1",
+            ".\\scripts\\github\\configure-main-protection.ps1",
+            "scripts\\github\\configure-main-protection.ps1",
+        ],
+    ],
+    decision = "forbidden",
+    justification = "Run repository protection setup manually from reviewed protected main.",
+)
+prefix_rule(
+    pattern = [
+        ["pwsh", "pwsh.exe", "powershell.exe"],
+        "-NoProfile",
+        "-File",
+        [
+            "scripts/github/verify-main-protection.ps1",
+            "./scripts/github/verify-main-protection.ps1",
+            ".\\scripts\\github\\verify-main-protection.ps1",
+            "scripts\\github\\verify-main-protection.ps1",
+        ],
+    ],
+    decision = "forbidden",
+    justification = "Run the workspace verifier manually; autonomous preflight uses its installed trusted copy.",
+)
+prefix_rule(
+    pattern = [
+        ["pwsh", "pwsh.exe", "powershell.exe"],
+        "-NoProfile",
+        "-File",
+        [
+            "scripts/setup/install-guarded-wrappers.ps1",
+            "./scripts/setup/install-guarded-wrappers.ps1",
+            ".\\scripts\\setup\\install-guarded-wrappers.ps1",
+            "scripts\\setup\\install-guarded-wrappers.ps1",
+        ],
+    ],
+    decision = "forbidden",
+    justification = "Installing the host-executable guard is a manual trust-boundary operation.",
+)
+
+# ---------------------------------------------------------------------------
+# Raw mutation paths are forbidden to Codex
+# ---------------------------------------------------------------------------
+
+prefix_rule(pattern = [["git", "git.exe"], "add"], decision = "forbidden", justification = "Use guarded commit-task.ps1.")
+prefix_rule(pattern = [["git", "git.exe"], "commit"], decision = "forbidden", justification = "Use guarded commit-task.ps1.")
+prefix_rule(pattern = [["git", "git.exe"], "push"], decision = "forbidden", justification = "Use guarded push-task.ps1.")
+prefix_rule(pattern = [["git", "git.exe"], "switch"], decision = "forbidden", justification = "Use guarded start/merge wrappers.")
+prefix_rule(pattern = [["git", "git.exe"], "checkout"], decision = "forbidden", justification = "Raw checkout can switch/discard outside the guarded workflow.")
+prefix_rule(pattern = [["git", "git.exe"], "restore"], decision = "forbidden", justification = "Raw restore can discard task/user changes.")
+prefix_rule(pattern = [["git", "git.exe"], "merge"], decision = "forbidden", justification = "Raw merge bypasses workflow guards.")
+prefix_rule(pattern = [["git", "git.exe"], "rebase"], decision = "forbidden", justification = "Raw rebase rewrites history.")
+prefix_rule(pattern = [["git", "git.exe"], "cherry-pick"], decision = "forbidden", justification = "Raw cherry-pick changes history outside the workflow.")
+prefix_rule(pattern = [["git", "git.exe"], "reset", "--hard"], decision = "forbidden", justification = "Can irreversibly discard work.")
+prefix_rule(pattern = [["git", "git.exe"], "clean"], decision = "forbidden", justification = "Raw clean can irreversibly delete ignored or untracked content in any option form.")
+prefix_rule(pattern = [["git", "git.exe"], "-C"], decision = "forbidden", justification = "Changing Git's working directory can bypass guarded mutation rules; use the command workdir instead.")
+prefix_rule(
+    pattern = [
+        ["git", "git.exe"],
+        [
+            "-c",
+            "--config-env",
+            "--git-dir",
+            "--git-dir=.git",
+            "--work-tree",
+            "--work-tree=.",
+            "--namespace",
+            "--bare",
+            "-p",
+            "--paginate",
+            "-P",
+            "--no-pager",
+        ],
+    ],
+    decision = "prompt",
+    justification = "Leading Git options can hide the real subcommand from repository mutation rules.",
+)
+
+# The installer adds the discovered absolute Git executable to its checkout-bound
+# user policy. Cover the standard Git for Windows locations before activation as
+# well, and require approval for every other top-level use of those spellings.
+prefix_rule(
+    pattern = [[
+        "C:\\Program Files\\Git\\cmd\\git.exe",
+        "C:\\Program Files\\Git\\bin\\git.exe",
+        "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+    ]],
+    decision = "prompt",
+    justification = "Use bare git for read-only sandboxed inspection; absolute Git execution crosses the raw-mutation rule namespace.",
+)
+prefix_rule(
+    pattern = [
+        [
+            "C:\\Program Files\\Git\\cmd\\git.exe",
+            "C:\\Program Files\\Git\\bin\\git.exe",
+            "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+        ],
+        "clean",
+    ],
+    decision = "forbidden",
+    justification = "Raw clean can irreversibly delete ignored or untracked content.",
+)
+prefix_rule(
+    pattern = [
+        [
+            "C:\\Program Files\\Git\\cmd\\git.exe",
+            "C:\\Program Files\\Git\\bin\\git.exe",
+            "C:\\Program Files\\Git\\mingw64\\bin\\git.exe",
+        ],
+        "-C",
+    ],
+    decision = "forbidden",
+    justification = "Changing Git's working directory can bypass guarded mutation rules.",
+)
+
+prefix_rule(pattern = [["gh", "gh.exe"], "pr", "create"], decision = "forbidden", justification = "Use guarded create-pr.ps1.")
+prefix_rule(pattern = [["gh", "gh.exe"], "pr", "merge"], decision = "forbidden", justification = "Use human-approved guarded merge-task.ps1.")
+prefix_rule(pattern = [["gh", "gh.exe"], "pr", "close"], decision = "forbidden", justification = "Remote mutation outside the autonomous contract.")
+prefix_rule(pattern = [["gh", "gh.exe"], "repo", "delete"], decision = "forbidden", justification = "Repository deletion is destructive.")
+prefix_rule(pattern = [["gh", "gh.exe"], "api"], decision = "forbidden", justification = "Use dedicated guarded/admin wrappers; generic API calls can mutate GitHub.")
+
+# Cover the standard GitHub CLI installation before activation. The generated
+# user policy adds the exact discovered gh.exe path for this checkout.
+prefix_rule(
+    pattern = ["C:\\Program Files\\GitHub CLI\\gh.exe"],
+    decision = "forbidden",
+    justification = "Use dedicated guarded/admin wrappers for GitHub operations.",
+)
+
+# The generated user policy additionally forbids the resolved, version-specific
+# Codex executable used by the installer.
+prefix_rule(
+    pattern = [["codex", "codex.exe"]],
+    decision = "forbidden",
+    justification = "Nested Codex execution is outside the guarded workflow.",
+)
+
+# Dependency mutation remains an explicit approval boundary.
+prefix_rule(pattern = ["uv", "add"], decision = "prompt", justification = "Changes dependencies and the lockfile.")
+prefix_rule(pattern = ["uv", "remove"], decision = "prompt", justification = "Changes dependencies and the lockfile.")
+prefix_rule(pattern = ["uv", "lock", "--upgrade"], decision = "prompt", justification = "May upgrade many dependencies.")
+prefix_rule(pattern = ["pip", "install"], decision = "prompt", justification = "Mutates the Python environment.")

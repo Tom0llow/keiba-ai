@@ -1,0 +1,179 @@
+# pyproject.toml
+#
+# Python and development-tool configuration for the keiba-ai bootstrap scaffold.
+#
+# Common commands:
+#   uv sync --locked
+#   uv run ruff format .
+#   uv run ruff check .
+#   uv run mypy src tests
+#   uv run pytest
+#
+# Reproducibility is provided by committing `uv.lock`.
+
+[project]
+name = "keiba-ai"
+version = "0.1.0"
+description = "Bootstrap scaffold for AI-driven development"
+requires-python = ">=3.12"
+dependencies = []
+
+
+# =============================================================================
+# Build system
+# =============================================================================
+
+[build-system]
+requires = ["uv_build>=0.12,<0.13"]
+build-backend = "uv_build"
+
+
+# =============================================================================
+# Development dependencies
+# =============================================================================
+
+[dependency-groups]
+dev = [
+    "mypy>=1.19.1",
+    "pre-commit>=4.5.1",
+    "pytest>=9.0",
+    "pytest-cov>=7.0.0",
+    "ruff>=0.15.4",
+]
+
+[tool.uv]
+default-groups = ["dev"]
+
+
+# =============================================================================
+# Ruff
+# =============================================================================
+
+[tool.ruff]
+# Keep this synchronized with `.python-version` and `project.requires-python`.
+target-version = "py312"
+
+line-length = 100
+indent-width = 4
+
+# Help Ruff classify first-party imports for the `src` layout.
+src = ["src"]
+
+extend-exclude = [
+    ".agents",
+    "docs",
+    "AGENTS.md",
+    "ARCHITECTURE.md",
+    "README.md",
+]
+
+
+[tool.ruff.lint]
+select = [
+    "E",    # pycodestyle errors
+    "F",    # Pyflakes
+    "I",    # isort
+    "UP",   # pyupgrade
+    "B",    # flake8-bugbear
+    "SIM",  # flake8-simplify
+    "RUF",  # Ruff-specific rules
+    "PT",   # flake8-pytest-style
+]
+
+# The formatter is the authority for physical line wrapping.
+ignore = [
+    "E501",
+]
+
+# Keep automatic fixes conservative. `ruff check --fix` applies only fixes
+# Ruff marks as safe unless `--unsafe-fixes` is explicitly supplied.
+fixable = ["ALL"]
+unfixable = []
+
+[tool.ruff.lint.per-file-ignores]
+# Package `__init__` files may intentionally re-export names.
+"**/__init__.py" = ["F401"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"
+skip-magic-trailing-comma = false
+line-ending = "auto"
+
+# Format Python examples embedded in docstrings when Ruff can parse them.
+docstring-code-format = true
+docstring-code-line-length = "dynamic"
+
+
+# =============================================================================
+# mypy
+# =============================================================================
+
+[tool.mypy]
+files = ["src", "tests"]
+
+strict = true
+mypy_path = "src"
+
+# Quality-of-life diagnostics.
+pretty = true
+show_error_codes = true
+show_error_context = true
+warn_unused_configs = true
+
+# Be explicit about package roots and avoid importing unrelated modules.
+namespace_packages = true
+explicit_package_bases = true
+
+# Cache output stays outside source directories.
+cache_dir = ".mypy_cache"
+
+# Do not globally silence missing third-party type information. Add narrow
+# module-specific overrides only when a dependency genuinely lacks usable
+# type information and the exception has been justified.
+ignore_missing_imports = false
+
+
+# =============================================================================
+# pytest
+# =============================================================================
+
+[tool.pytest]
+minversion = "9.0"
+
+testpaths = ["tests"]
+
+addopts = [
+    "-ra",
+    "--strict-config",
+    "--strict-markers",
+]
+
+# Register every custom marker here before using it.
+markers = [
+    "integration: tests that cross process, database, filesystem, or service boundaries",
+    "slow: tests intentionally excluded from fast local feedback loops",
+]
+
+
+# =============================================================================
+# Coverage.py / pytest-cov
+# =============================================================================
+
+[tool.coverage.run]
+branch = true
+source = ["src"]
+relative_files = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+fail_under = 80
+exclude_also = [
+    "if TYPE_CHECKING:",
+    "raise NotImplementedError",
+    "if __name__ == .__main__.:",
+]
+
+[tool.coverage.xml]
+output = "coverage.xml"
