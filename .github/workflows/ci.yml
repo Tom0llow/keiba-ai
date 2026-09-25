@@ -1,0 +1,147 @@
+name: CI
+
+on:
+  pull_request:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  PYTHON_VERSION: "3.12"
+  UV_VERSION: "0.12.4"
+
+jobs:
+  quality:
+    name: Quality
+    runs-on: windows-latest
+    timeout-minutes: 25
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Validate guarded workflow compatibility
+        shell: pwsh
+        run: |
+          $versions = @(
+            Get-Content scripts/guard-tests/codex-cli-version.txt |
+              ForEach-Object { $_.Trim() } |
+              Where-Object { -not [string]::IsNullOrWhiteSpace($_) }
+          )
+          if ($versions.Count -eq 0) {
+            throw "Codex CLI version policy is empty."
+          }
+
+          $windowsPowerShell = Join-Path $env:SystemRoot `
+            "System32/WindowsPowerShell/v1.0/powershell.exe"
+          foreach ($version in $versions) {
+            npm install --global "@openai/codex@$version"
+            if ($LASTEXITCODE -ne 0) {
+              throw "Failed to install Codex CLI $version."
+            }
+
+            $npmRoot = (npm root --global).Trim()
+            if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($npmRoot)) {
+              throw "Could not resolve the global npm package root."
+            }
+            $nativeCodex = @(
+              Get-ChildItem -LiteralPath (Join-Path $npmRoot "@openai") `
+                -Recurse -File -Filter "codex.exe" |
+                Where-Object {
+                  $_.FullName -match "codex-win32-x64"
+                }
+            )
+            if ($nativeCodex.Count -ne 1) {
+              throw "Expected one native codex.exe for $version; found $($nativeCodex.Count)."
+            }
+
+            $versionOutput = & $nativeCodex[0].FullName --version
+            if ($LASTEXITCODE -ne 0 -or $versionOutput -notmatch [regex]::Escape($version)) {
+              throw "Native Codex executable does not report expected version $version."
+            }
+
+            & pwsh.exe -NoProfile -File `
+              scripts/guard-tests/guard-regression.ps1 `
+              -CodexExecutablePath $nativeCodex[0].FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Guard regression failed on PowerShell 7 with Codex $version."
+            }
+
+            & $windowsPowerShell -NoProfile -File `
+              scripts/guard-tests/guard-regression.ps1 `
+              -CodexExecutablePath $nativeCodex[0].FullName
+            if ($LASTEXITCODE -ne 0) {
+              throw "Guard regression failed on Windows PowerShell 5.1 with Codex $version."
+            }
+          }
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Check formatting
+        run: uv run ruff format --check .
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Type check
+        run: uv run mypy src tests
+
+  test:
+    name: Test
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v7
+        with:
+          python-version: ${{ env.PYTHON_VERSION }}
+
+      - name: Set up uv
+        uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: ${{ env.UV_VERSION }}
+          enable-cache: true
+          cache-dependency-glob: "uv.lock"
+
+      - name: Install dependencies
+        run: uv sync --locked
+
+      - name: Run tests with coverage
+        run: >
+          uv run pytest tests
+          --cov=src
+          --cov-report=term-missing
+          --cov-report=xml
+
+      - name: Upload coverage artifact
+        if: always() && hashFiles('coverage.xml') != ''
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+          retention-days: 7
