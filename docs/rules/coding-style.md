@@ -260,6 +260,60 @@ Add docstrings for:
 
 Do not add verbose docstrings to trivial private helpers.
 
+Use the PEP 257 form with Google-style sections when details are needed. Place
+the docstring as the first statement of a module, class, function, or method.
+Use triple double quotes and start with a short summary ending in a period.
+For functions and methods, use an imperative verb such as "Return". Separate
+a longer description from the summary with a blank line.
+
+Describe the public contract rather than repeating the signature or explaining
+each implementation step. A module docstring states its purpose; a class
+docstring explains what an instance represents; a function or method docstring
+explains its observable behavior. Include assumptions, units, array shapes,
+mutation, or side effects when callers need to know them.
+
+For longer function and method docstrings, use these sections in this order
+when they provide useful information. Indent entries four spaces below each
+section heading:
+
+- `Args:` lists each parameter as `name: Meaning and relevant constraints.`
+- `Returns:` or `Yields:` explains the result, not just its type.
+- `Raises:` lists each relevant exception and when it occurs.
+- `Examples:` shows useful calls with outputs that match the implementation.
+
+In class docstrings, use `Attributes:` for public attributes whose meaning is
+not obvious.
+
+Keep types in annotations instead of duplicating them in prose. Keep examples
+accurate and update docstrings when behavior changes. A one-line docstring is
+enough when no further explanation is needed.
+
+For example, document a public function's behavior and meaningful failure:
+
+```python
+def clamp(value: float, lower: float, upper: float) -> float:
+    """Return a value within the inclusive lower and upper limits.
+
+    Args:
+        value: Number to constrain.
+        lower: Inclusive lower limit.
+        upper: Inclusive upper limit; must be at least lower.
+
+    Returns:
+        The nearest number within the limits.
+
+    Raises:
+        ValueError: If upper is less than lower.
+
+    Examples:
+        >>> clamp(1.5, 0.0, 1.0)
+        1.0
+    """
+    if lower > upper:
+        raise ValueError("lower must not exceed upper")
+    return min(max(value, lower), upper)
+```
+
 ## 17. Architecture
 
 The current source boundary is `src/keiba_ai/`; no product entry point or domain
