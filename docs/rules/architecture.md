@@ -50,6 +50,76 @@ When an entry point is introduced, keep it responsible for boundary concerns and
 delegation rather than product calculations. Its exact form must be selected by
 the requirement, not by this bootstrap rule.
 
+### Cookiecutter Data Science reference layout
+
+The table and tree below illustrate the template's separation of source code,
+data stages, experiments, reference material, and outputs. They do not describe
+the current repository or change the source boundary above. Adopt a part of
+this layout only when an explicit requirement needs it:
+
+| Content | Placement |
+| --- | --- |
+| Reusable Python behavior | `src/`; group implemented work by data creation, features, models, and visualization. |
+| Automated behavior tests | `tests/`; group related tests so the source they cover is easy to find. |
+| Datasets | `data/external/` and `data/raw/` for inputs; `data/interim/` and `data/processed/` for derived outputs. |
+| Model and report artifacts | Root `models/` for trained models and predictions; `reports/figures/` for generated analysis. |
+| Exploration and reference material | `notebooks/` for exploration; `references/` for data dictionaries and manuals. |
+| Project documentation | `docs/` and the repository `README.md`, as appropriate. |
+
+Within the example's `src/`, the `data/`, `features/`, `models/`, and
+`visualization/` directories distinguish dataset creation, feature computation,
+model code, and plotting. Root `models/` holds generated artifacts;
+`src/models/` holds Python code. Keep I/O at explicit boundaries.
+
+If notebooks are introduced for exploration or communication, call reusable
+package code from them. Move repeated processing and model logic into importable
+modules so experiments and later applications can share the same behavior.
+Preserve raw inputs and write derived data to distinct outputs through
+reproducible steps. Record the source data, code revision, configuration, and
+evaluation metrics when experiments need to be reproduced. Do not copy a
+template's full directory tree into this repository before those
+responsibilities exist.
+
+The following future layout follows the Cookiecutter Data Science v1 example
+while retaining this repository's environment and test files. It is a reference
+diagram, not a scaffold to create now or a specification of Python import paths:
+
+```text
+.
+├── README.md
+├── pyproject.toml
+├── uv.lock
+├── data/
+│   ├── external/                 # Inputs from third parties
+│   ├── raw/                      # Original, immutable inputs
+│   ├── interim/                  # Intermediate transformed data
+│   └── processed/                # Final data prepared for modeling
+├── docs/                         # Project documentation and decisions
+├── models/                       # Trained models, predictions, and summaries
+├── notebooks/                    # Exploratory notebooks
+├── references/                   # Data dictionaries and manuals
+├── reports/                      # Generated analysis
+│   └── figures/                  # Generated figures
+├── src/
+│   ├── __init__.py
+│   ├── data/
+│   │   └── make_dataset.py       # Dataset creation code
+│   ├── features/
+│   │   └── build_features.py     # Feature computation code
+│   ├── models/
+│   │   ├── train_model.py        # Training code
+│   │   └── predict_model.py      # Inference code
+│   └── visualization/
+│       └── visualize.py         # Plotting code
+└── tests/                        # Tests for implemented behavior
+```
+
+Name notebooks by order, author, and purpose when they are introduced, for
+example, `1.0-ab-initial-data-exploration.ipynb`. The existing
+`pyproject.toml` and `uv.lock` define this repository's environment; the
+template's `requirements.txt`, `setup.py`, `tox.ini`, and `Makefile` are not
+required to use its directory organization.
+
 ## 4. I/O and side-effect boundaries
 
 Filesystem, database, network, subprocess, clock, environment, and randomness
