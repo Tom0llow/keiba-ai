@@ -1012,6 +1012,54 @@ try {
         throw "PR HEAD change during check collection was not rejected."
     }
 
+    $configureProtection = Get-Content `
+        -LiteralPath "scripts/github/configure-main-protection.ps1" `
+        -Raw
+    $verifyProtection = Get-Content `
+        -LiteralPath "scripts/github/verify-main-protection.ps1" `
+        -Raw
+    $protectionTokens = $null
+    $protectionErrors = $null
+    $protectionAst = [System.Management.Automation.Language.Parser]::ParseFile(
+        (Join-Path $repoRoot "scripts/github/configure-main-protection.ps1"),
+        [ref]$protectionTokens,
+        [ref]$protectionErrors
+    )
+    $bodyAssignments = @($protectionAst.FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.AssignmentStatementAst] -and
+        $node.Left.Extent.Text -eq '$body'
+    }, $true))
+    if ($bodyAssignments.Count -ne 1) {
+        throw "Could not isolate the branch-protection request body."
+    }
+    $statusCheckTables = @($bodyAssignments[0].FindAll({
+        param($node)
+        $node -is [System.Management.Automation.Language.HashtableAst]
+    }, $true) | Where-Object {
+        $keys = @($_.KeyValuePairs | ForEach-Object { $_.Item1.Extent.Text })
+        "strict" -in $keys -and "checks" -in $keys
+    })
+    if ($statusCheckTables.Count -ne 1) {
+        throw "Could not isolate the required status-check policy."
+    }
+    $statusCheckKeys = @($statusCheckTables[0].KeyValuePairs | ForEach-Object {
+        $_.Item1.Extent.Text
+    })
+    if ($statusCheckKeys.Count -ne 2 -or "contexts" -in $statusCheckKeys) {
+        throw "Required status checks must use app-bound checks without contexts."
+    }
+    if (
+        -not $configureProtection.Contains('app_id  = $githubActionsAppId') -or
+        -not $verifyProtection.Contains('$_.appId -eq $expectedCheck.appId') -or
+        -not $verifyProtection.Contains('$configuredChecks.Count -eq $expectedChecks.Count') -or
+        -not $verifyProtection.Contains('$script:TrustedCommandOutputRoot = $dotGit') -or
+        -not $verifyProtection.Contains('Assert-NoReparsePointInPath -Path $dotGit') -or
+        -not $verifyProtection.Contains('Assert-CanonicalPhysicalPath -Path $dotGit')
+    ) {
+        throw "Branch-protection checks or manual verifier initialization are incomplete."
+    }
+
     $stateTestRoot = Join-Path (
         [System.IO.Path]::GetTempPath()
     ) ("guard-state-" + [guid]::NewGuid().ToString("N"))
@@ -1126,20 +1174,6 @@ try {
                 -Force `
                 -ErrorAction SilentlyContinue
         }
-    }
-
-    $configureProtection = Get-Content `
-        -LiteralPath "scripts/github/configure-main-protection.ps1" `
-        -Raw
-    $verifyProtection = Get-Content `
-        -LiteralPath "scripts/github/verify-main-protection.ps1" `
-        -Raw
-    if (
-        -not $configureProtection.Contains('app_id  = $githubActionsAppId') -or
-        -not $verifyProtection.Contains('$_.appId -eq $expectedCheck.appId') -or
-        -not $verifyProtection.Contains('$configuredChecks.Count -eq $expectedChecks.Count')
-    ) {
-        throw "Branch-protection checks are no longer bound exactly to an application ID."
     }
 
     $installerText = Get-Content -LiteralPath $installerPath -Raw

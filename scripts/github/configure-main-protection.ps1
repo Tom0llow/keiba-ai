@@ -133,7 +133,6 @@ if ($LASTEXITCODE -ne 0) {
 $body = @{
     required_status_checks = @{
         strict   = $true
-        contexts = @()
         checks   = $requiredChecks
     }
     enforce_admins = $true
@@ -162,7 +161,7 @@ $body | gh api `
     --input - | Out-Null
 
 if ($LASTEXITCODE -ne 0) {
-    throw "Failed to configure branch protection. Admin/owner permission may be required."
+    throw "Failed to configure branch protection. Inspect the GitHub API error above."
 }
 
 Write-Host "Configured repository/branch policy for ${repo}:$Branch"
