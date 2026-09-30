@@ -15,17 +15,15 @@ Instructions apply in this order when they conflict:
 
 ## 2. Current repository state
 
-This repository is a Python 3.12 project at the bootstrap stage. The tracked
-product surface is deliberately limited to an importable package skeleton and
-its smoke test:
+This repository is a Python 3.12 project at the bootstrap stage. It has no
+product package or product behavior. The Python test verifies that the project
+is not installed as a package:
 
 ```text
 .
 ├─ src/
-│  └─ keiba_ai/
-│     └─ __init__.py
-├─ tests/
-│  └─ test_package.py
+│  └─ tests/
+│     └─ test_project_environment.py
 ├─ docs/
 │  ├─ decisions/         # architecture decision records
 │  └─ rules/             # coding, architecture, Git, and testing rules
@@ -84,7 +82,7 @@ Final validation:
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 uv run pytest
 ```
 

@@ -6,7 +6,7 @@
 #   uv sync --locked
 #   uv run ruff format .
 #   uv run ruff check .
-#   uv run mypy src tests
+#   uv run mypy src
 #   uv run pytest
 #
 # Reproducibility is provided by committing `uv.lock`.
@@ -20,15 +20,6 @@ dependencies = []
 
 
 # =============================================================================
-# Build system
-# =============================================================================
-
-[build-system]
-requires = ["uv_build>=0.12,<0.13"]
-build-backend = "uv_build"
-
-
-# =============================================================================
 # Development dependencies
 # =============================================================================
 
@@ -37,7 +28,6 @@ dev = [
     "mypy>=1.19.1",
     "pre-commit>=4.5.1",
     "pytest>=9.0",
-    "pytest-cov>=7.0.0",
     "ruff>=0.15.4",
 ]
 
@@ -110,7 +100,7 @@ docstring-code-line-length = "dynamic"
 # =============================================================================
 
 [tool.mypy]
-files = ["src", "tests"]
+files = ["src"]
 
 strict = true
 mypy_path = "src"
@@ -141,7 +131,7 @@ ignore_missing_imports = false
 [tool.pytest]
 minversion = "9.0"
 
-testpaths = ["tests"]
+testpaths = ["src/tests"]
 
 addopts = [
     "-ra",
@@ -154,26 +144,3 @@ markers = [
     "integration: tests that cross process, database, filesystem, or service boundaries",
     "slow: tests intentionally excluded from fast local feedback loops",
 ]
-
-
-# =============================================================================
-# Coverage.py / pytest-cov
-# =============================================================================
-
-[tool.coverage.run]
-branch = true
-source = ["src"]
-relative_files = true
-
-[tool.coverage.report]
-show_missing = true
-skip_covered = false
-fail_under = 80
-exclude_also = [
-    "if TYPE_CHECKING:",
-    "raise NotImplementedError",
-    "if __name__ == .__main__.:",
-]
-
-[tool.coverage.xml]
-output = "coverage.xml"

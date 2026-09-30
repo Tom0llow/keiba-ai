@@ -29,7 +29,7 @@ Recommended commands:
 ```bash
 uv run ruff format .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 ```
 
 Use the non-mutating format check for final validation. When formatting is
@@ -316,8 +316,8 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 ## 17. Architecture
 
-The current source boundary is `src/keiba_ai/`; no product entry point or domain
-module layout has been selected yet.
+The current repository has tests under `src/tests/` and no product source
+package, entry point, or domain module layout.
 
 - Add modules only for responsibilities required by the current task.
 - Keep imports free of runtime side effects and avoid circular dependencies.

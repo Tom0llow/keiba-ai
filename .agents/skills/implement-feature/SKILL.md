@@ -131,7 +131,7 @@ Then run repository-level checks when configured:
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 uv run pytest
 ```
 

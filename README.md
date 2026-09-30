@@ -5,13 +5,15 @@ AI-driven development foundation for a Python 3.12 project.
 ## Current status
 
 The repository is intentionally at the bootstrap stage. It contains the guarded
-development workflow and a tracked, importable package skeleton, but no product
-behavior has been implemented yet.
+development workflow and a test of the project environment. No product package
+or product behavior has been implemented yet.
 
 ```text
-src/keiba_ai/__init__.py
-tests/test_package.py
+src/tests/test_project_environment.py
 ```
+
+The project has no build system. `uv sync` installs its locked dependencies
+without installing this repository as a Python distribution.
 
 There is currently no product CLI, configuration contract, data pipeline,
 storage format, or external-service integration. Add those only from an explicit
@@ -30,7 +32,7 @@ Run the repository checks:
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 uv run pytest
 ```
 
