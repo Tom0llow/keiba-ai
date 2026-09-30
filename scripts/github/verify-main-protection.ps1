@@ -25,11 +25,20 @@ $currentScript = [System.IO.Path]::GetFullPath($PSCommandPath)
 $workspaceScript = [System.IO.Path]::GetFullPath((Join-Path `
     $repoRoot "scripts\github\verify-main-protection.ps1"
 ))
-if (-not [string]::Equals(
+if ([string]::Equals(
     $currentScript,
     $workspaceScript,
     [System.StringComparison]::OrdinalIgnoreCase
 )) {
+    $dotGit = Join-Path $repoRoot ".git"
+    if (-not (Test-Path -LiteralPath $dotGit -PathType Container)) {
+        throw "Manual branch-protection verification requires a standard checkout with a .git directory."
+    }
+    Assert-NoReparsePointInPath -Path $dotGit -Role "Repository Git directory"
+    Assert-CanonicalPhysicalPath -Path $dotGit -Role "Repository Git directory"
+    $script:TrustedCommandOutputRoot = $dotGit
+}
+else {
     $null = Assert-TrustedGuardInstallation -RepoRoot $repoRoot
 }
 Assert-GhAuthenticated
