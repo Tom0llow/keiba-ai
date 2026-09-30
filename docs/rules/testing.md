@@ -6,9 +6,10 @@ Tests provide deterministic evidence about observable behavior. Prefer focused
 unit tests, use integration tests at real boundaries, and add end-to-end tests
 only when lower-level coverage cannot demonstrate a critical user flow.
 
-The repository is currently a package skeleton. `tests/test_package.py` verifies
-that the package can be imported; it does not imply any product behavior or
-architecture.
+The repository currently has no product package. The test in
+`src/tests/test_project_environment.py` verifies that the synced environment
+does not install this repository as a distribution. It does not imply product
+behavior.
 
 ## 2. Framework and commands
 
@@ -21,7 +22,7 @@ uv run pytest
 Run the nearest test first when changing behavior:
 
 ```bash
-uv run pytest tests/test_package.py -q
+uv run pytest src/tests/test_project_environment.py -q
 ```
 
 Final repository validation is:
@@ -29,7 +30,7 @@ Final repository validation is:
 ```bash
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 uv run pytest
 ```
 

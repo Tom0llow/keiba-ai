@@ -620,6 +620,13 @@ try {
             "protected instructions",
             [System.Text.UTF8Encoding]::new($false)
         )
+        $unicodeInstructionPath = "nested/$unicodeName/AGENTS.md"
+        $untrackedPaths = @(Get-GitPathList -Arguments @(
+            "ls-files", "-z", "--others", "--exclude-standard", "--"
+        ))
+        if ($unicodeInstructionPath -notin $untrackedPaths) {
+            throw "Git path listing did not preserve a Unicode instruction path."
+        }
         $quotedInstructionRejected = $false
         try {
             Assert-NoProtectedTaskChanges -BaseSha $nestedBaselineSha -IncludeWorktree
@@ -758,7 +765,7 @@ try {
             throw "Protected trust-boundary path was not rejected: $protectedInstructionPath"
         }
     }
-    $script:MockGitDiff = "src/keiba_ai/example.py"
+    $script:MockGitDiff = "src/tests/test_project_environment.py"
     Assert-NoProtectedTaskChanges -BaseSha ("a" * 40)
 
     $script:MockIgnoredProtected = "ignored/deeper/AGENTS.md"

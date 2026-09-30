@@ -261,7 +261,7 @@ When safe and useful, run read-only validation such as:
 ```bash
 uv run pytest <relevant-tests> -q
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 ```
 
 Do not modify code to make review checks pass.

@@ -5,11 +5,11 @@ exists. This file defines how that architecture may evolve.
 
 ## 1. Preserve the bootstrap boundary
 
-The current product-code boundary is intentionally small:
+The repository currently has no product code or installable package. Its Python
+test boundary is intentionally small:
 
 ```text
-src/keiba_ai/   # importable package skeleton
-tests/          # automated tests
+src/tests/   # project-environment test
 ```
 
 There is no product entry point, CLI, configuration layout, storage contract,
@@ -34,9 +34,9 @@ service containers, or adapter hierarchies without a current requirement.
 
 ## 3. Module responsibilities and dependencies
 
-Keep product code under `src/keiba_ai/` unless an explicit requirement or ADR
-establishes another top-level boundary. Each module should own one coherent
-responsibility and have a name that describes that responsibility.
+Introduce product code under `src/` only when an explicit requirement or ADR
+establishes its module and packaging boundary. Each module should own one
+coherent responsibility and have a name that describes that responsibility.
 
 - Keep imports acyclic and free of runtime work.
 - Higher-level orchestration may depend on lower-level calculations; lower-level
@@ -60,7 +60,7 @@ this layout only when an explicit requirement needs it:
 | Content | Placement |
 | --- | --- |
 | Reusable Python behavior | `src/`; group implemented work by data creation, features, models, and visualization. |
-| Automated behavior tests | `tests/`; group related tests so the source they cover is easy to find. |
+| Automated behavior tests | `src/tests/`; group related tests so the source they cover is easy to find. |
 | Datasets | `data/external/` and `data/raw/` for inputs; `data/interim/` and `data/processed/` for derived outputs. |
 | Model and report artifacts | Root `models/` for trained models and predictions; `reports/figures/` for generated analysis. |
 | Exploration and reference material | `notebooks/` for exploration; `references/` for data dictionaries and manuals. |
@@ -100,18 +100,18 @@ diagram, not a scaffold to create now or a specification of Python import paths:
 ├── references/                   # Data dictionaries and manuals
 ├── reports/                      # Generated analysis
 │   └── figures/                  # Generated figures
-├── src/
-│   ├── __init__.py
-│   ├── data/
-│   │   └── make_dataset.py       # Dataset creation code
-│   ├── features/
-│   │   └── build_features.py     # Feature computation code
-│   ├── models/
-│   │   ├── train_model.py        # Training code
-│   │   └── predict_model.py      # Inference code
-│   └── visualization/
-│       └── visualize.py         # Plotting code
-└── tests/                        # Tests for implemented behavior
+└── src/
+    ├── __init__.py
+    ├── data/
+    │   └── make_dataset.py       # Dataset creation code
+    ├── features/
+    │   └── build_features.py     # Feature computation code
+    ├── models/
+    │   ├── train_model.py        # Training code
+    │   └── predict_model.py      # Inference code
+    ├── visualization/
+    │   └── visualize.py          # Plotting code
+    └── tests/                    # Tests for implemented behavior
 ```
 
 Name notebooks by order, author, and purpose when they are introduced, for

@@ -20,7 +20,7 @@ Replace this line with the minimal directory tree containing every changed file.
 
 - [ ] `uv run ruff format --check .`
 - [ ] `uv run ruff check .`
-- [ ] `uv run mypy src tests`
+- [ ] `uv run mypy src`
 - [ ] `uv run pytest`
 
 ## Architecture / ADR

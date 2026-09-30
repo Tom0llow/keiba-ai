@@ -160,7 +160,16 @@ function Get-GitPathList {
     if ($Arguments -notcontains "-z") {
         throw "Git path listings must use NUL separators."
     }
-    $raw = Invoke-Git -Arguments $Arguments -RawOutput
+    # PowerShell 5.1 decodes redirected native output using Console.OutputEncoding.
+    # Git's -z path output is UTF-8 even when the Windows console code page is not.
+    $previousOutputEncoding = [Console]::OutputEncoding
+    try {
+        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
+        $raw = Invoke-Git -Arguments $Arguments -RawOutput
+    }
+    finally {
+        [Console]::OutputEncoding = $previousOutputEncoding
+    }
     if ([string]::IsNullOrEmpty($raw)) {
         return @()
     }

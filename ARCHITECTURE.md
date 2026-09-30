@@ -2,9 +2,9 @@
 
 ## Status
 
-This repository is at the AI-driven-development bootstrap stage. It contains a
-minimal Python package skeleton and development automation, not an implemented
-product architecture.
+This repository is at the AI-driven-development bootstrap stage. It contains
+development automation and a test of the project environment, but no product
+package or implemented product architecture.
 
 An earlier local prototype is not a source of current requirements or design
 authority. Product behavior and durable architectural decisions must come from
@@ -20,6 +20,8 @@ an explicit requirement or an Accepted architecture decision record (ADR).
 - Automation: GitHub Actions and guarded PowerShell wrappers
 
 The locked development environment is defined by `pyproject.toml` and `uv.lock`.
+The project has no build system, so `uv sync` installs its dependencies without
+installing this repository as a Python distribution.
 Host-side autonomous Git/GitHub operations run only from hash-verified wrapper
 copies installed in the protected Codex user guard store. Every installation
 publishes a new immutable directory identified by repository policy ID, source
@@ -58,7 +60,7 @@ Repository-wide verification uses:
 uv sync --locked
 uv run ruff format --check .
 uv run ruff check .
-uv run mypy src tests
+uv run mypy src
 uv run pytest
 ```
 
@@ -79,15 +81,12 @@ arguments, while unrelated task-state-dependent guarded operations fail closed.
 
 ```text
 src/
-└─ keiba_ai/
-   └─ __init__.py
-
-tests/
-└─ test_package.py
+└─ tests/
+   └─ test_project_environment.py
 ```
 
-`src/keiba_ai/__init__.py` establishes the importable source-package boundary.
-`tests/test_package.py` verifies that the package skeleton can be imported.
+`src/tests/test_project_environment.py` verifies that the synced project is not
+installed as a Python distribution. No product source package exists.
 
 No product entry point, command-line interface, configuration contract, data
 model, persistence format, network boundary, or domain-module decomposition has
@@ -97,8 +96,8 @@ as if it were implemented.
 ## Architectural constraints during bootstrap
 
 - Keep imports free of runtime side effects.
-- Keep code under `src/keiba_ai/` and tests under `tests/` unless an explicit
-  requirement or Accepted ADR establishes another boundary.
+- Keep tests under `src/tests/`. Select the placement and packaging of future
+  product code from an explicit requirement or Accepted ADR.
 - Do not introduce speculative layers, plugin systems, storage formats, or
   service boundaries.
 - Keep external I/O, process execution, time, and randomness explicit and
