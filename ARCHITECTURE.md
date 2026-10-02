@@ -2,9 +2,8 @@
 
 ## Status
 
-This repository is at the AI-driven-development bootstrap stage. It contains
-development automation and a test of the project environment, but no product
-package or implemented product architecture.
+This repository contains development automation and a local race-data Parquet
+export. It remains uninstalled as a Python distribution.
 
 An earlier local prototype is not a source of current requirements or design
 authority. Product behavior and durable architectural decisions must come from
@@ -81,17 +80,27 @@ arguments, while unrelated task-state-dependent guarded operations fail closed.
 
 ```text
 src/
+├─ convert_race.py
+├─ data/
+│  └─ race_data.py
 └─ tests/
-   └─ test_project_environment.py
+   ├─ test_project_environment.py
+   └─ test_race_data.py
 ```
 
 `src/tests/test_project_environment.py` verifies that the synced project is not
-installed as a Python distribution. No product source package exists.
+installed as a Python distribution. `src/convert_race.py` invokes the race-data
+export; `src/data/race_data.py` owns config parsing, read-only SQLite input,
+bounded Parquet writing, and the shared processed-table loader. The module is
+importable by scripts under `src/`, but the project has no build system or
+installed distribution.
 
-No product entry point, command-line interface, configuration contract, data
-model, persistence format, network boundary, or domain-module decomposition has
-been selected. Their absence is intentional; do not document a proposed design
-as if it were implemented.
+`config/data.toml` owns the raw SQLite path and processed directory. The export
+stores one Parquet file per user table under `data/processed/`, with source text
+and NULL values preserved. It stages files and validates row and column metadata
+before publishing; it does not replace existing processed output. This storage
+and loader contract is recorded in ADR-003. No model, network boundary, or
+external-service integration has been selected.
 
 ## Architectural constraints during bootstrap
 

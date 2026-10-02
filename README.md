@@ -1,23 +1,53 @@
 # keiba-ai
 
-AI-driven development foundation for a Python 3.12 project.
+Python 3.12 project with a local race-data Parquet export and an AI-driven
+development foundation.
 
 ## Current status
 
-The repository is intentionally at the bootstrap stage. It contains the guarded
-development workflow and a test of the project environment. No product package
-or product behavior has been implemented yet.
+The repository contains the guarded development workflow and a local exporter
+for the race SQLite database. It remains a non-distributed Python project.
 
 ```text
-src/tests/test_project_environment.py
+config/data.toml
+src/convert_race.py
+src/data/race_data.py
+src/tests/
 ```
 
 The project has no build system. `uv sync` installs its locked dependencies
 without installing this repository as a Python distribution.
 
-There is currently no product CLI, configuration contract, data pipeline,
-storage format, or external-service integration. Add those only from an explicit
-requirement or an Accepted architecture decision record (ADR).
+The race-data export and loader are described in
+[`ADR-003`](docs/decisions/ADR-003-export-race-tables-as-parquet.md). No modeling
+pipeline or external-service integration is implemented.
+
+## Race data export
+
+Put the source SQLite file at `data/raw/race.db`, or change `raw_db` in
+`config/data.toml`. The configured paths are relative to that config file.
+Install the locked dependencies and export all source tables:
+
+```bash
+uv sync --locked
+uv run python src/convert_race.py --config config/data.toml
+```
+
+The export writes one `<table>.parquet` file per SQLite user table under the
+configured `data/processed/` directory. It preserves text, whitespace, NULLs,
+and date-like placeholders without parsing or cleaning them. It streams the
+large database in batches and publishes the directory after validating the
+files. The command refuses to overwrite an existing processed directory.
+`data/` is Git-ignored. The source database is opened read-only.
+
+`RaceDataLoader` in `src/data/race_data.py` uses the same config to list
+processed tables, read one table as a PyArrow table, or iterate through record
+batches. Use batch iteration for large tables because a full-table read loads
+the table into memory. Source modules are not installed as a Python distribution;
+scripts under `src/` can import `data` directly.
+
+The processed table inventory and column definitions are in
+[`docs/table-definition/`](docs/table-definition/README.md).
 
 ## Setup and validation
 
