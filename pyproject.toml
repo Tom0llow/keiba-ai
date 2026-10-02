@@ -16,7 +16,9 @@ name = "keiba-ai"
 version = "0.1.0"
 description = "Bootstrap scaffold for AI-driven development"
 requires-python = ">=3.12"
-dependencies = []
+dependencies = [
+    "pyarrow>=25.0.1",
+]
 
 
 # =============================================================================
@@ -123,6 +125,10 @@ cache_dir = ".mypy_cache"
 # type information and the exception has been justified.
 ignore_missing_imports = false
 
+[[tool.mypy.overrides]]
+module = ["pyarrow", "pyarrow.*"]
+ignore_missing_imports = true
+
 
 # =============================================================================
 # pytest
@@ -132,6 +138,7 @@ ignore_missing_imports = false
 minversion = "9.0"
 
 testpaths = ["src/tests"]
+pythonpath = ["src"]
 
 addopts = [
     "-ra",
