@@ -194,9 +194,7 @@ def _require_bool(section: dict[str, Any], key: str, section_name: str) -> bool:
     return value
 
 
-def _require_string_set(
-    section: dict[str, Any], key: str, section_name: str
-) -> frozenset[str]:
+def _require_string_set(section: dict[str, Any], key: str, section_name: str) -> frozenset[str]:
     value = section.get(key)
     if not isinstance(value, list):
         raise ValueError(f"[{section_name}].{key} must be an array of non-empty strings")
@@ -210,9 +208,7 @@ def _require_string_set(
     return frozenset(items)
 
 
-def _optional_datetime(
-    section: dict[str, Any], key: str, section_name: str
-) -> datetime | None:
+def _optional_datetime(section: dict[str, Any], key: str, section_name: str) -> datetime | None:
     value = section.get(key)
     if value is None:
         return None
