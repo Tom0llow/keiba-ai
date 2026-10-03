@@ -124,7 +124,11 @@ def _write_odds_setting(template: Path, destination: Path, race_key: RaceKey) ->
         race_key_node = data_spec_setting.find("JVRaceKey")
         if race_key_node is None:
             raise ValueError(f"{data_spec} setting must contain a JVRaceKey")
-        _set_required_text(race_key_node, "KaisaiDate", race_key.race_date.isoformat() + "T00:00:00")
+        _set_required_text(
+            race_key_node,
+            "KaisaiDate",
+            race_key.race_date.isoformat() + "T00:00:00",
+        )
         _set_required_text(race_key_node, "JyoCD", race_key.jyo_code)
         _set_required_text(race_key_node, "Kaiji", race_key.kaiji)
         _set_required_text(race_key_node, "Nichiji", race_key.nichiji)
@@ -134,7 +138,9 @@ def _write_odds_setting(template: Path, destination: Path, race_key: RaceKey) ->
 
     missing = _ODDS_DATA_SPECS - found_specs
     if missing:
-        raise ValueError(f"odds setting template is missing data specs: {', '.join(sorted(missing))}")
+        raise ValueError(
+            f"odds setting template is missing data specs: {', '.join(sorted(missing))}"
+        )
 
     tree.write(destination, encoding="utf-8", xml_declaration=True)
 
