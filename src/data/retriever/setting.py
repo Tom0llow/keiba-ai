@@ -128,7 +128,11 @@ def _apply_section(section: ET.Element, enabled: bool, enabled_specs: frozenset[
         if data_spec is None:
             raise ValueError("JVDataSpecSetting is missing DataSpec")
         available.add(data_spec)
-        _set_required_text(data_spec_setting, "IsEnabled", str(data_spec in enabled_specs).lower())
+        _set_required_text(
+            data_spec_setting,
+            "IsEnabled",
+            str(data_spec in enabled_specs).lower(),
+        )
     missing = enabled_specs - available
     if missing:
         raise ValueError(f"setting is missing data specs: {', '.join(sorted(missing))}")
