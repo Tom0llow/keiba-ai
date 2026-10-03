@@ -132,7 +132,8 @@ jobs:
           uv lock
           python - <<'PY'
           import base64
-          print("LOCK_BASE64=" + base64.b64encode(open("uv.lock", "rb").read()).decode())
+          import gzip
+          print("LOCK_GZIP_BASE64=" + base64.b64encode(gzip.compress(open("uv.lock", "rb").read(), compresslevel=9)).decode())
           PY
 
       - name: Install dependencies
