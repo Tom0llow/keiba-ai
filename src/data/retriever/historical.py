@@ -42,6 +42,7 @@ class HistoricalRetriever:
         self._odds_profile = odds_profile
         if odds_profile.race_start_date is None:
             raise ValueError("historical_odds.race_start_date is required")
+        self._odds_start_date = odds_profile.race_start_date
 
     def retrieve(self) -> int:
         """Retrieve base history, then configured time-series odds for eligible races."""
@@ -57,7 +58,7 @@ class HistoricalRetriever:
 
             odds_setting = temporary_path / "historical-odds.xml"
             count = 0
-            for race_key in self.iter_race_keys(start_date=self._odds_profile.race_start_date):
+            for race_key in self.iter_race_keys(start_date=self._odds_start_date):
                 self._setting_builder.build(
                     self._odds_profile,
                     odds_setting,
