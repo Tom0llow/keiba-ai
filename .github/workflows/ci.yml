@@ -54,7 +54,9 @@ jobs:
             $nativeCodex = @(
               Get-ChildItem -LiteralPath (Join-Path $npmRoot "@openai") `
                 -Recurse -File -Filter "codex.exe" |
-                Where-Object { $_.FullName -match "codex-win32-x64" }
+                Where-Object {
+                  $_.FullName -match "codex-win32-x64"
+                }
             )
             if ($nativeCodex.Count -ne 1) {
               throw "Expected one native codex.exe for $version; found $($nativeCodex.Count)."
@@ -65,13 +67,15 @@ jobs:
               throw "Native Codex executable does not report expected version $version."
             }
 
-            & pwsh.exe -NoProfile -File scripts/guard-tests/guard-regression.ps1 `
+            & pwsh.exe -NoProfile -File `
+              scripts/guard-tests/guard-regression.ps1 `
               -CodexExecutablePath $nativeCodex[0].FullName
             if ($LASTEXITCODE -ne 0) {
               throw "Guard regression failed on PowerShell 7 with Codex $version."
             }
 
-            & $windowsPowerShell -NoProfile -File scripts/guard-tests/guard-regression.ps1 `
+            & $windowsPowerShell -NoProfile -File `
+              scripts/guard-tests/guard-regression.ps1 `
               -CodexExecutablePath $nativeCodex[0].FullName
             if ($LASTEXITCODE -ne 0) {
               throw "Guard regression failed on Windows PowerShell 5.1 with Codex $version."
