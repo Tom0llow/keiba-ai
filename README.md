@@ -49,6 +49,14 @@ scripts under `src/` can import `data` directly.
 The processed table inventory and column definitions are in
 [`docs/table-definition/`](docs/table-definition/README.md).
 
+## Planned racing AI
+
+The agreed product requirements are in [`docs/requirements.md`](docs/requirements.md),
+and the decided portion of its behavior is in
+[`docs/specification.md`](docs/specification.md). Design proposals and open
+questions remain in `docs/discussions/`; no prediction or betting system is
+implemented yet.
+
 ## Setup and validation
 
 Install the locked development environment:
