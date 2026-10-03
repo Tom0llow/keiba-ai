@@ -51,7 +51,11 @@ def test_iter_race_keys_starts_at_configured_odds_date(tmp_path: Path) -> None:
     database = tmp_path / "race.db"
     _create_race_db(database)
     retriever = HistoricalRetriever(
-        Mock(), database, Mock(), _profile(), _profile(race_start_date=date(2003, 10, 4))
+        Mock(),
+        database,
+        Mock(),
+        _profile(),
+        _profile(race_start_date=date(2003, 10, 4)),
     )
 
     assert list(retriever.iter_race_keys(start_date=date(2003, 10, 4))) == [
@@ -69,7 +73,11 @@ def test_retrieve_builds_temporary_base_and_odds_settings(tmp_path: Path) -> Non
     historical_profile = _profile()
     odds_profile = _profile(race_start_date=date(2003, 10, 4))
     retriever = HistoricalRetriever(
-        runner, database, builder, historical_profile, odds_profile
+        runner,
+        database,
+        builder,
+        historical_profile,
+        odds_profile,
     )
 
     count = retriever.retrieve()
@@ -97,7 +105,11 @@ def test_invalid_race_key_component_is_rejected(tmp_path: Path) -> None:
         )
 
     retriever = HistoricalRetriever(
-        Mock(), database, Mock(), _profile(), _profile(race_start_date=date(2003, 10, 4))
+        Mock(),
+        database,
+        Mock(),
+        _profile(),
+        _profile(race_start_date=date(2003, 10, 4)),
     )
     with pytest.raises(ValueError, match="invalid idJyoCD"):
         list(retriever.iter_race_keys(start_date=date(2003, 10, 4)))
