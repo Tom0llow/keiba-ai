@@ -3,67 +3,42 @@
 from pathlib import Path
 from unittest.mock import Mock, patch
 
+from data.config import RetrievalPaths
 from data.data_retriever import DataRetriever
+from data.retriever.setting import JVLinkConfig, JVLinkProfile
 
 
-def test_retrieve_historical_delegates_to_historical_retriever(tmp_path: Path) -> None:
+def _profile() -> JVLinkProfile:
+    return JVLinkProfile(False, False, False, frozenset(), frozenset(), frozenset())
+
+
+def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
     executable = tmp_path / "JVLinkToSQLite.exe"
     executable.write_bytes(b"")
-    database = tmp_path / "race.db"
-    historical_setting = tmp_path / "historical.xml"
-    historical_setting.write_text("<setting />", encoding="utf-8")
-    odds_setting = tmp_path / "historical-odds.xml"
-    odds_setting.write_text("<setting />", encoding="utf-8")
-    latest_setting = tmp_path / "latest.xml"
-    latest_setting.write_text("<setting />", encoding="utf-8")
+    seed = tmp_path / "setting.xml"
+    seed.write_text("<setting />", encoding="utf-8")
+    database = tmp_path / "raw" / "race.db"
+    runtime = tmp_path / "runtime"
+    paths = RetrievalPaths(database, runtime)
+    profile = _profile()
+    jvlink = JVLinkConfig(executable, seed, profile, profile, profile)
 
     with (
         patch("data.data_retriever.HistoricalRetriever") as historical_type,
-        patch("data.data_retriever.LatestRetriever"),
+        patch("data.data_retriever.LatestRetriever") as latest_type,
+        patch("data.data_retriever.JVLinkSettingBuilder"),
     ):
         historical = Mock()
         historical.retrieve.return_value = 42
         historical_type.return_value = historical
-        retriever = DataRetriever(
-            executable=executable,
-            database=database,
-            historical_setting=historical_setting,
-            historical_odds_setting=odds_setting,
-            latest_setting=latest_setting,
-        )
-
-        assert retriever.retrieve_historical() == 42
-
-    historical.retrieve.assert_called_once_with(
-        historical_setting.resolve(),
-        odds_setting.resolve(),
-    )
-
-
-def test_retrieve_latest_delegates_to_latest_retriever(tmp_path: Path) -> None:
-    executable = tmp_path / "JVLinkToSQLite.exe"
-    executable.write_bytes(b"")
-    database = tmp_path / "race.db"
-    historical_setting = tmp_path / "historical.xml"
-    odds_setting = tmp_path / "historical-odds.xml"
-    latest_setting = tmp_path / "latest.xml"
-    for setting in (historical_setting, odds_setting, latest_setting):
-        setting.write_text("<setting />", encoding="utf-8")
-
-    with (
-        patch("data.data_retriever.HistoricalRetriever"),
-        patch("data.data_retriever.LatestRetriever") as latest_type,
-    ):
         latest = Mock()
         latest_type.return_value = latest
-        retriever = DataRetriever(
-            executable=executable,
-            database=database,
-            historical_setting=historical_setting,
-            historical_odds_setting=odds_setting,
-            latest_setting=latest_setting,
-            timeout_seconds=30.0,
-        )
+        retriever = DataRetriever(paths=paths, jvlink=jvlink)
+
+        assert retriever.retrieve_historical() == 42
         retriever.retrieve_latest()
 
-    latest.retrieve.assert_called_once_with(latest_setting.resolve())
+    historical.retrieve.assert_called_once_with()
+    latest.retrieve.assert_called_once_with()
+    assert database.parent.is_dir()
+    assert runtime.is_dir()

@@ -5,23 +5,30 @@ from __future__ import annotations
 from pathlib import Path
 
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
+from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
 
 class LatestRetriever:
-    """Run the configured incremental JVLinkToSQLite acquisition once."""
+    """Run incremental retrieval while preserving JVLinkToSQLite read state."""
 
-    def __init__(self, runner: JVLinkToSQLiteRunner) -> None:
-        """Configure the process runner used for incremental retrieval."""
+    def __init__(
+        self,
+        runner: JVLinkToSQLiteRunner,
+        setting_builder: JVLinkSettingBuilder,
+        profile: JVLinkProfile,
+        runtime_setting: Path,
+    ) -> None:
         self._runner = runner
+        self._setting_builder = setting_builder
+        self._profile = profile
+        self._runtime_setting = runtime_setting.expanduser().resolve()
 
-    def retrieve(self, setting: Path) -> None:
-        """Retrieve the latest data and persist JVLinkToSQLite's read position.
-
-        The setting file is intentionally passed without
-        ``skip_last_modified_update`` so JVLinkToSQLite can advance its own
-        incremental read-start position after a successful execution.
-
-        Args:
-            setting: JVLinkToSQLite XML setting for the latest-data update.
-        """
+    def retrieve(self) -> None:
+        """Apply the latest profile and let JVLinkToSQLite persist its read position."""
+        source = self._runtime_setting if self._runtime_setting.is_file() else None
+        setting = self._setting_builder.build(
+            self._profile,
+            self._runtime_setting,
+            source=source,
+        )
         self._runner.execute(setting)
