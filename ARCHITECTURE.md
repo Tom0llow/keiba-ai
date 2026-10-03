@@ -99,8 +99,9 @@ installed distribution.
 stores one Parquet file per user table under `data/processed/`, with source text
 and NULL values preserved. It stages files and validates row and column metadata
 before publishing; it does not replace existing processed output. This storage
-and loader contract is recorded in ADR-003. No model, network boundary, or
-external-service integration has been selected.
+and loader contract is recorded in ADR-003. ADR-004 selects a market-adjusted
+win-probability model for the prediction MVP, but no model has been implemented.
+No network boundary or external-service integration has been selected.
 
 ## Architectural constraints during bootstrap
 
