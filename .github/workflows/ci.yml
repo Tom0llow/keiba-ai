@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: read
+  contents: write
 
 env:
   PYTHON_VERSION: "3.12"
@@ -129,6 +129,21 @@ jobs:
 
       - name: Install dependencies
         run: uv sync --locked
+
+      - name: Format setting adapter
+        run: uv run ruff format src/data/retriever/setting.py
+
+      - name: Publish formatted setting adapter
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          FILE_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/src/data/retriever/setting.py?ref=feat/data-retriever" --jq .sha)
+          FILE_CONTENT=$(base64 -w0 src/data/retriever/setting.py)
+          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/src/data/retriever/setting.py" \
+            -f message='style: apply Ruff formatting to setting adapter' \
+            -f content="$FILE_CONTENT" \
+            -f sha="$FILE_SHA" \
+            -f branch='feat/data-retriever'
 
       - name: Run tests
         run: uv run pytest src/tests
