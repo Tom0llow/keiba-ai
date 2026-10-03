@@ -4,9 +4,11 @@ from __future__ import annotations
 
 from pathlib import Path
 
+from data.config import RetrievalPaths
 from data.retriever.historical import HistoricalRetriever
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
 from data.retriever.latest import LatestRetriever
+from data.retriever.setting import JVLinkConfig, JVLinkSettingBuilder
 
 
 class DataRetriever:
@@ -15,41 +17,51 @@ class DataRetriever:
     def __init__(
         self,
         *,
-        executable: Path,
-        database: Path,
-        historical_setting: Path,
-        historical_odds_setting: Path,
-        latest_setting: Path,
+        paths: RetrievalPaths,
+        jvlink: JVLinkConfig,
         timeout_seconds: float | None = None,
     ) -> None:
-        """Configure all local paths needed by the retrieval workflow.
-
-        Args:
-            executable: Local ``JVLinkToSQLite.exe`` path.
-            database: Raw SQLite database to create or update.
-            historical_setting: JVLinkToSQLite setting for the base historical load.
-            historical_odds_setting: Template containing 0B41 and 0B42 entries.
-            latest_setting: Persistent setting for incremental/latest updates.
-            timeout_seconds: Optional positive timeout applied to each importer run.
-        """
+        paths.jvlink_runtime_dir.mkdir(parents=True, exist_ok=True)
+        paths.raw_db.parent.mkdir(parents=True, exist_ok=True)
         runner = JVLinkToSQLiteRunner(
-            executable,
-            database,
+            jvlink.executable,
+            paths.raw_db,
             timeout_seconds=timeout_seconds,
         )
-        self._historical = HistoricalRetriever(runner, database)
-        self._latest = LatestRetriever(runner)
-        self._historical_setting = historical_setting.expanduser().resolve()
-        self._historical_odds_setting = historical_odds_setting.expanduser().resolve()
-        self._latest_setting = latest_setting.expanduser().resolve()
-
-    def retrieve_historical(self) -> int:
-        """Retrieve historical race data and all eligible time-series odds."""
-        return self._historical.retrieve(
-            self._historical_setting,
-            self._historical_odds_setting,
+        builder = JVLinkSettingBuilder(jvlink.seed_setting)
+        self._historical = HistoricalRetriever(
+            runner,
+            paths.raw_db,
+            builder,
+            jvlink.historical,
+            jvlink.historical_odds,
+        )
+        self._latest = LatestRetriever(
+            runner,
+            builder,
+            jvlink.latest,
+            paths.jvlink_runtime_dir / "latest.xml",
         )
 
+    @classmethod
+    def from_toml(
+        cls,
+        *,
+        data_config: Path,
+        jvlink_config: Path,
+        timeout_seconds: float | None = None,
+    ) -> DataRetriever:
+        """Construct the retriever from the repository TOML configuration."""
+        return cls(
+            paths=RetrievalPaths.from_toml(data_config),
+            jvlink=JVLinkConfig.from_toml(jvlink_config),
+            timeout_seconds=timeout_seconds,
+        )
+
+    def retrieve_historical(self) -> int:
+        """Retrieve historical race data and configured time-series odds."""
+        return self._historical.retrieve()
+
     def retrieve_latest(self) -> None:
-        """Retrieve the latest incremental race data."""
-        self._latest.retrieve(self._latest_setting)
+        """Retrieve the configured latest incremental race data."""
+        self._latest.retrieve()
