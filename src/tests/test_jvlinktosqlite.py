@@ -73,7 +73,7 @@ def test_execute_translates_timeout(tmp_path: Path) -> None:
 
     with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
         run.side_effect = subprocess.TimeoutExpired([str(executable)], 30.0)
-        with pytest.raises(JVLinkToSQLiteError, match="timed out after 30.0 seconds"):
+        with pytest.raises(JVLinkToSQLiteError, match=r"timed out after 30\.0 seconds"):
             runner.execute(setting)
 
 
@@ -82,9 +82,11 @@ def test_missing_setting_is_rejected_before_process_start(tmp_path: Path) -> Non
     runner = JVLinkToSQLiteRunner(executable, database)
     missing_setting = tmp_path / "missing.xml"
 
-    with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
-        with pytest.raises(FileNotFoundError, match="setting file does not exist"):
-            runner.execute(missing_setting)
+    with (
+        patch("data.retriever.jvlinktosqlite.subprocess.run") as run,
+        pytest.raises(FileNotFoundError, match="setting file does not exist"),
+    ):
+        runner.execute(missing_setting)
 
     run.assert_not_called()
 
