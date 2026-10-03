@@ -5,138 +5,141 @@ export, and an AI-driven development foundation.
 
 ## Current status
 
-The repository contains the guarded development workflow, a local JRA-VAN data
-retrieval boundary through JVLinkToSQLite, and a local exporter for the race
-SQLite database. It remains a non-distributed Python project.
+The repository contains a local JRA-VAN acquisition boundary through
+JVLinkToSQLite and a local SQLite-to-Parquet exporter. It remains a
+non-distributed Python project.
 
 ```text
-config/data.toml
-src/convert_race.py
-src/data/data_retriever.py
-src/data/race_data.py
-src/data/retriever/
-src/tests/
+config/
+├─ data.toml
+└─ jvlink.toml
+src/
+├─ main.py
+├─ convert_race.py
+└─ data/
+   ├─ config.py
+   ├─ data_retriever.py
+   ├─ race_data.py
+   └─ retriever/
 ```
 
 The project has no build system. `uv sync` installs its locked dependencies
 without installing this repository as a Python distribution.
 
-The race-data export and loader are described in
-[`ADR-003`](docs/decisions/ADR-003-export-race-tables-as-parquet.md). The local
-JRA-VAN acquisition boundary is described in
-[`ADR-005`](docs/decisions/ADR-005-use-jvlinktosqlite-acquisition-boundary.md).
-No modeling pipeline is implemented yet.
-
 ## Race data retrieval
 
 Race data is acquired through a locally installed JVLinkToSQLite executable.
-The Python code does not call JV-Link COM directly and does not store the
-JRA-VAN service key. JV-Link and JVLinkToSQLite must already be installed and
-configured on the Windows machine before running the retriever.
+JV-Link and JVLinkToSQLite must already be installed and configured on the
+Windows machine. The Python code does not call JV-Link COM directly and does not
+store the JRA-VAN service key.
 
-`DataRetriever` needs these local files:
+The user-owned `C:\JVLinkToSQLite\setting.xml` is treated as a **seed**. Do not
+create or maintain separate `historical.xml`, `historical-odds.xml`, and
+`latest.xml` files manually. Retrieval behavior is declared in
+`config/jvlink.toml`, and Python generates the XML used for each execution.
 
-- `JVLinkToSQLite.exe`: the importer executable, for example
-  `C:\JVLinkToSQLite\JVLinkToSQLite.exe`;
-- a historical setting XML used for the normal historical/base import;
-- a historical-odds setting XML containing `0B41` and `0B42` entries with
-  `JVRaceKey` children;
-- a latest setting XML whose latest-read position JVLinkToSQLite may update;
-- the raw SQLite destination, normally `data/raw/race.db`.
+Configure machine-specific paths and retrieval profiles in `config/jvlink.toml`:
 
-The historical-odds template itself is not modified. For each race on or after
-2003-10-04, the retriever creates a temporary copy with that race's key and
-executes `0B41` and `0B42`. The latest setting is persistent because
-JVLinkToSQLite uses it to advance the next incremental read position.
+```toml
+[jvlink]
+executable = "C:/JVLinkToSQLite/JVLinkToSQLite.exe"
+seed_setting = "C:/JVLinkToSQLite/setting.xml"
 
-Install the locked environment first:
+[historical]
+normal_update = false
+setup_update = true
+realtime_update = false
+# DataSpec lists and the initial start_datetime follow in the committed config.
+
+[historical_odds]
+normal_update = false
+setup_update = false
+realtime_update = true
+realtime_data_specs = ["0B41", "0B42"]
+race_start_date = 2003-10-04
+
+[latest]
+normal_update = true
+setup_update = false
+realtime_update = true
+```
+
+Storage paths are configured in `config/data.toml`:
+
+```toml
+[paths]
+raw_db = "../data/raw/race.db"
+processed_dir = "../data/processed"
+jvlink_runtime_dir = "../data/runtime/jvlink"
+```
+
+Install the locked environment:
 
 ```powershell
 uv sync --locked
 ```
 
-The current interface is a Python API rather than a dedicated command-line
-entry point. From the repository root in PowerShell, set `PYTHONPATH` to `src`
-and construct one `DataRetriever`:
+The public retrieval interface is the Typer CLI in `src/main.py`.
+
+Initial historical retrieval:
 
 ```powershell
-$env:PYTHONPATH = "src"
-
-@'
-from pathlib import Path
-
-from data.data_retriever import DataRetriever
-
-retriever = DataRetriever(
-    executable=Path(r"C:\JVLinkToSQLite\JVLinkToSQLite.exe"),
-    database=Path(r"data\raw\race.db"),
-    historical_setting=Path(r"C:\JVLinkToSQLite\historical.xml"),
-    historical_odds_setting=Path(r"C:\JVLinkToSQLite\historical-odds.xml"),
-    latest_setting=Path(r"C:\JVLinkToSQLite\latest.xml"),
-)
-
-count = retriever.retrieve_historical()
-print(f"historical odds retrieved for {count} races")
-'@ | uv run python -
+uv run python src/main.py retrieve historical
 ```
 
-`retrieve_historical()` first executes the normal historical import, reads the
-race-key components from `NL_RA_RACE`, and then requests the available `0B41`
-and `0B42` time-series odds for each eligible race. It can therefore take a
-long time on an initial full import.
-
-For normal incremental updates, use the same paths and call
-`retrieve_latest()` instead:
+Latest incremental/realtime retrieval:
 
 ```powershell
-$env:PYTHONPATH = "src"
-
-@'
-from pathlib import Path
-
-from data.data_retriever import DataRetriever
-
-retriever = DataRetriever(
-    executable=Path(r"C:\JVLinkToSQLite\JVLinkToSQLite.exe"),
-    database=Path(r"data\raw\race.db"),
-    historical_setting=Path(r"C:\JVLinkToSQLite\historical.xml"),
-    historical_odds_setting=Path(r"C:\JVLinkToSQLite\historical-odds.xml"),
-    latest_setting=Path(r"C:\JVLinkToSQLite\latest.xml"),
-)
-
-retriever.retrieve_latest()
-'@ | uv run python -
+uv run python src/main.py retrieve latest
 ```
 
-The three XML file names above are examples; pass the actual JVLinkToSQLite
-setting files used on the local machine. Do not commit JRA-VAN credentials or
-machine-specific setting files containing sensitive information.
+Alternative config files can be supplied explicitly:
+
+```powershell
+uv run python src/main.py retrieve historical `
+  --data-config config/data.toml `
+  --jvlink-config config/jvlink.toml
+```
+
+### Setting lifecycle
+
+`JVLinkSettingBuilder` reads the seed XML and applies the selected profile
+exclusively: DataSpecs not listed for that section are disabled.
+
+For `historical`, the generated base setting enables setup-data retrieval and is
+stored only in a temporary directory. After the base database exists, the
+retriever reads race keys from `NL_RA_RACE` and generates a temporary per-race
+setting for the configured historical odds DataSpecs (`0B41` and `0B42` by
+default). Historical generated settings are deleted when the command finishes.
+The seed XML is never modified by this flow.
+
+For `latest`, the first run creates
+`data/runtime/jvlink/latest.xml` from the seed and applies the `[latest]`
+profile. JVLinkToSQLite is then allowed to update that runtime XML with its
+latest-read positions. Later runs use the same runtime XML as their source,
+reapply the profile, and preserve the accumulated read state. The runtime file
+is under the Git-ignored `data/` directory; the user-owned seed remains
+unchanged.
 
 ## Race data export
 
 Put the source SQLite file at `data/raw/race.db`, or change `raw_db` in
 `config/data.toml`. The configured paths are relative to that config file.
-Install the locked dependencies and export all source tables:
+Export all source tables with:
 
 ```bash
-uv sync --locked
 uv run python src/convert_race.py --config config/data.toml
 ```
 
 The export writes one `<table>.parquet` file per SQLite user table under the
 configured `data/processed/` directory. It preserves text, whitespace, NULLs,
 and date-like placeholders without parsing or cleaning them. It streams the
-large database in batches and publishes the directory after validating the
-files. The command refuses to overwrite an existing processed directory.
-`data/` is Git-ignored. The source database is opened read-only.
+large database in batches and refuses to overwrite an existing processed
+directory. The source database is opened read-only.
 
 `RaceDataLoader` in `src/data/race_data.py` uses the same config to list
 processed tables, read one table as a PyArrow table, or iterate through record
-batches. Use batch iteration for large tables because a full-table read loads
-the table into memory. Source modules are not installed as a Python distribution;
-scripts under `src/` can import `data` directly.
-
-The processed table inventory and column definitions are in
+batches. The processed table inventory and column definitions are in
 [`docs/table-definition/`](docs/table-definition/README.md).
 
 ## Planned racing AI
@@ -165,10 +168,7 @@ uv run pytest
 ```
 
 Validate the guarded workflow source with `pwsh` (or `powershell.exe` on
-Windows PowerShell). This validation requires an installed Codex CLI version
-listed in `scripts/guard-tests/codex-cli-version.txt` and its self-contained
-native `codex.exe`; Node launcher shims such as `codex.cmd` and `codex.ps1` are
-not trusted. The check exercises the real execution-policy evaluator:
+Windows PowerShell):
 
 ```powershell
 pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
@@ -176,29 +176,10 @@ pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
 
 ## Development workflow
 
-The initial installation of the AI-driven development foundation is a one-time
-human/manual bootstrap because its guarded wrappers, CI baseline, and repository
-protection cannot be assumed to exist before they are installed.
-
-After the bootstrap is on `main`, the `Quality` and `Test` checks pass there,
-the configured protection for `main` is verified, and a maintainer has installed
-the reviewed wrappers in the protected Codex user guard store and restarted
-Codex with the repository-and-checkout-bound absolute-path policy active,
-non-trivial Codex changes use the guarded autonomous workflow described in
+Non-trivial Codex changes use the guarded autonomous workflow described in
 [`docs/AUTONOMOUS_DEVELOPMENT.md`](docs/AUTONOMOUS_DEVELOPMENT.md). That workflow
 stops at `MERGE_READY`; merging always requires human approval of the exact
 reviewed PR number and HEAD SHA.
-
-Files under `scripts/agent/` are source for review and installation. Codex must
-never execute those mutable workspace copies as host-side trust anchors.
-Each installation publishes a new immutable guard directory and records the
-canonical absolute PowerShell, Git, GitHub CLI, and Codex CLI paths plus the
-approved Codex CLI version. If ordinary command discovery resolves a Node
-launcher shim, the installer accepts `-CodexExecutablePath` pointing to the
-native `codex.exe`. Changing one of those paths or the Codex CLI version requires
-a guard reinstall and Codex restart. The `Quality` job runs the real guard
-regression for every allow-listed Codex version on both PowerShell 7 and Windows
-PowerShell 5.1.
 
 Repository instructions are in [`AGENTS.md`](AGENTS.md). Current architectural
 facts and the decision boundary are in [`ARCHITECTURE.md`](ARCHITECTURE.md).
