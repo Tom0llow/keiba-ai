@@ -1,3 +1,4 @@
 [paths]
 raw_db = "../data/raw/race.db"
 processed_dir = "../data/processed"
+jvlink_runtime_dir = "../data/runtime/jvlink"
