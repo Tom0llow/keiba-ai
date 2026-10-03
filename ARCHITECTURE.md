@@ -2,8 +2,9 @@
 
 ## Status
 
-This repository contains development automation and a local race-data Parquet
-export. It remains uninstalled as a Python distribution.
+This repository contains development automation, local JRA-VAN race-data
+retrieval, and a local race-data Parquet export. It remains uninstalled as a
+Python distribution.
 
 An earlier local prototype is not a source of current requirements or design
 authority. Product behavior and durable architectural decisions must come from
@@ -82,8 +83,18 @@ arguments, while unrelated task-state-dependent guarded operations fail closed.
 src/
 ├─ convert_race.py
 ├─ data/
-│  └─ race_data.py
+│  ├─ data_retriever.py
+│  ├─ race_data.py
+│  └─ retriever/
+│     ├─ __init__.py
+│     ├─ historical.py
+│     ├─ jvlinktosqlite.py
+│     └─ latest.py
 └─ tests/
+   ├─ test_data_retriever.py
+   ├─ test_historical.py
+   ├─ test_jvlinktosqlite.py
+   ├─ test_latest.py
    ├─ test_project_environment.py
    └─ test_race_data.py
 ```
@@ -95,13 +106,26 @@ bounded Parquet writing, and the shared processed-table loader. The module is
 importable by scripts under `src/`, but the project has no build system or
 installed distribution.
 
+`src/data/data_retriever.py` is the public orchestration boundary for race-data
+acquisition. It composes `HistoricalRetriever` and `LatestRetriever` around one
+`JVLinkToSQLiteRunner`. `src/data/retriever/jvlinktosqlite.py` owns the local
+subprocess boundary to `JVLinkToSQLite.exe`; it does not own JRA-VAN credentials
+or parse JV-Data directly. `historical.py` performs the base historical import,
+reads exact race-key components from `NL_RA_RACE`, and executes time-series odds
+retrieval for data specs `0B41` and `0B42` from 2003-10-04 onward using temporary
+per-race XML settings. `latest.py` runs the configured incremental update and
+allows JVLinkToSQLite to persist its own latest-read position. This external
+process boundary is recorded in ADR-005.
+
 `config/data.toml` owns the raw SQLite path and processed directory. The export
 stores one Parquet file per user table under `data/processed/`, with source text
 and NULL values preserved. It stages files and validates row and column metadata
 before publishing; it does not replace existing processed output. This storage
 and loader contract is recorded in ADR-003. ADR-004 selects a market-adjusted
 win-probability model for the prediction MVP, but no model has been implemented.
-No network boundary or external-service integration has been selected.
+The repository now has one external acquisition integration: a locally installed
+JVLinkToSQLite/JV-Link environment on Windows. No HTTP API key or repository
+credential is introduced for JRA-VAN acquisition.
 
 ## Architectural constraints during bootstrap
 
