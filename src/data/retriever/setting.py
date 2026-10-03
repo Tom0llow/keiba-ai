@@ -13,11 +13,20 @@ from typing import Any, Protocol, cast
 class RaceKeyLike(Protocol):
     """Minimum race-key contract required to configure realtime odds."""
 
-    race_date: date
-    jyo_code: str
-    kaiji: str
-    nichiji: str
-    race_number: str
+    @property
+    def race_date(self) -> date: ...
+
+    @property
+    def jyo_code(self) -> str: ...
+
+    @property
+    def kaiji(self) -> str: ...
+
+    @property
+    def nichiji(self) -> str: ...
+
+    @property
+    def race_number(self) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -223,7 +232,7 @@ def _optional_date(section: dict[str, Any], key: str, section_name: str) -> date
         return None
     if isinstance(value, datetime) or not isinstance(value, date):
         raise ValueError(f"[{section_name}].{key} must be a TOML local date")
-    return value
+    return cast(date, value)
 
 
 def _resolve_path(config_path: Path, section: dict[str, Any], key: str) -> Path:
