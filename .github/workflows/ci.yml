@@ -11,7 +11,7 @@ concurrency:
   cancel-in-progress: true
 
 permissions:
-  contents: write
+  contents: read
 
 env:
   PYTHON_VERSION: "3.12"
@@ -122,21 +122,6 @@ jobs:
           version: ${{ env.UV_VERSION }}
           enable-cache: true
           cache-dependency-glob: "uv.lock"
-
-      - name: Generate dependency lock
-        run: uv lock
-
-      - name: Publish dependency lock
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          LOCK_SHA=$(gh api "repos/$GITHUB_REPOSITORY/contents/uv.lock?ref=feat/data-retriever" --jq .sha)
-          LOCK_CONTENT=$(base64 -w0 uv.lock)
-          gh api --method PUT "repos/$GITHUB_REPOSITORY/contents/uv.lock" \
-            -f message='build: refresh uv lock for Typer' \
-            -f content="$LOCK_CONTENT" \
-            -f sha="$LOCK_SHA" \
-            -f branch='feat/data-retriever'
 
       - name: Install dependencies
         run: uv sync --locked
