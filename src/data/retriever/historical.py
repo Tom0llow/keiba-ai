@@ -9,7 +9,7 @@ from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
 
-from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
+from data.retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
 from data.retriever.odds_archive import OddsArchive
 from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
@@ -33,6 +33,12 @@ class RaceKey:
         ):
             if not value.isdigit() or len(value) != 2:
                 raise ValueError(f"{name} must be a two-digit string: {value!r}")
+
+    def __str__(self) -> str:
+        return (
+            f"{self.race_date:%Y-%m-%d}/"
+            f"{self.jyo_code}/{self.kaiji}/{self.nichiji}/{self.race_number}"
+        )
 
 
 class HistoricalRetriever:
@@ -69,21 +75,28 @@ class HistoricalRetriever:
             if not self._database.is_file():
                 raise FileNotFoundError(f"raw race database does not exist: {self._database}")
 
+            race_keys = tuple(self.iter_race_keys(start_date=self._odds_start_date))
             odds_setting = temporary_path / "historical-odds.xml"
             count = 0
-            for race_key in self.iter_race_keys(start_date=self._odds_start_date):
+            for race_key in race_keys:
                 self._setting_builder.build(
                     self._odds_profile,
                     odds_setting,
                     race_key=race_key,
                 )
-                self._runner.execute(odds_setting, skip_last_modified_update=True)
+                try:
+                    self._runner.execute(odds_setting, skip_last_modified_update=True)
+                except JVLinkToSQLiteError as exc:
+                    raise JVLinkToSQLiteError(
+                        f"historical odds retrieval failed for race {race_key}: {exc}",
+                        returncode=exc.returncode,
+                    ) from exc
                 self._archive.archive()
                 count += 1
             return count
 
     def iter_race_keys(self, *, start_date: date) -> Iterator[RaceKey]:
-        """Yield race keys from ``NL_RA_RACE`` in chronological order."""
+        """Yield a snapshot of race keys after closing the SQLite reader connection."""
         if not self._database.is_file():
             raise FileNotFoundError(f"raw race database does not exist: {self._database}")
 
@@ -94,8 +107,10 @@ class HistoricalRetriever:
             ORDER BY idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum
         """
         with sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True) as database:
-            for row in database.execute(query, (start_date.strftime("%Y%m%d"),)):
-                yield _race_key_from_row(row)
+            rows = database.execute(query, (start_date.strftime("%Y%m%d"),)).fetchall()
+
+        for row in rows:
+            yield _race_key_from_row(row)
 
 
 def _race_key_from_row(row: tuple[str, str, str, str, str, str]) -> RaceKey:
