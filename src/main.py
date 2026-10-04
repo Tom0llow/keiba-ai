@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 from typing import Annotated
 
@@ -45,6 +46,27 @@ def retrieve_latest(
     """Retrieve the latest configured incremental and realtime data."""
     _retriever(data_config, jvlink_config).retrieve_latest()
     typer.echo("latest race data retrieved")
+
+
+@retrieve_app.command("realtime")
+def retrieve_realtime(
+    race_date: Annotated[date, typer.Option("--date", help="Race date (YYYY-MM-DD).")],
+    jyo_code: Annotated[str, typer.Option("--jyo", help="Two-digit JRA venue code.")],
+    kaiji: Annotated[str, typer.Option("--kaiji", help="Two-digit meeting number.")],
+    nichiji: Annotated[str, typer.Option("--nichiji", help="Two-digit meeting day.")],
+    race_number: Annotated[str, typer.Option("--race", help="Two-digit race number.")],
+    data_config: DataConfigOption = Path("config/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+) -> None:
+    """Retrieve prediction-time history and current odds for one target race."""
+    inserted = _retriever(data_config, jvlink_config).retrieve_realtime(
+        race_date=race_date,
+        jyo_code=jyo_code,
+        kaiji=kaiji,
+        nichiji=nichiji,
+        race_number=race_number,
+    )
+    typer.echo(f"realtime odds archived: {inserted} rows")
 
 
 if __name__ == "__main__":
