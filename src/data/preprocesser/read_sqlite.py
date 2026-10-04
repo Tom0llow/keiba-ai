@@ -70,10 +70,23 @@ class SQLiteReader:
             if column[2].upper() not in _SOURCE_TYPES:
                 raise ValueError(f"unsupported declared type in {name}.{column[1]}")
 
+        shadowed = {field_name.casefold() for field_name in field_names}
+        rowid_name = next(
+            (
+                candidate
+                for candidate in ("rowid", "_rowid_", "oid")
+                if candidate.casefold() not in shadowed
+            ),
+            None,
+        )
+        if rowid_name is None:
+            raise ValueError(f"no accessible rowid for table {name}")
+
         schema = pa.schema([pa.field(field_name, pa.string()) for field_name in field_names])
         query = f"SELECT * FROM {quoted_name}"
         if where is not None:
             query += f" WHERE {where}"
+        query += f" ORDER BY {rowid_name}"
         source_rows = connection.execute(query, tuple(parameters))
         if [column[0] for column in source_rows.description] != field_names:
             raise ValueError(f"column mismatch in table {name}")
