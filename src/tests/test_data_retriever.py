@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from data.config import RetrievalPaths
+from data.config import DataPaths
 from data.data_retriever import DataRetriever
 from data.retriever.setting import JVLinkConfig, JVLinkProfile
 
@@ -19,8 +19,9 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
     seed = tmp_path / "setting.xml"
     seed.write_text("<setting />", encoding="utf-8")
     database = tmp_path / "raw" / "race.db"
+    processed = tmp_path / "processed"
     runtime = tmp_path / "runtime"
-    paths = RetrievalPaths(database, runtime)
+    paths = DataPaths(database, processed, runtime)
     profile = _profile()
     jvlink = JVLinkConfig(executable, seed, profile, profile, profile, profile, profile)
 

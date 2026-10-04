@@ -4,7 +4,7 @@ import xml.etree.ElementTree as ET
 from datetime import date
 from pathlib import Path
 
-from data.retriever.historical import RaceKey
+from data.race_key import RaceKey
 from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
 

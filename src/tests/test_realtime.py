@@ -4,7 +4,7 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import Mock
 
-from data.retriever.historical import RaceKey
+from data.race_key import RaceKey
 from data.retriever.realtime import RealtimeRetriever
 from data.retriever.setting import JVLinkProfile
 

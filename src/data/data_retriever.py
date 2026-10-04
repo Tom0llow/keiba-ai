@@ -5,8 +5,9 @@ from __future__ import annotations
 from datetime import date
 from pathlib import Path
 
-from data.config import RetrievalPaths
-from data.retriever.historical import HistoricalRetriever, RaceKey
+from data.config import DataPaths
+from data.race_key import RaceKey
+from data.retriever.historical import HistoricalRetriever
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
 from data.retriever.latest import LatestRetriever
 from data.retriever.odds_archive import OddsArchive
@@ -20,7 +21,7 @@ class DataRetriever:
     def __init__(
         self,
         *,
-        paths: RetrievalPaths,
+        paths: DataPaths,
         jvlink: JVLinkConfig,
         timeout_seconds: float | None = None,
     ) -> None:
@@ -63,9 +64,9 @@ class DataRetriever:
         jvlink_config: Path,
         timeout_seconds: float | None = None,
     ) -> DataRetriever:
-        """Construct the retriever from the repository TOML configuration."""
+        """Construct the retriever from repository TOML configuration."""
         return cls(
-            paths=RetrievalPaths.from_toml(data_config),
+            paths=DataPaths.from_toml(data_config),
             jvlink=JVLinkConfig.from_toml(jvlink_config),
             timeout_seconds=timeout_seconds,
         )
@@ -88,5 +89,6 @@ class DataRetriever:
         race_number: str,
     ) -> int:
         """Retrieve prediction-time O1/O2 odds for one target race."""
-        race_key = RaceKey(race_date, jyo_code, kaiji, nichiji, race_number)
-        return self._realtime.retrieve(race_key)
+        return self._realtime.retrieve(
+            RaceKey(race_date, jyo_code, kaiji, nichiji, race_number)
+        )

@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from data.retriever.historical import RaceKey
+from data.race_key import RaceKey
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
 from data.retriever.odds_archive import OddsArchive
 from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
@@ -29,12 +29,7 @@ class RealtimeRetriever:
         self._current_profile = current_profile
 
     def retrieve(self, race_key: RaceKey) -> int:
-        """Retrieve and archive O1/O2 odds for the target race.
-
-        The history profile (0B41/0B42) is executed first and archived before the
-        current profile (0B31/0B32) runs, because JVLinkToSQLite recreates its
-        realtime O1/O2 tables on each execution.
-        """
+        """Retrieve and archive O1/O2 odds for the target race."""
         inserted = 0
         with tempfile.TemporaryDirectory(prefix="keiba-ai-realtime-") as temporary_directory:
             temporary_path = Path(temporary_directory)
