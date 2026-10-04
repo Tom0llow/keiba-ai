@@ -43,3 +43,19 @@ realtime_update = true
 normal_data_specs = ["RACE"]
 setup_data_specs = []
 realtime_data_specs = ["0B12", "0B15", "0B11", "0B14", "0B13", "0B17"]
+
+[realtime_history]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B41", "0B42"]
+
+[realtime_current]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B31", "0B32"]

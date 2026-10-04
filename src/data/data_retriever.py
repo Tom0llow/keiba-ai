@@ -2,17 +2,20 @@
 
 from __future__ import annotations
 
+from datetime import date
 from pathlib import Path
 
 from data.config import RetrievalPaths
-from data.retriever.historical import HistoricalRetriever
+from data.retriever.historical import HistoricalRetriever, RaceKey
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
 from data.retriever.latest import LatestRetriever
+from data.retriever.odds_archive import OddsArchive
+from data.retriever.realtime import RealtimeRetriever
 from data.retriever.setting import JVLinkConfig, JVLinkSettingBuilder
 
 
 class DataRetriever:
-    """Coordinate historical and latest retrieval for one raw race database."""
+    """Coordinate historical, latest, and prediction-time retrieval."""
 
     def __init__(
         self,
@@ -29,10 +32,12 @@ class DataRetriever:
             timeout_seconds=timeout_seconds,
         )
         builder = JVLinkSettingBuilder(jvlink.seed_setting)
+        archive = OddsArchive(paths.raw_db)
         self._historical = HistoricalRetriever(
             runner,
             paths.raw_db,
             builder,
+            archive,
             jvlink.historical,
             jvlink.historical_odds,
         )
@@ -41,6 +46,13 @@ class DataRetriever:
             builder,
             jvlink.latest,
             paths.jvlink_runtime_dir / "latest.xml",
+        )
+        self._realtime = RealtimeRetriever(
+            runner,
+            builder,
+            archive,
+            jvlink.realtime_history,
+            jvlink.realtime_current,
         )
 
     @classmethod
@@ -65,3 +77,16 @@ class DataRetriever:
     def retrieve_latest(self) -> None:
         """Retrieve the configured latest incremental race data."""
         self._latest.retrieve()
+
+    def retrieve_realtime(
+        self,
+        *,
+        race_date: date,
+        jyo_code: str,
+        kaiji: str,
+        nichiji: str,
+        race_number: str,
+    ) -> int:
+        """Retrieve prediction-time O1/O2 odds for one target race."""
+        race_key = RaceKey(race_date, jyo_code, kaiji, nichiji, race_number)
+        return self._realtime.retrieve(race_key)

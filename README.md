@@ -26,6 +26,16 @@ src/
 The project has no build system. `uv sync` installs its locked dependencies
 without installing this repository as a Python distribution.
 
+The race-data export and loader are described in
+[`ADR-003`](docs/decisions/ADR-003-export-race-tables-as-parquet.md). The local
+JRA-VAN acquisition boundary is described in
+[`ADR-005`](docs/decisions/ADR-005-use-jvlinktosqlite-acquisition-boundary.md),
+config-driven settings plus the Typer CLI are described in
+[`ADR-006`](docs/decisions/ADR-006-config-driven-jvlink-settings-and-typer-cli.md),
+and cumulative realtime-odds storage is described in
+[`ADR-007`](docs/decisions/ADR-007-archive-realtime-odds-for-training-and-inference.md).
+No modeling pipeline is implemented yet.
+
 ## Race data retrieval
 
 Race data is acquired through a locally installed JVLinkToSQLite executable.
@@ -34,8 +44,8 @@ Windows machine. The Python code does not call JV-Link COM directly and does not
 store the JRA-VAN service key.
 
 The user-owned `C:\JVLinkToSQLite\setting.xml` is treated as a **seed**. Do not
-create or maintain separate `historical.xml`, `historical-odds.xml`, and
-`latest.xml` files manually. Retrieval behavior is declared in
+create or maintain separate `historical.xml`, `historical-odds.xml`, `latest.xml`,
+or realtime XML files manually. Retrieval behavior is declared in
 `config/jvlink.toml`, and Python generates the XML used for each execution.
 
 Configure machine-specific paths and retrieval profiles in `config/jvlink.toml`:
@@ -62,6 +72,18 @@ race_start_date = 2003-10-04
 normal_update = true
 setup_update = false
 realtime_update = true
+
+[realtime_history]
+normal_update = false
+setup_update = false
+realtime_update = true
+realtime_data_specs = ["0B41", "0B42"]
+
+[realtime_current]
+normal_update = false
+setup_update = false
+realtime_update = true
+realtime_data_specs = ["0B31", "0B32"]
 ```
 
 Storage paths are configured in `config/data.toml`:
@@ -91,15 +113,16 @@ Latest incremental/realtime retrieval:
 
 ```powershell
 uv run python src/main.py retrieve latest
+uv run python src/main.py retrieve realtime `
+  --date 2026-10-04 `
+  --jyo 05 `
+  --kaiji 04 `
+  --nichiji 08 `
+  --race 11
 ```
 
-Alternative config files can be supplied explicitly:
-
-```powershell
-uv run python src/main.py retrieve historical `
-  --data-config config/data.toml `
-  --jvlink-config config/jvlink.toml
-```
+Alternative config files can be supplied explicitly with `--data-config` and
+`--jvlink-config`.
 
 ### Setting lifecycle
 
@@ -120,6 +143,36 @@ latest-read positions. Later runs use the same runtime XML as their source,
 reapply the profile, and preserve the accumulated read state. The runtime file
 is under the Git-ignored `data/` directory; the user-owned seed remains
 unchanged.
+
+JVLinkToSQLite realtime O1/O2 tables are transient staging tables and can be
+recreated by the next realtime execution. Therefore historical odds are copied
+immediately into cumulative raw tables:
+
+```text
+ARCHIVE_O1_ODDS_TANFUKUWAKU
+ARCHIVE_O2_ODDS_UMAREN
+```
+
+The archive tables preserve the staging-table column names and order and use
+full-row set deduplication. Distinct `HappyoTime` observations are retained while
+repeating an identical retrieval is idempotent.
+
+`latest` creates `data/runtime/jvlink/latest.xml` from the seed on its first run.
+JVLinkToSQLite may update that runtime XML with its latest-read positions. Later
+runs reuse the runtime XML as their source, reapply the `[latest]` profile, and
+preserve the accumulated read state. `data/` is Git-ignored, so this mutable
+machine-local state is not committed.
+
+`realtime` is the prediction-time path for one explicit race. It first executes
+`0B41` / `0B42` to obtain the time-series O1/O2 history available at the
+retrieval point, archives those rows, then executes `0B31` / `0B32` for the
+current O1/O2 snapshot and archives that result as well. The two-digit venue,
+meeting, meeting-day, and race-number components become one `JVRaceKey`. Both
+realtime executions use temporary XML and do not advance persistent read state.
+
+Historical and prediction-time O1/O2 data therefore converge on the same
+`ARCHIVE_*` column contract. Feature generation should consume the archive rather
+than the ephemeral JVLinkToSQLite `RT_*` tables.
 
 ## Race data export
 

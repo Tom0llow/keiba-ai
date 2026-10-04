@@ -20,17 +20,39 @@ an explicit requirement or an Accepted architecture decision record (ADR).
 - Test framework: pytest
 - Automation: GitHub Actions and guarded PowerShell wrappers
 
-The locked environment is defined by `pyproject.toml` and `uv.lock`. The project
-has no build system, so `uv sync` installs dependencies without installing this
-repository as a Python distribution.
-
+The locked development environment is defined by `pyproject.toml` and `uv.lock`.
+The project has no build system, so `uv sync` installs its dependencies without
+installing this repository as a Python distribution.
 Host-side autonomous Git/GitHub operations run only from hash-verified wrapper
-copies installed in the protected Codex user guard store. Repository files under
-`scripts/` are reviewable sources rather than host-side trust anchors. PR and CI
-observations are bound to the expected HEAD SHA, and merge readiness plus final
-merge require the exact reviewed PR and SHA as defined by ADR-001 and the
-guarded workflow documentation.
+copies installed in the protected Codex user guard store. Every installation
+publishes a new immutable directory identified by repository policy ID, source
+SHA, and installation ID; earlier immutable directories remain untouched.
+`.git/codex-guard/` contains only invocation metadata, and tracked files under
+`scripts/` are reviewable sources, not executable trust anchors. A
+repository-and-checkout-bound user-layer execution rule permits only the
+installed wrappers' absolute paths. The manifest and runtime verification bind
+the canonical physical PowerShell, Git, GitHub CLI, and Codex CLI paths and the
+approved Codex CLI version. The trusted Codex path is a self-contained native
+`codex.exe`; Node launcher shims such as `codex.cmd` and `codex.ps1` are outside
+the supported boundary. This boundary also uses a protected system PowerShell
+host and an exclusive repository workflow lock as defined by ADR-001.
 
+PR and CI observations are bound to one explicit expected HEAD SHA through
+merge readiness and human approval. PR inspection observes the current PR base
+object ID as `baseSha`, then creates the complete local binary diff from the
+recorded task `startSha` (`diffBaseSha`) through the expected head with external
+diff and text conversion disabled. Checks use the check-runs and commit-status
+APIs for that expected head. Every observation reports `baseSha` and `headSha`;
+PR inspection also reports `diffBaseSha`. Merge readiness is bound to the PR
+number and HEAD SHA; rebinding the task to a replacement PR clears prior
+readiness and merge-attempt evidence. Merge readiness and the final unmerged-PR
+merge path revalidate the protected `main` branch's required contexts, strict
+status setting, and GitHub Actions application ID. If the remote merge succeeds
+before a communication or cleanup failure, the remaining task state permits
+recovery only after the same PR, task HEAD, merge-ready SHA, approved SHA, and
+recorded pre-merge attempt and merge timestamp agree. Incomplete cleanup keeps
+the guarded task state for an exact-PR/exact-SHA retry. User-layer trust paths
+are rejected under both the writable repository and system temporary directory.
 Repository-wide verification uses:
 
 ```bash
@@ -63,6 +85,8 @@ src/
 │     ├─ historical.py
 │     ├─ jvlinktosqlite.py
 │     ├─ latest.py
+│     ├─ odds_archive.py
+│     ├─ realtime.py
 │     └─ setting.py
 └─ tests/
    ├─ test_data_retriever.py
@@ -70,38 +94,46 @@ src/
    ├─ test_jvlinktosqlite.py
    ├─ test_latest.py
    ├─ test_main.py
+   ├─ test_odds_archive.py
    ├─ test_project_environment.py
    ├─ test_race_data.py
+   ├─ test_realtime.py
    └─ test_setting.py
 ```
 
-`src/main.py` is the user-facing Typer entry point for retrieval. It loads
-repository configuration and constructs `DataRetriever`; it does not own XML
-transformation or process execution.
+`src/tests/test_project_environment.py` verifies that the synced project is not
+installed as a Python distribution. `src/convert_race.py` invokes the race-data
+export; `src/data/race_data.py` owns config parsing, read-only SQLite input,
+bounded Parquet writing, and the shared processed-table loader. The module is
+importable by scripts under `src/`, but the project has no build system or
+installed distribution.
 
-`src/data/data_retriever.py` is the application-level orchestration boundary for
-race-data acquisition. It composes `HistoricalRetriever` and `LatestRetriever`
-around one `JVLinkToSQLiteRunner` and one `JVLinkSettingBuilder`.
+`src/main.py` is the user-facing Typer entry point for historical, latest, and
+prediction-time realtime retrieval. It loads repository configuration and
+constructs `DataRetriever`; XML transformation and process execution remain
+below the CLI boundary.
 
-`src/data/retriever/jvlinktosqlite.py` owns the local subprocess boundary to
-`JVLinkToSQLite.exe`. It passes arguments without a shell, translates process
-failures, and does not own JRA-VAN credentials or parse JV-Data directly. This
-external-process boundary is recorded in ADR-005.
+`src/data/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
+and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
+`JVLinkSettingBuilder`, and one `OddsArchive`. `src/data/retriever/jvlinktosqlite.py`
+owns the local subprocess boundary to `JVLinkToSQLite.exe`, passes arguments
+without a shell, and does not own JRA-VAN credentials or parse JV-Data directly.
+This external process boundary is recorded in ADR-005.
 
-`src/data/retriever/setting.py` owns validation of `config/jvlink.toml` and the
-translation of semantic retrieval profiles into JVLinkToSQLite XML. The local
-installed `setting.xml` is treated as a seed and is not modified by keiba-ai.
-Normal, setup, and realtime section enablement and DataSpec allow-lists are
-applied explicitly; configured DataSpecs missing from the seed fail at this
-boundary.
+`src/data/retriever/setting.py` validates `config/jvlink.toml` and translates
+semantic retrieval profiles into JVLinkToSQLite XML. The installed `setting.xml`
+is treated as a seed and is not modified by keiba-ai. Normal, setup, and realtime
+section enablement plus DataSpec allow-lists are applied explicitly; configured
+DataSpecs missing from the seed fail at this boundary.
 
 `historical.py` generates base and per-race odds settings in a temporary
 directory. The base profile enables setup-data acquisition from the configured
 start point. After the base database exists, exact race-key components are read
 from `NL_RA_RACE`; the historical-odds profile then generates an exclusive
 realtime setting for each eligible race. These executions use
-`--skipslastmodifiedupdate`, and all generated historical XML is discarded when
-the command finishes.
+`--skipslastmodifiedupdate`. Because JVLinkToSQLite recreates realtime O1/O2
+staging tables on subsequent realtime executions, each race's result is archived
+immediately before the next race is requested.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the
@@ -110,22 +142,31 @@ JVLinkToSQLite to persist its updated latest-read positions into that runtime
 file. The seed remains unchanged. Profile ownership and the Typer entry point are
 recorded in ADR-006.
 
-`config/data.toml` owns storage locations: the raw SQLite database, processed
-Parquet directory, and JVLink runtime directory. `config/jvlink.toml` owns the
-machine-local executable/seed paths and semantic retrieval profiles. XML tag or
-XPath details are intentionally not exposed as configuration; those belong to
-the setting adapter.
+`realtime.py` owns prediction-time retrieval for one explicit race key. It first
+runs the `realtime_history` profile (`0B41`, `0B42`) and archives the O1/O2
+staging rows, then runs `realtime_current` (`0B31`, `0B32`) and archives the
+current rows. Both settings are temporary and execute with
+`--skipslastmodifiedupdate`; prediction-time retrieval therefore does not share
+mutable latest-read state.
 
-`src/data/race_data.py` owns read-only SQLite input, bounded Parquet writing, and
-the shared processed-table loader. The export stores one Parquet file per SQLite
-user table under `data/processed/`, preserving source text and NULL values. It
-stages and validates files before publishing and does not replace existing
-processed output. This storage and loader contract is recorded in ADR-003.
+`odds_archive.py` treats `RT_O1_ODDS_TANFUKUWAKU` and `RT_O2_ODDS_UMAREN` as
+staging tables and copies them into cumulative
+`ARCHIVE_O1_ODDS_TANFUKUWAKU` and `ARCHIVE_O2_ODDS_UMAREN` tables. Archive
+tables preserve source column names/order and use full-row set deduplication.
+This gives historical training and production inference one persisted O1/O2
+column contract. The staging/archive boundary is recorded in ADR-007.
 
-ADR-004 selects a market-adjusted win-probability model for the prediction MVP,
-but no prediction model has been implemented. JRA-VAN acquisition uses the
-locally installed JVLinkToSQLite/JV-Link environment on Windows; no HTTP API key
-or repository credential is introduced.
+`config/data.toml` owns the raw SQLite path, processed directory, and JVLink
+runtime directory. `config/jvlink.toml` owns the local executable/seed paths and
+semantic retrieval profiles; XML tag details remain inside the adapter. The
+export stores one Parquet file per user table under `data/processed/`, with
+source text and NULL values preserved. It stages files and validates row and
+column metadata before publishing; it does not replace existing processed
+output. This storage and loader contract is recorded in ADR-003. ADR-004 selects
+a market-adjusted win-probability model for the prediction MVP, but no model has
+been implemented. JRA-VAN acquisition uses the locally installed
+JVLinkToSQLite/JV-Link environment on Windows; no HTTP API key or repository
+credential is introduced.
 
 ## Architectural constraints during bootstrap
 
