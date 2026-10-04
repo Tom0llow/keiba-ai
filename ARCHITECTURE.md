@@ -34,9 +34,8 @@ installed wrappers' absolute paths. The manifest and runtime verification bind
 the canonical physical PowerShell, Git, GitHub CLI, and Codex CLI paths and the
 approved Codex CLI version. The trusted Codex path is a self-contained native
 `codex.exe`; Node launcher shims such as `codex.cmd` and `codex.ps1` are outside
-the supported boundary. This boundary also uses a protected system
-PowerShell host and an exclusive repository workflow lock as defined by
-ADR-001.
+the supported boundary. This boundary also uses a protected system PowerShell
+host and an exclusive repository workflow lock as defined by ADR-001.
 
 PR and CI observations are bound to one explicit expected HEAD SHA through
 merge readiness and human approval. PR inspection observes the current PR base
@@ -45,9 +44,8 @@ recorded task `startSha` (`diffBaseSha`) through the expected head with external
 diff and text conversion disabled. Checks use the check-runs and commit-status
 APIs for that expected head. Every observation reports `baseSha` and `headSha`;
 PR inspection also reports `diffBaseSha`. Merge readiness is bound to the PR
-number
-and HEAD SHA; rebinding the task to a replacement PR clears prior readiness and
-merge-attempt evidence. Merge readiness and the final unmerged-PR
+number and HEAD SHA; rebinding the task to a replacement PR clears prior
+readiness and merge-attempt evidence. Merge readiness and the final unmerged-PR
 merge path revalidate the protected `main` branch's required contexts, strict
 status setting, and GitHub Actions application ID. If the remote merge succeeds
 before a communication or cleanup failure, the remaining task state permits
@@ -97,6 +95,8 @@ src/
 │     ├─ historical.py
 │     ├─ jvlinktosqlite.py
 │     ├─ latest.py
+│     ├─ odds_archive.py
+│     ├─ realtime.py
 │     └─ setting.py
 └─ tests/
    ├─ test_data_retriever.py
@@ -104,8 +104,10 @@ src/
    ├─ test_jvlinktosqlite.py
    ├─ test_latest.py
    ├─ test_main.py
+   ├─ test_odds_archive.py
    ├─ test_project_environment.py
    ├─ test_race_data.py
+   ├─ test_realtime.py
    └─ test_setting.py
 ```
 
@@ -116,30 +118,32 @@ bounded Parquet writing, and the shared processed-table loader. The module is
 importable by scripts under `src/`, but the project has no build system or
 installed distribution.
 
-`src/main.py` is the user-facing Typer entry point for retrieval. It loads
-repository configuration and constructs `DataRetriever`; XML transformation and
-process execution remain below the CLI boundary.
+`src/main.py` is the user-facing Typer entry point for historical, latest, and
+prediction-time realtime retrieval. It loads repository configuration and
+constructs `DataRetriever`; XML transformation and process execution remain
+below the CLI boundary.
 
-`src/data/data_retriever.py` composes `HistoricalRetriever` and
-`LatestRetriever` around one `JVLinkToSQLiteRunner` and one
-`JVLinkSettingBuilder`. `src/data/retriever/jvlinktosqlite.py` owns the local
-subprocess boundary to `JVLinkToSQLite.exe`, passes arguments without a shell,
-and does not own JRA-VAN credentials or parse JV-Data directly. This external
-process boundary is recorded in ADR-005.
+`src/data/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
+and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
+`JVLinkSettingBuilder`, and one `OddsArchive`. `src/data/retriever/jvlinktosqlite.py`
+owns the local subprocess boundary to `JVLinkToSQLite.exe`, passes arguments
+without a shell, and does not own JRA-VAN credentials or parse JV-Data directly.
+This external process boundary is recorded in ADR-005.
 
 `src/data/retriever/setting.py` validates `config/jvlink.toml` and translates
-semantic retrieval profiles into JVLinkToSQLite XML. The installed
-`setting.xml` is treated as a seed and is not modified by keiba-ai. Normal,
-setup, and realtime section enablement plus DataSpec allow-lists are applied
-explicitly; configured DataSpecs missing from the seed fail at this boundary.
+semantic retrieval profiles into JVLinkToSQLite XML. The installed `setting.xml`
+is treated as a seed and is not modified by keiba-ai. Normal, setup, and realtime
+section enablement plus DataSpec allow-lists are applied explicitly; configured
+DataSpecs missing from the seed fail at this boundary.
 
 `historical.py` generates base and per-race odds settings in a temporary
 directory. The base profile enables setup-data acquisition from the configured
 start point. After the base database exists, exact race-key components are read
 from `NL_RA_RACE`; the historical-odds profile then generates an exclusive
 realtime setting for each eligible race. These executions use
-`--skipslastmodifiedupdate`, and generated historical XML is discarded when the
-command finishes.
+`--skipslastmodifiedupdate`. Because JVLinkToSQLite recreates realtime O1/O2
+staging tables on subsequent realtime executions, each race's result is archived
+immediately before the next race is requested.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the
@@ -147,6 +151,20 @@ runtime XML as their source, reapply the latest profile, and allow
 JVLinkToSQLite to persist updated latest-read positions into that runtime file.
 The seed remains unchanged. This configuration ownership and the Typer entry
 point are recorded in ADR-006.
+
+`realtime.py` owns prediction-time retrieval for one explicit race key. It first
+runs the `realtime_history` profile (`0B41`, `0B42`) and archives the O1/O2
+staging rows, then runs `realtime_current` (`0B31`, `0B32`) and archives the
+current rows. Both settings are temporary and execute with
+`--skipslastmodifiedupdate`; prediction-time retrieval therefore does not share
+mutable latest-read state.
+
+`odds_archive.py` treats `RT_O1_ODDS_TANFUKUWAKU` and `RT_O2_ODDS_UMAREN` as
+staging tables and copies them into cumulative
+`ARCHIVE_O1_ODDS_TANFUKUWAKU` and `ARCHIVE_O2_ODDS_UMAREN` tables. Archive
+tables preserve source column names/order and use full-row set deduplication.
+This gives historical training and production inference one persisted O1/O2
+column contract. The staging/archive boundary is recorded in ADR-007.
 
 `config/data.toml` owns the raw SQLite path, processed directory, and JVLink
 runtime directory. `config/jvlink.toml` owns the local executable/seed paths and
