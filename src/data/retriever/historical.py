@@ -24,6 +24,16 @@ class RaceKey:
     nichiji: str
     race_number: str
 
+    def __post_init__(self) -> None:
+        for name, value in (
+            ("jyo_code", self.jyo_code),
+            ("kaiji", self.kaiji),
+            ("nichiji", self.nichiji),
+            ("race_number", self.race_number),
+        ):
+            if not value.isdigit() or len(value) != 2:
+                raise ValueError(f"{name} must be a two-digit string: {value!r}")
+
 
 class HistoricalRetriever:
     """Populate the raw database with historical races and time-series odds."""
