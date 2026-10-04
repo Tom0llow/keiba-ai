@@ -1,42 +1,63 @@
-"""Tests for the Typer retrieval CLI."""
+"""Tests for the Typer data CLI."""
 
 from datetime import date
 from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
 
+from data.race_key import RaceKey
 from main import app
 
 runner = CliRunner()
 
 
-def test_historical_cli_uses_default_configs() -> None:
+def test_historical_cli_retrieves_then_rebuilds_processed_data() -> None:
     retriever = Mock()
     retriever.retrieve_historical.return_value = 12
-    with patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml:
+    preprocesser = Mock()
+    preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml,
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
         result = runner.invoke(app, ["retrieve", "historical"])
 
     assert result.exit_code == 0
     assert "12 races" in result.stdout
-    from_toml.assert_called_once()
+    retriever.retrieve_historical.assert_called_once_with()
+    preprocesser.rebuild.assert_called_once_with()
     kwargs = from_toml.call_args.kwargs
     assert kwargs["data_config"].as_posix() == "config/data.toml"
     assert kwargs["jvlink_config"].as_posix() == "config/jvlink.toml"
 
 
-def test_latest_cli_delegates_to_retriever() -> None:
+def test_latest_cli_retrieves_then_refreshes_processed_data() -> None:
     retriever = Mock()
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
+    preprocesser = Mock()
+    preprocesser.update.return_value = {"NL_RA_RACE": 100}
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
         result = runner.invoke(app, ["retrieve", "latest"])
 
     assert result.exit_code == 0
     retriever.retrieve_latest.assert_called_once_with()
+    preprocesser.update.assert_called_once_with()
 
 
-def test_realtime_cli_passes_target_race_key() -> None:
+def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:
     retriever = Mock()
     retriever.retrieve_realtime.return_value = 17
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
+    preprocesser = Mock()
+    preprocesser.update_race.return_value = {
+        "ARCHIVE_O1_ODDS_TANFUKUWAKU": 10,
+        "ARCHIVE_O2_ODDS_UMAREN": 7,
+    }
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
         result = runner.invoke(
             app,
             [
@@ -64,3 +85,16 @@ def test_realtime_cli_passes_target_race_key() -> None:
         nichiji="08",
         race_number="11",
     )
+    preprocesser.update_race.assert_called_once_with(
+        RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
+    )
+
+
+def test_preprocess_rebuild_can_run_without_retrieval() -> None:
+    preprocesser = Mock()
+    preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
+    with patch("main.DataPreprocesser.from_toml", return_value=preprocesser):
+        result = runner.invoke(app, ["preprocess", "rebuild"])
+
+    assert result.exit_code == 0
+    preprocesser.rebuild.assert_called_once_with()
