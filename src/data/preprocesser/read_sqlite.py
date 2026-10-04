@@ -41,8 +41,7 @@ class SQLiteReader:
         names = [
             name
             for (name,) in connection.execute(
-                "SELECT name FROM sqlite_schema "
-                "WHERE type = ? AND name NOT GLOB ? ORDER BY name",
+                "SELECT name FROM sqlite_schema WHERE type = ? AND name NOT GLOB ? ORDER BY name",
                 ("table", "sqlite_%"),
             )
         ]

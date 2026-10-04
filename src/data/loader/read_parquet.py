@@ -31,9 +31,7 @@ class ParquetReader:
     def list_tables(self) -> list[str]:
         """Return Parquet table names in the active complete snapshot."""
         return sorted(
-            path.stem
-            for path in self.current_snapshot().glob("*.parquet")
-            if path.is_file()
+            path.stem for path in self.current_snapshot().glob("*.parquet") if path.is_file()
         )
 
     def read_table(self, name: str) -> pa.Table:

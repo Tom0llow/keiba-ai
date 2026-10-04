@@ -29,10 +29,7 @@ class RaceKey:
     @property
     def race_id(self) -> str:
         """Return a stable filesystem-safe identifier for this race."""
-        return (
-            f"{self.race_date:%Y%m%d}"
-            f"{self.jyo_code}{self.kaiji}{self.nichiji}{self.race_number}"
-        )
+        return f"{self.race_date:%Y%m%d}{self.jyo_code}{self.kaiji}{self.nichiji}{self.race_number}"
 
     def __str__(self) -> str:
         return (

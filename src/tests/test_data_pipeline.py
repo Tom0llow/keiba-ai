@@ -24,9 +24,7 @@ def _paths(tmp_path: Path) -> DataPaths:
 def _create_source(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with sqlite3.connect(path) as database:
-        database.execute(
-            "CREATE TABLE NL_RA_RACE (RaceKey TEXT, RaceDate TEXT, Note TEXT)"
-        )
+        database.execute("CREATE TABLE NL_RA_RACE (RaceKey TEXT, RaceDate TEXT, Note TEXT)")
         database.executemany(
             "INSERT INTO NL_RA_RACE VALUES (?, ?, ?)",
             [("001", "20261004", None), ("002", "20261005", "race")],
