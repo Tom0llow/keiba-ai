@@ -47,10 +47,8 @@ def _profile(*, race_start_date: date | None = None) -> JVLinkProfile:
     )
 
 
-def test_iter_race_keys_starts_at_configured_odds_date(tmp_path: Path) -> None:
-    database = tmp_path / "race.db"
-    _create_race_db(database)
-    retriever = HistoricalRetriever(
+def _retriever(database: Path) -> HistoricalRetriever:
+    return HistoricalRetriever(
         Mock(),
         database,
         Mock(),
@@ -59,10 +57,27 @@ def test_iter_race_keys_starts_at_configured_odds_date(tmp_path: Path) -> None:
         _profile(race_start_date=date(2003, 10, 4)),
     )
 
-    assert list(retriever.iter_race_keys(start_date=date(2003, 10, 4))) == [
+
+def test_iter_race_keys_starts_at_configured_odds_date(tmp_path: Path) -> None:
+    database = tmp_path / "race.db"
+    _create_race_db(database)
+
+    assert list(_retriever(database).iter_race_keys(start_date=date(2003, 10, 4))) == [
         RaceKey(date(2003, 10, 4), "05", "04", "09", "01"),
         RaceKey(date(2026, 10, 3), "06", "04", "07", "12"),
     ]
+
+
+def test_iter_race_keys_closes_reader_before_first_yield(tmp_path: Path) -> None:
+    database = tmp_path / "race.db"
+    _create_race_db(database)
+    race_keys = _retriever(database).iter_race_keys(start_date=date(2003, 10, 4))
+
+    assert next(race_keys) == RaceKey(date(2003, 10, 4), "05", "04", "09", "01")
+
+    with sqlite3.connect(database, timeout=0) as writer:
+        writer.execute("BEGIN EXCLUSIVE")
+        writer.rollback()
 
 
 def test_retrieve_builds_temporary_base_and_archives_each_odds_result(tmp_path: Path) -> None:
@@ -108,16 +123,8 @@ def test_invalid_race_key_component_is_rejected(tmp_path: Path) -> None:
             ("2026", "1003", "6", "04", "07", "12"),
         )
 
-    retriever = HistoricalRetriever(
-        Mock(),
-        database,
-        Mock(),
-        Mock(),
-        _profile(),
-        _profile(race_start_date=date(2003, 10, 4)),
-    )
     with pytest.raises(ValueError, match="invalid idJyoCD"):
-        list(retriever.iter_race_keys(start_date=date(2003, 10, 4)))
+        list(_retriever(database).iter_race_keys(start_date=date(2003, 10, 4)))
 
 
 def test_manual_race_key_requires_two_digit_components() -> None:
