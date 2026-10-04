@@ -23,7 +23,7 @@ def _seed_realtime_tables(database: Path) -> None:
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> list[str]:
-    return [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')]
+    return [str(row[1]) for row in connection.execute(f'PRAGMA table_info("{table}")')]
 
 
 def test_archive_preserves_schema_and_is_idempotent(tmp_path: Path) -> None:
@@ -35,22 +35,19 @@ def test_archive_preserves_schema_and_is_idempotent(tmp_path: Path) -> None:
     assert archive.archive() == 0
 
     with sqlite3.connect(database) as connection:
-        assert _columns(connection, "ARCHIVE_O1_ODDS_TANFUKUWAKU") == [
-            "race_id",
-            "HappyoTime",
-            "Odds",
-        ]
-        assert _columns(connection, "ARCHIVE_O2_ODDS_UMAREN") == [
-            "race_id",
-            "HappyoTime",
-            "Odds",
-        ]
-        assert connection.execute(
+        o1_columns = _columns(connection, "ARCHIVE_O1_ODDS_TANFUKUWAKU")
+        o2_columns = _columns(connection, "ARCHIVE_O2_ODDS_UMAREN")
+        o1_count = connection.execute(
             "SELECT COUNT(*) FROM ARCHIVE_O1_ODDS_TANFUKUWAKU"
-        ).fetchone() == (1,)
-        assert connection.execute(
+        ).fetchone()
+        o2_count = connection.execute(
             "SELECT COUNT(*) FROM ARCHIVE_O2_ODDS_UMAREN"
-        ).fetchone() == (1,)
+        ).fetchone()
+
+    assert o1_columns == ["race_id", "HappyoTime", "Odds"]
+    assert o2_columns == ["race_id", "HappyoTime", "Odds"]
+    assert o1_count == (1,)
+    assert o2_count == (1,)
 
 
 def test_archive_accumulates_rows_after_realtime_table_replacement(tmp_path: Path) -> None:
@@ -71,9 +68,12 @@ def test_archive_accumulates_rows_after_realtime_table_replacement(tmp_path: Pat
 
     assert archive.archive() == 2
     with sqlite3.connect(database) as connection:
-        assert connection.execute(
+        o1_times = connection.execute(
             "SELECT HappyoTime FROM ARCHIVE_O1_ODDS_TANFUKUWAKU ORDER BY HappyoTime"
-        ).fetchall() == [("101000",), ("102000",)]
-        assert connection.execute(
+        ).fetchall()
+        o2_times = connection.execute(
             "SELECT HappyoTime FROM ARCHIVE_O2_ODDS_UMAREN ORDER BY HappyoTime"
-        ).fetchall() == [("101000",), ("102000",)]
+        ).fetchall()
+
+    assert o1_times == [("101000",), ("102000",)]
+    assert o2_times == [("101000",), ("102000",)]
