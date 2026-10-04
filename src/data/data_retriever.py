@@ -89,6 +89,4 @@ class DataRetriever:
         race_number: str,
     ) -> int:
         """Retrieve prediction-time O1/O2 odds for one target race."""
-        return self._realtime.retrieve(
-            RaceKey(race_date, jyo_code, kaiji, nichiji, race_number)
-        )
+        return self._realtime.retrieve(RaceKey(race_date, jyo_code, kaiji, nichiji, race_number))
