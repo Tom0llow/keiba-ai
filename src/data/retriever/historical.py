@@ -10,6 +10,7 @@ from datetime import date
 from pathlib import Path
 
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
+from data.retriever.odds_archive import OddsArchive
 from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
 
@@ -32,12 +33,14 @@ class HistoricalRetriever:
         runner: JVLinkToSQLiteRunner,
         database: Path,
         setting_builder: JVLinkSettingBuilder,
+        archive: OddsArchive,
         historical_profile: JVLinkProfile,
         odds_profile: JVLinkProfile,
     ) -> None:
         self._runner = runner
         self._database = database.expanduser().resolve()
         self._setting_builder = setting_builder
+        self._archive = archive
         self._historical_profile = historical_profile
         self._odds_profile = odds_profile
         if odds_profile.race_start_date is None:
@@ -45,7 +48,7 @@ class HistoricalRetriever:
         self._odds_start_date = odds_profile.race_start_date
 
     def retrieve(self) -> int:
-        """Retrieve base history, then configured time-series odds for eligible races."""
+        """Retrieve base history, then archive configured time-series odds by race."""
         with tempfile.TemporaryDirectory(prefix="keiba-ai-historical-") as temporary_directory:
             temporary_path = Path(temporary_directory)
             base_setting = self._setting_builder.build(
@@ -65,6 +68,7 @@ class HistoricalRetriever:
                     race_key=race_key,
                 )
                 self._runner.execute(odds_setting, skip_last_modified_update=True)
+                self._archive.archive()
                 count += 1
             return count
 
