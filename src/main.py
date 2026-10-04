@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from datetime import date
+from datetime import datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -50,7 +50,10 @@ def retrieve_latest(
 
 @retrieve_app.command("realtime")
 def retrieve_realtime(
-    race_date: Annotated[date, typer.Option("--date", help="Race date (YYYY-MM-DD).")],
+    race_datetime: Annotated[
+        datetime,
+        typer.Option("--date", formats=["%Y-%m-%d"], help="Race date (YYYY-MM-DD)."),
+    ],
     jyo_code: Annotated[str, typer.Option("--jyo", help="Two-digit JRA venue code.")],
     kaiji: Annotated[str, typer.Option("--kaiji", help="Two-digit meeting number.")],
     nichiji: Annotated[str, typer.Option("--nichiji", help="Two-digit meeting day.")],
@@ -60,7 +63,7 @@ def retrieve_realtime(
 ) -> None:
     """Retrieve prediction-time history and current odds for one target race."""
     inserted = _retriever(data_config, jvlink_config).retrieve_realtime(
-        race_date=race_date,
+        race_date=race_datetime.date(),
         jyo_code=jyo_code,
         kaiji=kaiji,
         nichiji=nichiji,
