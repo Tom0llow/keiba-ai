@@ -54,6 +54,7 @@ def test_iter_race_keys_starts_at_configured_odds_date(tmp_path: Path) -> None:
         Mock(),
         database,
         Mock(),
+        Mock(),
         _profile(),
         _profile(race_start_date=date(2003, 10, 4)),
     )
@@ -64,11 +65,12 @@ def test_iter_race_keys_starts_at_configured_odds_date(tmp_path: Path) -> None:
     ]
 
 
-def test_retrieve_builds_temporary_base_and_odds_settings(tmp_path: Path) -> None:
+def test_retrieve_builds_temporary_base_and_archives_each_odds_result(tmp_path: Path) -> None:
     database = tmp_path / "race.db"
     _create_race_db(database)
     runner = Mock()
     builder = Mock()
+    archive = Mock()
     builder.build.side_effect = lambda profile, destination, **kwargs: destination
     historical_profile = _profile()
     odds_profile = _profile(race_start_date=date(2003, 10, 4))
@@ -76,6 +78,7 @@ def test_retrieve_builds_temporary_base_and_odds_settings(tmp_path: Path) -> Non
         runner,
         database,
         builder,
+        archive,
         historical_profile,
         odds_profile,
     )
@@ -90,6 +93,7 @@ def test_retrieve_builds_temporary_base_and_odds_settings(tmp_path: Path) -> Non
         assert call.kwargs == {"skip_last_modified_update": True}
         assert call.args[0].name == "historical-odds.xml"
     assert builder.build.call_count == 3
+    assert archive.archive.call_count == 2
 
 
 def test_invalid_race_key_component_is_rejected(tmp_path: Path) -> None:
@@ -108,8 +112,14 @@ def test_invalid_race_key_component_is_rejected(tmp_path: Path) -> None:
         Mock(),
         database,
         Mock(),
+        Mock(),
         _profile(),
         _profile(race_start_date=date(2003, 10, 4)),
     )
     with pytest.raises(ValueError, match="invalid idJyoCD"):
         list(retriever.iter_race_keys(start_date=date(2003, 10, 4)))
+
+
+def test_manual_race_key_requires_two_digit_components() -> None:
+    with pytest.raises(ValueError, match="jyo_code must be a two-digit string"):
+        RaceKey(date(2026, 10, 4), "5", "04", "08", "11")
