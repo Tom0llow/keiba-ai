@@ -14,12 +14,8 @@ def _seed_realtime_tables(database: Path) -> None:
         connection.execute(
             "CREATE TABLE RT_O2_ODDS_UMAREN (race_id TEXT, HappyoTime TEXT, Odds TEXT)"
         )
-        connection.execute(
-            "INSERT INTO RT_O1_ODDS_TANFUKUWAKU VALUES ('r1', '101000', '25')"
-        )
-        connection.execute(
-            "INSERT INTO RT_O2_ODDS_UMAREN VALUES ('r1', '101000', '80')"
-        )
+        connection.execute("INSERT INTO RT_O1_ODDS_TANFUKUWAKU VALUES ('r1', '101000', '25')")
+        connection.execute("INSERT INTO RT_O2_ODDS_UMAREN VALUES ('r1', '101000', '80')")
 
 
 def _columns(connection: sqlite3.Connection, table: str) -> list[str]:
@@ -37,12 +33,8 @@ def test_archive_preserves_schema_and_is_idempotent(tmp_path: Path) -> None:
     with sqlite3.connect(database) as connection:
         o1_columns = _columns(connection, "ARCHIVE_O1_ODDS_TANFUKUWAKU")
         o2_columns = _columns(connection, "ARCHIVE_O2_ODDS_UMAREN")
-        o1_count = connection.execute(
-            "SELECT COUNT(*) FROM ARCHIVE_O1_ODDS_TANFUKUWAKU"
-        ).fetchone()
-        o2_count = connection.execute(
-            "SELECT COUNT(*) FROM ARCHIVE_O2_ODDS_UMAREN"
-        ).fetchone()
+        o1_count = connection.execute("SELECT COUNT(*) FROM ARCHIVE_O1_ODDS_TANFUKUWAKU").fetchone()
+        o2_count = connection.execute("SELECT COUNT(*) FROM ARCHIVE_O2_ODDS_UMAREN").fetchone()
 
     assert o1_columns == ["race_id", "HappyoTime", "Odds"]
     assert o2_columns == ["race_id", "HappyoTime", "Odds"]
@@ -59,12 +51,8 @@ def test_archive_accumulates_rows_after_realtime_table_replacement(tmp_path: Pat
     with sqlite3.connect(database) as connection:
         connection.execute("DELETE FROM RT_O1_ODDS_TANFUKUWAKU")
         connection.execute("DELETE FROM RT_O2_ODDS_UMAREN")
-        connection.execute(
-            "INSERT INTO RT_O1_ODDS_TANFUKUWAKU VALUES ('r1', '102000', '22')"
-        )
-        connection.execute(
-            "INSERT INTO RT_O2_ODDS_UMAREN VALUES ('r1', '102000', '75')"
-        )
+        connection.execute("INSERT INTO RT_O1_ODDS_TANFUKUWAKU VALUES ('r1', '102000', '22')")
+        connection.execute("INSERT INTO RT_O2_ODDS_UMAREN VALUES ('r1', '102000', '75')")
 
     assert archive.archive() == 2
     with sqlite3.connect(database) as connection:
