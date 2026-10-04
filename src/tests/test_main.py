@@ -1,5 +1,6 @@
 """Tests for the Typer retrieval CLI."""
 
+from datetime import date
 from unittest.mock import Mock, patch
 
 from typer.testing import CliRunner
@@ -30,3 +31,36 @@ def test_latest_cli_delegates_to_retriever() -> None:
 
     assert result.exit_code == 0
     retriever.retrieve_latest.assert_called_once_with()
+
+
+def test_realtime_cli_passes_target_race_key() -> None:
+    retriever = Mock()
+    retriever.retrieve_realtime.return_value = 17
+    with patch("main.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(
+            app,
+            [
+                "retrieve",
+                "realtime",
+                "--date",
+                "2026-10-04",
+                "--jyo",
+                "05",
+                "--kaiji",
+                "04",
+                "--nichiji",
+                "08",
+                "--race",
+                "11",
+            ],
+        )
+
+    assert result.exit_code == 0
+    assert "17 rows" in result.stdout
+    retriever.retrieve_realtime.assert_called_once_with(
+        race_date=date(2026, 10, 4),
+        jyo_code="05",
+        kaiji="04",
+        nichiji="08",
+        race_number="11",
+    )
