@@ -7,7 +7,8 @@ from unittest.mock import Mock
 
 import pytest
 
-from data.retriever.historical import HistoricalRetriever, RaceKey
+from data.race_key import RaceKey
+from data.retriever.historical import HistoricalRetriever
 from data.retriever.setting import JVLinkProfile
 
 
