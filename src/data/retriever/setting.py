@@ -52,6 +52,8 @@ class JVLinkConfig:
     historical: JVLinkProfile
     historical_odds: JVLinkProfile
     latest: JVLinkProfile
+    realtime_history: JVLinkProfile
+    realtime_current: JVLinkProfile
 
     @classmethod
     def from_toml(cls, config_path: Path) -> JVLinkConfig:
@@ -67,6 +69,8 @@ class JVLinkConfig:
             historical=_load_profile(config, "historical"),
             historical_odds=_load_profile(config, "historical_odds"),
             latest=_load_profile(config, "latest"),
+            realtime_history=_load_profile(config, "realtime_history"),
+            realtime_current=_load_profile(config, "realtime_current"),
         )
 
 
