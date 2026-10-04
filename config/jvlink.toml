@@ -1,0 +1,61 @@
+[jvlink]
+executable = "C:/JVLinkToSQLite/JVLinkToSQLite.exe"
+seed_setting = "C:/JVLinkToSQLite/setting.xml"
+
+[historical]
+normal_update = false
+setup_update = true
+realtime_update = false
+normal_data_specs = []
+setup_data_specs = [
+  "RACE",
+  "DIFF",
+  "BLOD",
+  "SNAP",
+  "SLOP",
+  "WOOD",
+  "YSCH",
+  "HOSE",
+  "HOYU",
+  "COMM",
+  "MING",
+  "DIFN",
+  "BLDN",
+  "SNPN",
+  "HOSN",
+]
+realtime_data_specs = []
+start_datetime = 1986-01-01T00:00:00
+
+[historical_odds]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B41", "0B42"]
+race_start_date = 2003-10-04
+
+[latest]
+normal_update = true
+setup_update = false
+realtime_update = true
+normal_data_specs = ["RACE"]
+setup_data_specs = []
+realtime_data_specs = ["0B12", "0B15", "0B11", "0B14", "0B13", "0B17"]
+
+[realtime_history]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B41", "0B42"]
+
+[realtime_current]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B31", "0B32"]
