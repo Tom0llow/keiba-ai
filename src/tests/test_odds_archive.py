@@ -22,6 +22,10 @@ def _seed_realtime_tables(database: Path) -> None:
         )
 
 
+def _columns(connection: sqlite3.Connection, table: str) -> list[str]:
+    return [row[1] for row in connection.execute(f'PRAGMA table_info("{table}")')]
+
+
 def test_archive_preserves_schema_and_is_idempotent(tmp_path: Path) -> None:
     database = tmp_path / "race.db"
     _seed_realtime_tables(database)
@@ -31,14 +35,16 @@ def test_archive_preserves_schema_and_is_idempotent(tmp_path: Path) -> None:
     assert archive.archive() == 0
 
     with sqlite3.connect(database) as connection:
-        o1_columns = [
-            row[1] for row in connection.execute("PRAGMA table_info(ARCHIVE_O1_ODDS_TANFUKUWAKU)")
+        assert _columns(connection, "ARCHIVE_O1_ODDS_TANFUKUWAKU") == [
+            "race_id",
+            "HappyoTime",
+            "Odds",
         ]
-        o2_columns = [
-            row[1] for row in connection.execute("PRAGMA table_info(ARCHIVE_O2_ODDS_UMAREN)")
+        assert _columns(connection, "ARCHIVE_O2_ODDS_UMAREN") == [
+            "race_id",
+            "HappyoTime",
+            "Odds",
         ]
-        assert o1_columns == ["race_id", "HappyoTime", "Odds"]
-        assert o2_columns == ["race_id", "HappyoTime", "Odds"]
         assert connection.execute(
             "SELECT COUNT(*) FROM ARCHIVE_O1_ODDS_TANFUKUWAKU"
         ).fetchone() == (1,)
