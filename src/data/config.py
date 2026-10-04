@@ -1,4 +1,4 @@
-"""Load filesystem paths shared by race-data retrieval workflows."""
+"""Load filesystem paths shared by race-data workflows."""
 
 from __future__ import annotations
 
@@ -9,15 +9,16 @@ from typing import Any
 
 
 @dataclass(frozen=True)
-class RetrievalPaths:
-    """Configured locations required by race-data acquisition."""
+class DataPaths:
+    """Configured locations for raw, processed, and JVLink runtime data."""
 
     raw_db: Path
+    processed_dir: Path
     jvlink_runtime_dir: Path
 
     @classmethod
-    def from_toml(cls, config_path: Path) -> RetrievalPaths:
-        """Read retrieval paths from the shared data configuration."""
+    def from_toml(cls, config_path: Path) -> DataPaths:
+        """Read shared paths from TOML and resolve relative paths beside it."""
         resolved = config_path.expanduser().resolve()
         with resolved.open("rb") as config_file:
             config = tomllib.load(config_file)
@@ -26,6 +27,7 @@ class RetrievalPaths:
             raise ValueError("config must contain a [paths] section")
         return cls(
             raw_db=_resolve_path(resolved, paths, "raw_db"),
+            processed_dir=_resolve_path(resolved, paths, "processed_dir"),
             jvlink_runtime_dir=_resolve_path(resolved, paths, "jvlink_runtime_dir"),
         )
 
