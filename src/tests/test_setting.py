@@ -1,11 +1,11 @@
 """Tests for declarative JVLinkToSQLite setting generation."""
 
 import xml.etree.ElementTree as ET
-from datetime import date
+from datetime import date, datetime
 from pathlib import Path
 
 from data.race_key import RaceKey
-from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
+from data.retriever.setting import JVLinkConfig, JVLinkProfile, JVLinkSettingBuilder
 
 
 def _write_seed(path: Path) -> None:
@@ -20,6 +20,9 @@ def _write_seed(path: Path) -> None:
     </DataSpecSettings></JVNormalUpdateSetting>
     <JVSetupDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>
       <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>RACE</DataSpec>
+        <JVKaisaiDateTimeKey><KaisaiDateTime>2015-01-01T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
+      </JVDataSpecSetting>
+      <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>WOOD</DataSpec>
         <JVKaisaiDateTimeKey><KaisaiDateTime>2015-01-01T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
       </JVDataSpecSetting>
     </DataSpecSettings></JVSetupDataUpdateSetting>
@@ -66,3 +69,62 @@ def test_builder_applies_exclusive_odds_profile_and_race_key(tmp_path: Path) -> 
         assert setting.findtext("JVRaceKey/Kaiji") == "04"
         assert setting.findtext("JVRaceKey/Nichiji") == "07"
         assert setting.findtext("JVRaceKey/RaceNum") == "12"
+
+
+def test_builder_applies_data_spec_specific_setup_start_datetimes(tmp_path: Path) -> None:
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    profile = JVLinkProfile(
+        normal_update=False,
+        setup_update=True,
+        realtime_update=False,
+        normal_data_specs=frozenset(),
+        setup_data_specs=frozenset({"RACE", "WOOD"}),
+        realtime_data_specs=frozenset(),
+        start_datetimes={
+            "RACE": datetime(1986, 1, 1),
+            "WOOD": datetime(2021, 7, 27),
+        },
+    )
+
+    destination = tmp_path / "historical.xml"
+    JVLinkSettingBuilder(seed).build(profile, destination)
+
+    root = ET.parse(destination).getroot()
+    settings = {node.findtext("DataSpec"): node for node in root.iter("JVDataSpecSetting")}
+    assert settings["RACE"].findtext("JVKaisaiDateTimeKey/KaisaiDateTime") == (
+        "1986-01-01T00:00:00"
+    )
+    assert settings["WOOD"].findtext("JVKaisaiDateTimeKey/KaisaiDateTime") == (
+        "2021-07-27T00:00:00"
+    )
+
+
+def test_config_loads_data_spec_specific_historical_start_datetimes() -> None:
+    config_path = Path(__file__).parents[2] / "config" / "jvlink.toml"
+
+    config = JVLinkConfig.from_toml(config_path)
+
+    assert config.historical.start_datetime is None
+    assert config.historical.start_datetimes is not None
+    assert config.historical.start_datetimes["RACE"].isoformat() == "1986-01-01T00:00:00"
+    assert config.historical.start_datetimes["WOOD"].isoformat() == "2021-07-27T00:00:00"
+
+
+def test_config_loads_realtime_race(tmp_path: Path) -> None:
+    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(
+        source.read_text(encoding="utf-8")
+        + "\n[realtime]\n"
+        + "date = 2026-10-04\n"
+        + 'jyo = "05"\n'
+        + 'kaiji = "04"\n'
+        + 'nichiji = "08"\n'
+        + 'race = "11"\n',
+        encoding="utf-8",
+    )
+
+    config = JVLinkConfig.from_toml(config_path)
+
+    assert config.realtime_race == RaceKey(date(2026, 10, 4), "05", "04", "08", "11")

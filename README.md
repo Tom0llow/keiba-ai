@@ -88,6 +88,21 @@ realtime_data_specs = ["0B41", "0B42"]
 realtime_data_specs = ["0B31", "0B32"]
 ```
 
+The target race for realtime retrieval can also be configured in
+`config/jvlink.toml`:
+
+```toml
+[realtime]
+date = 2026-10-04
+jyo = "05"
+kaiji = "04"
+nichiji = "08"
+race = "11"
+```
+
+When `[realtime]` is configured, the target race options can be omitted from
+the CLI. Supplying all five CLI options overrides the configured target race.
+
 JVLinkToSQLite realtime O1/O2 tables are transient staging tables. They are
 copied immediately into cumulative raw tables:
 
@@ -106,24 +121,22 @@ Install dependencies and run commands from the repository root:
 ```powershell
 uv sync --locked
 
-uv run python src/main.py retrieve historical
-uv run python src/main.py retrieve latest
-uv run python src/main.py retrieve realtime `
-  --date 2026-10-04 `
-  --jyo 05 `
-  --kaiji 04 `
-  --nichiji 08 `
-  --race 11
+uv run python src/main.py --retrieve --mode=historical
+uv run python src/main.py --retrieve --mode=latest
+uv run python src/main.py --retrieve --mode=realtime
 ```
 
 Retrieval and preprocessing are coupled at the CLI boundary:
 
-- `retrieve historical`: build raw history, retrieve historical odds, then
+- `--retrieve --mode=historical`: build raw history, retrieve historical odds, then
   publish a complete Parquet snapshot.
-- `retrieve latest`: update raw data, then publish a refreshed complete Parquet
+- `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
   snapshot.
-- `retrieve realtime`: retrieve and archive the target race's history/current
+- `--retrieve --mode=realtime`: retrieve and archive the target race's history/current
   odds, then publish race-scoped Parquet for that same `RaceKey`.
+
+All retrieval modes use the flag-based interface. The separate `preprocess`
+command remains available for publishing processed data from existing raw data.
 
 If raw data already exists, a complete processed snapshot can be rebuilt without
 new JRA-VAN retrieval:

@@ -148,12 +148,14 @@ section enablement plus DataSpec allow-lists are applied explicitly; configured
 DataSpecs missing from the seed fail at this boundary.
 
 `historical.py` generates base and per-race odds settings in a temporary
-directory. After the base database exists, it snapshots exact race keys from
-`NL_RA_RACE` and closes that SQLite reader before JVLinkToSQLite begins realtime
-odds writes. The historical-odds profile then generates an exclusive realtime
-setting for each eligible race. Because JVLinkToSQLite recreates realtime O1/O2
-staging tables on subsequent realtime executions, each race's result is archived
-before the next race is requested.
+directory. After the base database exists, it snapshots JRA-compatible race keys
+from `NL_RA_RACE` and closes that SQLite reader before JVLinkToSQLite begins
+realtime odds writes. Non-JRA race records remain in the base database but are
+not sent to the JRA-specific historical-odds DataSpecs. The historical-odds
+profile then generates an exclusive realtime setting for each eligible race.
+Because JVLinkToSQLite recreates realtime O1/O2 staging tables on subsequent
+realtime executions, each race's result is archived before the next race is
+requested.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the
@@ -239,8 +241,9 @@ source data arrived through historical, latest, or realtime retrieval.
 ## Configuration and persisted state
 
 `config/data.toml` owns the raw SQLite path, processed directory, and JVLink
-runtime directory. `config/jvlink.toml` owns the local executable/seed paths and
-semantic retrieval profiles; XML tag details remain inside the adapter.
+runtime directory. `config/jvlink.toml` owns the local executable/seed paths,
+semantic retrieval profiles, and the optional target race for realtime retrieval;
+XML tag details remain inside the adapter.
 
 `data/` is Git-ignored. Mutable raw SQLite, JVLink runtime XML, complete Parquet
 snapshots, and realtime Parquet versions are local artifacts rather than Git

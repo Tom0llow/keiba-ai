@@ -2,6 +2,14 @@
 executable = "C:/JVLinkToSQLite/JVLinkToSQLite.exe"
 seed_setting = "C:/JVLinkToSQLite/setting.xml"
 
+# Optional target race for `--retrieve --mode=realtime`.
+# [realtime]
+# date = 2026-10-04
+# jyo = "05"
+# kaiji = "04"
+# nichiji = "08"
+# race = "11"
+
 [historical]
 normal_update = false
 setup_update = true
@@ -25,7 +33,23 @@ setup_data_specs = [
   "HOSN",
 ]
 realtime_data_specs = []
-start_datetime = 1986-01-01T00:00:00
+
+[historical.start_datetimes]
+RACE = 1986-01-01T00:00:00
+DIFF = 1986-01-01T00:00:00
+BLOD = 1986-01-01T00:00:00
+SNAP = 2004-01-01T00:00:00
+SLOP = 2003-01-01T00:00:00
+WOOD = 2021-07-27T00:00:00
+YSCH = 2000-01-01T00:00:00
+HOSE = 1997-01-01T00:00:00
+HOYU = 2000-01-01T00:00:00
+COMM = 1986-01-01T00:00:00
+MING = 2001-09-01T00:00:00
+DIFN = 2023-08-08T00:00:00
+BLDN = 2023-08-08T00:00:00
+SNPN = 2004-01-01T00:00:00
+HOSN = 2023-08-08T00:00:00
 
 [historical_odds]
 normal_update = false

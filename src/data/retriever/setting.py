@@ -9,6 +9,8 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
+from data.race_key import RaceKey
+
 
 class RaceKeyLike(Protocol):
     """Minimum race-key contract required to configure realtime odds."""
@@ -41,11 +43,12 @@ class JVLinkProfile:
     realtime_data_specs: frozenset[str]
     start_datetime: datetime | None = None
     race_start_date: date | None = None
+    start_datetimes: dict[str, datetime] | None = None
 
 
 @dataclass(frozen=True)
 class JVLinkConfig:
-    """Local JVLinkToSQLite paths and retrieval profiles."""
+    """Local JVLinkToSQLite paths, retrieval profiles, and target race."""
 
     executable: Path
     seed_setting: Path
@@ -54,6 +57,7 @@ class JVLinkConfig:
     latest: JVLinkProfile
     realtime_history: JVLinkProfile
     realtime_current: JVLinkProfile
+    realtime_race: RaceKey | None = None
 
     @classmethod
     def from_toml(cls, config_path: Path) -> JVLinkConfig:
@@ -71,6 +75,7 @@ class JVLinkConfig:
             latest=_load_profile(config, "latest"),
             realtime_history=_load_profile(config, "realtime_history"),
             realtime_current=_load_profile(config, "realtime_current"),
+            realtime_race=_optional_race_key(config, "realtime"),
         )
 
 
@@ -107,8 +112,13 @@ class JVLinkSettingBuilder:
         _apply_section(setup, profile.setup_update, profile.setup_data_specs)
         _apply_section(realtime, profile.realtime_update, profile.realtime_data_specs)
 
-        if profile.start_datetime is not None:
-            _set_start_datetime(setup, profile.setup_data_specs, profile.start_datetime)
+        if profile.start_datetime is not None or profile.start_datetimes:
+            _set_start_datetimes(
+                setup,
+                profile.setup_data_specs,
+                profile.start_datetime,
+                profile.start_datetimes,
+            )
         if race_key is not None:
             _set_race_key(realtime, profile.realtime_data_specs, race_key)
 
@@ -120,15 +130,37 @@ class JVLinkSettingBuilder:
 
 def _load_profile(config: dict[str, Any], name: str) -> JVLinkProfile:
     section = _require_table(config, name)
+    setup_data_specs = _require_string_set(section, "setup_data_specs", name)
+    start_datetime = _optional_datetime(section, "start_datetime", name)
+    start_datetimes = _optional_datetimes(section, "start_datetimes", name)
+    if start_datetime is not None and start_datetimes:
+        raise ValueError(f"[{name}] must define only one of start_datetime or start_datetimes")
+    if start_datetimes and set(start_datetimes) != set(setup_data_specs):
+        raise ValueError(f"[{name}].start_datetimes must contain exactly the setup_data_specs")
     return JVLinkProfile(
         normal_update=_require_bool(section, "normal_update", name),
         setup_update=_require_bool(section, "setup_update", name),
         realtime_update=_require_bool(section, "realtime_update", name),
         normal_data_specs=_require_string_set(section, "normal_data_specs", name),
-        setup_data_specs=_require_string_set(section, "setup_data_specs", name),
+        setup_data_specs=setup_data_specs,
         realtime_data_specs=_require_string_set(section, "realtime_data_specs", name),
-        start_datetime=_optional_datetime(section, "start_datetime", name),
+        start_datetime=start_datetime,
+        start_datetimes=start_datetimes or None,
         race_start_date=_optional_date(section, "race_start_date", name),
+    )
+
+
+def _optional_race_key(config: dict[str, Any], section_name: str) -> RaceKey | None:
+    value = config.get(section_name)
+    if value is None:
+        return None
+    section = _require_table(config, section_name)
+    return RaceKey(
+        _require_date(section, "date", section_name),
+        _require_string(section, "jyo", section_name),
+        _require_string(section, "kaiji", section_name),
+        _require_string(section, "nichiji", section_name),
+        _require_string(section, "race", section_name),
     )
 
 
@@ -151,13 +183,19 @@ def _apply_section(section: ET.Element, enabled: bool, enabled_specs: frozenset[
         raise ValueError(f"setting is missing data specs: {', '.join(sorted(missing))}")
 
 
-def _set_start_datetime(
-    setup: ET.Element, enabled_specs: frozenset[str], start_datetime: datetime
+def _set_start_datetimes(
+    setup: ET.Element,
+    enabled_specs: frozenset[str],
+    default_start_datetime: datetime | None,
+    start_datetimes: dict[str, datetime] | None,
 ) -> None:
     settings = _required_child(setup, "DataSpecSettings")
     for data_spec_setting in settings.findall("JVDataSpecSetting"):
         data_spec = data_spec_setting.findtext("DataSpec")
         if data_spec not in enabled_specs:
+            continue
+        start_datetime = (start_datetimes or {}).get(data_spec, default_start_datetime)
+        if start_datetime is None:
             continue
         key = _required_child(data_spec_setting, "JVKaisaiDateTimeKey")
         _set_required_text(key, "KaisaiDateTime", start_datetime.isoformat())
@@ -207,6 +245,20 @@ def _require_bool(section: dict[str, Any], key: str, section_name: str) -> bool:
     return value
 
 
+def _require_string(section: dict[str, Any], key: str, section_name: str) -> str:
+    value = section.get(key)
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError(f"[{section_name}].{key} must be a non-empty string")
+    return value
+
+
+def _require_date(section: dict[str, Any], key: str, section_name: str) -> date:
+    value = section.get(key)
+    if isinstance(value, datetime) or not isinstance(value, date):
+        raise ValueError(f"[{section_name}].{key} must be a TOML local date")
+    return value
+
+
 def _require_string_set(section: dict[str, Any], key: str, section_name: str) -> frozenset[str]:
     value = section.get(key)
     if not isinstance(value, list):
@@ -228,6 +280,25 @@ def _optional_datetime(section: dict[str, Any], key: str, section_name: str) -> 
     if not isinstance(value, datetime):
         raise ValueError(f"[{section_name}].{key} must be a TOML local datetime")
     return value
+
+
+def _optional_datetimes(
+    section: dict[str, Any], key: str, section_name: str
+) -> dict[str, datetime]:
+    value = section.get(key)
+    if value is None:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"[{section_name}].{key} must be a table of local datetimes")
+
+    result: dict[str, datetime] = {}
+    for data_spec, start_datetime in value.items():
+        if not isinstance(data_spec, str) or not data_spec:
+            raise ValueError(f"[{section_name}].{key} must use non-empty data spec IDs")
+        if not isinstance(start_datetime, datetime):
+            raise ValueError(f"[{section_name}].{key}.{data_spec} must be a TOML local datetime")
+        result[data_spec] = start_datetime
+    return result
 
 
 def _optional_date(section: dict[str, Any], key: str, section_name: str) -> date | None:

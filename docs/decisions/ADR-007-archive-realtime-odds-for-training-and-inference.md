@@ -52,15 +52,14 @@ validated race key it:
 Both executions use temporary XML and `--skipslastmodifiedupdate`; no mutable
 read position is required for a race-keyed prediction request.
 
+The target race may be declared in the `[realtime]` section of
+`config/jvlink.toml`. Supplying all race-key options on the CLI overrides that
+configured target for one invocation.
+
 Expose this path through the Typer CLI:
 
 ```text
-uv run python src/main.py retrieve realtime \
-  --date 2026-10-04 \
-  --jyo 05 \
-  --kaiji 04 \
-  --nichiji 08 \
-  --race 11
+uv run python src/main.py --retrieve --mode=realtime
 ```
 
 All race-key components other than the date are required to be two-digit

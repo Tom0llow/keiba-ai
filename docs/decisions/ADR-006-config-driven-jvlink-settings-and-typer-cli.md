@@ -34,6 +34,8 @@ Declare retrieval policy in `config/jvlink.toml`. The configuration contains:
 - the seed-setting path;
 - semantic profiles for historical, historical odds, and latest retrieval;
 - explicit DataSpec allow-lists and mode-specific dates where applicable.
+  Historical setup profiles may define a separate start datetime for each
+  DataSpec because JRA-VAN data types have different coverage periods.
 
 `JVLinkSettingBuilder` owns the translation from those semantic profiles to the
 JVLinkToSQLite XML structure. For each normal, setup, and realtime section it
@@ -55,8 +57,8 @@ JVLinkToSQLite persist updated read positions back into that runtime file.
 Expose retrieval through a Typer CLI at `src/main.py`:
 
 ```text
-uv run python src/main.py retrieve historical
-uv run python src/main.py retrieve latest
+uv run python src/main.py --retrieve --mode=historical
+uv run python src/main.py --retrieve --mode=latest
 ```
 
 `DataRetriever` remains the application-level orchestration API underneath the
