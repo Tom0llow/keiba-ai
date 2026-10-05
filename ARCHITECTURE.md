@@ -65,8 +65,18 @@ uv run mypy src
 uv run pytest
 ```
 
-Guard trust-boundary validation runs separately through
-`scripts/guard-tests/guard-regression.ps1` on the supported PowerShell hosts.
+Guard trust-boundary validation runs separately:
+
+```powershell
+pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
+```
+
+The `Quality` CI job performs that real regression for every allow-listed Codex
+CLI version with both PowerShell 7 and Windows PowerShell 5.1.
+
+Task start and commit use write-ahead state under `.git`: an interrupted
+operation can be resumed only by invoking the same wrapper with the same
+arguments, while unrelated task-state-dependent guarded operations fail closed.
 
 ## Current code boundary
 
@@ -147,10 +157,10 @@ before the next race is requested.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the
-runtime XML as their source, reapply the committed latest profile, and allow
-JVLinkToSQLite to persist its updated latest-read positions into that runtime
-file. The seed remains unchanged. Profile ownership and the Typer entry point are
-recorded in ADR-006.
+runtime XML as their source, reapply the latest profile, and allow
+JVLinkToSQLite to persist updated latest-read positions into that runtime file.
+The seed remains unchanged. This configuration ownership and the Typer entry
+point are recorded in ADR-006.
 
 `realtime.py` owns prediction-time retrieval for one explicit `RaceKey`. It first
 runs the `realtime_history` profile (`0B41`, `0B42`) and archives the O1/O2
@@ -251,9 +261,6 @@ credential is introduced.
   testable.
 - Do not add a runtime dependency before confirming that the standard library
   and current dependencies are insufficient.
-- Do not introduce speculative layers or storage formats.
-- Keep configuration limited to behavior or paths that can legitimately vary;
-  XML implementation details stay in the adapter.
 - Treat external input as untrusted and never commit secrets.
 
 ## Evolving the architecture
@@ -268,8 +275,6 @@ For each product requirement:
 5. update this document to describe the resulting current system.
 
 An ADR is normally appropriate for decisions that establish or materially
-change a public entry point or interface, top-level responsibility, dependency
-direction, persisted format, configuration ownership, external-system boundary,
-security boundary, or long-lived runtime dependency. Accepted ADRs take
-precedence over assumptions in this document; replacing an Accepted decision
-requires a new ADR that explicitly supersedes it.
+change a public interface, dependency direction, persisted format, configuration
+ownership, external-system boundary, security boundary, or long-lived runtime
+dependency. Accepted ADRs take precedence over assumptions in this document.
