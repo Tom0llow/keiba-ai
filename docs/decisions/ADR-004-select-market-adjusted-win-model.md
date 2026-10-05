@@ -1,10 +1,10 @@
 # ADR-004: 市場補正型の単勝確率モデルを予測MVPに採用する
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-10-03
 - Decision Owners: Repository maintainers
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: [ADR-009](ADR-009-use-lambdarank-mvp-and-top3-pl-extension.md)
 
 ## Context
 
@@ -46,3 +46,4 @@
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-10-03 | Accepted | 市場補正型の単勝確率を予測MVPに選定 |
+| 2026-10-06 | Superseded | ADR-009のランキングMVPとtop-3 PLへの拡張方針に交代 |
