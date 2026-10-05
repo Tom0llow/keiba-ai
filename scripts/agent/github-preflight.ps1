@@ -40,7 +40,7 @@ $null = Assert-MainProtectionVerified
 $runJson = Invoke-GhRepo @(
     "run", "list",
     "--workflow", $Workflow,
-    "--branch", $Branch,
+    "--commit", $remoteMainSha,
     "--limit", "10",
     "--json", "databaseId,status,conclusion,headSha,url,name"
 )
