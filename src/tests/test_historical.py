@@ -112,7 +112,7 @@ def test_retrieve_builds_temporary_base_and_archives_each_odds_result(tmp_path: 
     assert archive.archive.call_count == 2
 
 
-def test_invalid_race_key_component_is_rejected(tmp_path: Path) -> None:
+def test_iter_race_keys_skips_non_jra_races(tmp_path: Path) -> None:
     database = tmp_path / "race.db"
     with sqlite3.connect(database) as connection:
         connection.execute(
@@ -121,11 +121,10 @@ def test_invalid_race_key_component_is_rejected(tmp_path: Path) -> None:
         )
         connection.execute(
             "INSERT INTO NL_RA_RACE VALUES (?, ?, ?, ?, ?, ?)",
-            ("2026", "1003", "6", "04", "07", "12"),
+            ("2026", "1003", "A4", "00", "00", "07"),
         )
 
-    with pytest.raises(ValueError, match="invalid idJyoCD"):
-        list(_retriever(database).iter_race_keys(start_date=date(2003, 10, 4)))
+    assert list(_retriever(database).iter_race_keys(start_date=date(2003, 10, 4))) == []
 
 
 def test_manual_race_key_requires_two_digit_components() -> None:

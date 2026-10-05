@@ -13,6 +13,8 @@ from data.retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRun
 from data.retriever.odds_archive import OddsArchive
 from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
+_JRA_JYO_CODES = tuple(f"{code:02d}" for code in range(1, 11))
+
 
 class HistoricalRetriever:
     """Populate the raw database with historical races and time-series odds."""
@@ -73,14 +75,19 @@ class HistoricalRetriever:
         if not self._database.is_file():
             raise FileNotFoundError(f"raw race database does not exist: {self._database}")
 
-        query = """
+        placeholders = ", ".join("?" for _ in _JRA_JYO_CODES)
+        query = f"""
             SELECT idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum
             FROM NL_RA_RACE
             WHERE idYear || idMonthDay >= ?
+              AND idJyoCD IN ({placeholders})
             ORDER BY idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum
         """
         with sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True) as database:
-            rows = database.execute(query, (start_date.strftime("%Y%m%d"),)).fetchall()
+            rows = database.execute(
+                query,
+                (start_date.strftime("%Y%m%d"), *_JRA_JYO_CODES),
+            ).fetchall()
 
         for row in rows:
             yield _race_key_from_row(row)
