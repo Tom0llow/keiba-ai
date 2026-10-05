@@ -250,10 +250,11 @@ snapshots, and realtime Parquet versions are local artifacts rather than Git
 contents. Git versions the code and declarative retrieval/preprocessing policy,
 not the acquired datasets.
 
-ADR-004 selects a market-adjusted win-probability model for the prediction MVP,
-but no model has been implemented. JRA-VAN acquisition uses the locally installed
-JVLinkToSQLite/JV-Link environment on Windows; no HTTP API key or repository
-credential is introduced.
+ADR-009 selects LightGBM LambdaRank for the ranking MVP and a later top-3
+Plackett–Luce custom objective for finishing-order probabilities. No prediction
+model has been implemented, and LightGBM is not yet a project dependency.
+JRA-VAN acquisition uses the locally installed JVLinkToSQLite/JV-Link environment
+on Windows; no HTTP API key or repository credential is introduced.
 
 ## Architectural constraints during bootstrap
 
