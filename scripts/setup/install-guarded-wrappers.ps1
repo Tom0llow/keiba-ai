@@ -571,8 +571,11 @@ if ($hadExistingPolicy) {
     }
     $existingPolicy = Get-Content -LiteralPath $policyPath -Raw
     $expectedRepositoryHeader = "# Repository: $($fetchRemote.nameWithOwner)"
+    $managedPolicyHeaderPattern =
+    '(?m)^# Managed by scripts/setup/install-guarded-wrappers\.ps1\.\r?$'
+
     if (
-        $existingPolicy -notmatch '(?m)^# Managed by scripts/setup/install-guarded-wrappers\.ps1\.$' -or
+        $existingPolicy -notmatch $managedPolicyHeaderPattern -or
         -not $existingPolicy.Contains($expectedRepositoryHeader)
     ) {
         throw "Refusing to overwrite an execpolicy file not owned by this installer: $policyPath"
