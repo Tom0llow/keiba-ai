@@ -198,7 +198,7 @@ def model_audit(
     output_path: Annotated[Path, typer.Option("--output", help="Audit output JSON path.")],
 ) -> None:
     """Audit feature availability at each row's freeze time."""
-    schema, records = _read_feature_inputs(input_path)
+    schema, records = _read_feature_inputs_or_exit(input_path, output_path)
     audit = audit_feature_availability(records, feature_schema=schema)
     _write_json(output_path, {"schema_id": schema.schema_id, "audit": _audit_payload(audit)})
     if not audit.valid:
@@ -211,7 +211,7 @@ def model_features(
     output_path: Annotated[Path, typer.Option("--output", help="Generated feature JSON path.")],
 ) -> None:
     """Generate validated feature rows without imputing missing values."""
-    schema, records = _read_feature_inputs(input_path)
+    schema, records = _read_feature_inputs_or_exit(input_path, output_path)
     try:
         result = build_features(records, feature_schema=schema)
     except FeatureGenerationError as exc:
@@ -259,7 +259,7 @@ def model_walk_forward(
     ],
 ) -> None:
     """Run race-disjoint chronological LambdaRank walk-forward evaluation."""
-    schema, records = _read_feature_inputs(input_path)
+    schema, records = _read_feature_inputs_or_exit(input_path, output_path)
     try:
         dataset = build_ranking_dataset(records, feature_schema=schema)
         evaluation = evaluate_walk_forward(
@@ -291,10 +291,22 @@ def model_walk_forward(
         output_path,
         {
             "schema_id": schema.schema_id,
+            "feature_names": list(schema.feature_names),
             "audit": _audit_payload(audit_feature_availability(records, feature_schema=schema)),
             "evaluation": _walk_forward_payload(evaluation),
         },
     )
+
+
+def _read_feature_inputs_or_exit(
+    input_path: Path,
+    output_path: Path,
+) -> tuple[FeatureSchema, tuple[FeatureInput, ...]]:
+    try:
+        return _read_feature_inputs(input_path)
+    except typer.BadParameter as exc:
+        _write_json(output_path, {"error": _input_error_payload(exc)})
+        raise typer.Exit(code=1) from exc
 
 
 def _read_feature_inputs(path: Path) -> tuple[FeatureSchema, tuple[FeatureInput, ...]]:
@@ -364,7 +376,7 @@ def _json_safe(value: object) -> object:
     return value
 
 
-def _input_error_payload(error: ValueError) -> dict[str, str]:
+def _input_error_payload(error: Exception) -> dict[str, str]:
     return {"type": "input", "message": str(error)}
 
 
@@ -424,6 +436,15 @@ def _walk_forward_payload(evaluation: WalkForwardEvaluation) -> dict[str, object
                 "train_race_ids": list(result.fold.train_race_ids),
                 "validation_race_ids": list(result.fold.validation_race_ids),
                 "test_race_ids": list(result.fold.test_race_ids),
+                "train_freeze_at": [
+                    freeze_at.isoformat() for freeze_at in result.fold.train_freeze_at
+                ],
+                "validation_freeze_at": [
+                    freeze_at.isoformat() for freeze_at in result.fold.validation_freeze_at
+                ],
+                "test_freeze_at": [
+                    freeze_at.isoformat() for freeze_at in result.fold.test_freeze_at
+                ],
                 "metrics": _metrics_payload(result.metrics),
             }
             for result in evaluation.fold_results

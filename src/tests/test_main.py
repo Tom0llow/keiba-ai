@@ -1,7 +1,7 @@
 """Tests for the Typer data CLI."""
 
 import json
-from datetime import date
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
 from unittest.mock import Mock, patch
@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from data.race_key import RaceKey
 from main import app
+from models.evaluate_model import RankingMetrics
 
 runner = CliRunner()
 
@@ -200,6 +201,22 @@ def test_model_features_cli_serializes_nan_as_json_null(tmp_path: Path) -> None:
     assert output["records"][0]["features"]["historical_odds"] is None
 
 
+def test_model_audit_cli_writes_structured_error_for_invalid_json(tmp_path: Path) -> None:
+    input_path = tmp_path / "invalid.json"
+    output_path = tmp_path / "audit.json"
+    input_path.write_text("{", encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        ["model", "audit", "--input", str(input_path), "--output", str(output_path)],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["error"]["type"] == "input"
+    assert "cannot read input JSON" in payload["error"]["message"]
+
+
 def test_model_audit_cli_returns_nonzero_for_future_feature(tmp_path: Path) -> None:
     input_path = tmp_path / "features.json"
     output_path = tmp_path / "audit.json"
@@ -248,3 +265,46 @@ def test_model_walk_forward_cli_writes_structured_input_error(tmp_path: Path) ->
     output = json.loads(output_path.read_text(encoding="utf-8"))
     assert output["error"]["type"] == "input"
     assert "finish_position" in output["error"]["message"]
+
+
+def test_model_walk_forward_cli_includes_schema_and_freeze_times(tmp_path: Path) -> None:
+    input_path = tmp_path / "features.json"
+    output_path = tmp_path / "walk-forward.json"
+    input_path.write_text(json.dumps(_feature_payload()), encoding="utf-8")
+
+    metrics = RankingMetrics(ndcg_at_3=0.75, top1_accuracy=0.5, top3_overlap=1.0)
+    fold = Mock()
+    fold.fold_index = 0
+    fold.train_race_ids = ("race-1",)
+    fold.validation_race_ids = ("race-2",)
+    fold.test_race_ids = ("race-3",)
+    fold.train_freeze_at = (datetime(2026, 1, 1, 12, tzinfo=UTC),)
+    fold.validation_freeze_at = (datetime(2026, 1, 2, 12, tzinfo=UTC),)
+    fold.test_freeze_at = (datetime(2026, 1, 3, 12, tzinfo=UTC),)
+    fold_result = Mock(fold=fold, metrics=metrics)
+    evaluation = Mock(fold_results=(fold_result,), metrics=metrics)
+    with patch("main.evaluate_walk_forward", return_value=evaluation):
+        result = runner.invoke(
+            app,
+            [
+                "model",
+                "walk-forward",
+                "--input",
+                str(input_path),
+                "--output",
+                str(output_path),
+                "--min-train-races",
+                "1",
+                "--validation-races",
+                "1",
+                "--test-races",
+                "1",
+                "--step-races",
+                "1",
+            ],
+        )
+
+    assert result.exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["feature_names"] == ["ability", "historical_odds"]
+    assert payload["evaluation"]["folds"][0]["train_freeze_at"] == ["2026-01-01T12:00:00+00:00"]
