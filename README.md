@@ -208,6 +208,9 @@ behavior is in `docs/specification.md`. Design proposals and open questions
 remain in `docs/discussions/`; no prediction or betting model pipeline has been
 implemented yet.
 
+The detailed LambdaRank MVP implementation proposal is in
+[implementation design](docs/implementation-design.md).
+
 ## Setup and validation
 
 Install the locked development environment:
