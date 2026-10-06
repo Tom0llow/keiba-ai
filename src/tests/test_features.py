@@ -57,6 +57,8 @@ def test_missing_historical_odds_stays_missing_without_fallback() -> None:
 
     rows = build_feature_rows(records, feature_schema=_schema())
 
+    assert rows[0].available_at["ability"] == datetime(2025, 12, 31, 12, tzinfo=UTC)
+    assert rows[0].available_at["historical_odds"] is None
     assert all(
         isinstance(row.features["historical_odds"], float)
         and isnan(row.features["historical_odds"])

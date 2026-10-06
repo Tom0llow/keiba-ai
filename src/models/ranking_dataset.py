@@ -195,6 +195,7 @@ class FeatureRow:
     horse_id: str
     features: Mapping[str, FeatureValue]
     freeze_at: datetime | None = None
+    available_at: Mapping[str, datetime | None] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -365,6 +366,7 @@ def _normalize_feature_row(row: FeatureRow) -> FeatureRow:
         horse_id=row.horse_id,
         features=MappingProxyType(dict(row.features)),
         freeze_at=row.freeze_at,
+        available_at=MappingProxyType(dict(row.available_at)),
     )
 
 

@@ -287,6 +287,7 @@ def generate_features(
 
     generated_feature_rows: list[FeatureRow] = []
     generated_ranking_rows: list[RankingRow] = []
+    available_at_by_key: dict[tuple[str, str], Mapping[str, datetime | None]] = {}
     labeled = [record.finish_position is not None for record in records]
     if any(labeled) and not all(labeled):
         mixed_audit = replace(
@@ -311,6 +312,7 @@ def generate_features(
         if error is not None or freeze_at is None:
             raise AssertionError("validated availability audit must contain freeze_at")
         features = {name: record.features.get(name) for name in feature_schema.feature_names}
+        available_at = _normalized_available_at(record, feature_schema.feature_names)
         if all(labeled):
             if record.finish_position is None:
                 raise AssertionError("validated finish positions must be present")
@@ -323,6 +325,7 @@ def generate_features(
                     freeze_at=freeze_at,
                 )
             )
+            available_at_by_key[(record.race_id, record.horse_id)] = available_at
         else:
             generated_feature_rows.append(
                 FeatureRow(
@@ -330,6 +333,7 @@ def generate_features(
                     horse_id=record.horse_id,
                     features=features,
                     freeze_at=freeze_at,
+                    available_at=available_at,
                 )
             )
 
@@ -346,6 +350,7 @@ def generate_features(
                 horse_id=row.horse_id,
                 features=row.features,
                 freeze_at=row.freeze_at,
+                available_at=available_at_by_key[(row.race_id, row.horse_id)],
             )
             for row in generated_ranking_rows
         ]
@@ -361,6 +366,23 @@ def generate_features(
         dataset=dataset,
         audit=audit,
     )
+
+
+def _normalized_available_at(
+    record: FeatureInput,
+    feature_names: Sequence[str],
+) -> dict[str, datetime | None]:
+    values: dict[str, datetime | None] = {}
+    for feature_name in feature_names:
+        raw_available_at = record.available_at.get(feature_name)
+        if raw_available_at is None:
+            values[feature_name] = None
+            continue
+        available_at, error = _parse_timestamp(raw_available_at)
+        if error is not None or available_at is None:
+            raise AssertionError("validated availability audit must contain timestamps")
+        values[feature_name] = available_at
+    return values
 
 
 def build_features(

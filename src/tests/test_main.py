@@ -176,6 +176,8 @@ def test_model_features_cli_writes_audited_missing_features(tmp_path: Path) -> N
     assert result.exit_code == 0
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["audit"]["valid"] is True
+    assert payload["records"][0]["available_at"]["ability"] == ("2025-12-31T12:00:00+00:00")
+    assert payload["records"][0]["available_at"]["historical_odds"] is None
     assert payload["records"][0]["features"]["historical_odds"] is None
 
 

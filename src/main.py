@@ -426,6 +426,10 @@ def _generated_records(result: FeatureGenerationResult) -> list[dict[str, object
             "race_id": row.race_id,
             "horse_id": row.horse_id,
             "freeze_at": row.freeze_at.isoformat() if row.freeze_at is not None else None,
+            "available_at": {
+                feature_name: (available_at.isoformat() if available_at is not None else None)
+                for feature_name, available_at in row.available_at.items()
+            },
             "features": dict(row.features),
             **(
                 {"finish_position": ranking_by_key[(row.race_id, row.horse_id)]}
