@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Callable, Iterator, Sequence
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from typing import Protocol
 
@@ -35,18 +35,43 @@ class WalkForwardConfig:
 
 @dataclass(frozen=True)
 class WalkForwardFold:
-    """Describe one race-disjoint train, validation, and test window."""
+    """Describe one race-disjoint train, validation, and test window.
+
+    The source dataset and race boundaries are retained instead of materializing
+    an expanding training dataset for every fold.  The public dataset
+    properties build the requested split on demand.
+    """
 
     fold_index: int
     train_race_ids: tuple[str, ...]
     validation_race_ids: tuple[str, ...]
     test_race_ids: tuple[str, ...]
-    train: RankingDataset
-    validation: RankingDataset
-    test: RankingDataset
     train_freeze_at: tuple[datetime, ...]
     validation_freeze_at: tuple[datetime, ...]
     test_freeze_at: tuple[datetime, ...]
+    _dataset: RankingDataset = field(repr=False, compare=False)
+    _races: tuple[_RaceSlice, ...] = field(repr=False, compare=False)
+    _train_bounds: tuple[int, int] = field(repr=False, compare=False)
+    _validation_bounds: tuple[int, int] = field(repr=False, compare=False)
+    _test_bounds: tuple[int, int] = field(repr=False, compare=False)
+
+    @property
+    def train(self) -> RankingDataset:
+        """Build the expanding training dataset for this fold on demand."""
+        return _dataset_for_races(self._dataset, self._races[slice(*self._train_bounds)])
+
+    @property
+    def validation(self) -> RankingDataset:
+        """Build the validation dataset for this fold on demand."""
+        return _dataset_for_races(
+            self._dataset,
+            self._races[slice(*self._validation_bounds)],
+        )
+
+    @property
+    def test(self) -> RankingDataset:
+        """Build the test dataset for this fold on demand."""
+        return _dataset_for_races(self._dataset, self._races[slice(*self._test_bounds)])
 
 
 @dataclass(frozen=True)
@@ -114,12 +139,14 @@ def make_walk_forward_folds(
                 train_race_ids=tuple(race.race_id for race in train_races),
                 validation_race_ids=tuple(race.race_id for race in validation_races),
                 test_race_ids=tuple(race.race_id for race in test_races),
-                train=_dataset_for_races(dataset, train_races),
-                validation=_dataset_for_races(dataset, validation_races),
-                test=_dataset_for_races(dataset, test_races),
                 train_freeze_at=tuple(race.freeze_at for race in train_races),
                 validation_freeze_at=tuple(race.freeze_at for race in validation_races),
                 test_freeze_at=tuple(race.freeze_at for race in test_races),
+                _dataset=dataset,
+                _races=races,
+                _train_bounds=(0, train_stop),
+                _validation_bounds=(train_stop, validation_stop),
+                _test_bounds=(validation_stop, test_stop),
             )
         )
         fold_index += 1

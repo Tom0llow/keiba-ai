@@ -230,7 +230,25 @@ def test_model_audit_cli_returns_nonzero_for_future_feature(tmp_path: Path) -> N
     assert result.exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["audit"]["valid"] is False
+    assert payload["feature_names"] == ["ability", "historical_odds"]
+    assert payload["freeze_at"] == ["2026-01-01T12:00:00+00:00"] * 3
     assert "after freeze_at" in payload["audit"]["violations"][0]["reason"]
+
+
+def test_model_audit_cli_writes_structured_error_for_invalid_utf8(tmp_path: Path) -> None:
+    input_path = tmp_path / "invalid-encoding.json"
+    output_path = tmp_path / "audit.json"
+    input_path.write_bytes(b"\xff")
+
+    result = runner.invoke(
+        app,
+        ["model", "audit", "--input", str(input_path), "--output", str(output_path)],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["error"]["type"] == "input"
+    assert "cannot read input JSON" in payload["error"]["message"]
 
 
 def test_model_walk_forward_cli_writes_structured_input_error(tmp_path: Path) -> None:
@@ -308,3 +326,36 @@ def test_model_walk_forward_cli_includes_schema_and_freeze_times(tmp_path: Path)
     payload = json.loads(output_path.read_text(encoding="utf-8"))
     assert payload["feature_names"] == ["ability", "historical_odds"]
     assert payload["evaluation"]["folds"][0]["train_freeze_at"] == ["2026-01-01T12:00:00+00:00"]
+
+
+def test_model_walk_forward_cli_writes_structured_error_for_invalid_window(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "features.json"
+    output_path = tmp_path / "walk-forward.json"
+    input_path.write_text(json.dumps(_feature_payload()), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "walk-forward",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+            "--min-train-races",
+            "0",
+            "--validation-races",
+            "1",
+            "--test-races",
+            "1",
+            "--step-races",
+            "1",
+        ],
+    )
+
+    assert result.exit_code == 1
+    output = json.loads(output_path.read_text(encoding="utf-8"))
+    assert output["error"]["type"] == "input"
+    assert "positive integer" in output["error"]["message"]

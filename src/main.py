@@ -200,7 +200,15 @@ def model_audit(
     """Audit feature availability at each row's freeze time."""
     schema, records = _read_feature_inputs_or_exit(input_path, output_path)
     audit = audit_feature_availability(records, feature_schema=schema)
-    _write_json(output_path, {"schema_id": schema.schema_id, "audit": _audit_payload(audit)})
+    _write_json(
+        output_path,
+        {
+            "schema_id": schema.schema_id,
+            "feature_names": list(schema.feature_names),
+            "freeze_at": [_freeze_at_payload(record.freeze_at) for record in records],
+            "audit": _audit_payload(audit),
+        },
+    )
     if not audit.valid:
         raise typer.Exit(code=1)
 
@@ -246,16 +254,14 @@ def model_walk_forward(
     input_path: Annotated[Path, typer.Option("--input", help="Labeled feature input JSON path.")],
     output_path: Annotated[Path, typer.Option("--output", help="Evaluation output JSON path.")],
     min_train_races: Annotated[
-        int, typer.Option("--min-train-races", min=1, help="Initial training race count.")
+        int, typer.Option("--min-train-races", help="Initial training race count.")
     ],
     validation_races: Annotated[
-        int, typer.Option("--validation-races", min=1, help="Validation race count per fold.")
+        int, typer.Option("--validation-races", help="Validation race count per fold.")
     ],
-    test_races: Annotated[
-        int, typer.Option("--test-races", min=1, help="Test race count per fold.")
-    ],
+    test_races: Annotated[int, typer.Option("--test-races", help="Test race count per fold.")],
     step_races: Annotated[
-        int, typer.Option("--step-races", min=1, help="Race count by which the fold advances.")
+        int, typer.Option("--step-races", help="Race count by which the fold advances.")
     ],
 ) -> None:
     """Run race-disjoint chronological LambdaRank walk-forward evaluation."""
@@ -351,7 +357,7 @@ def _feature_input(value: object) -> FeatureInput:
 def _read_json_object(path: Path) -> dict[str, object]:
     try:
         value = json.loads(path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as exc:
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise typer.BadParameter(f"cannot read input JSON: {exc}") from exc
     if not isinstance(value, dict):
         raise typer.BadParameter("input JSON must be an object")
@@ -378,6 +384,10 @@ def _json_safe(value: object) -> object:
 
 def _input_error_payload(error: Exception) -> dict[str, str]:
     return {"type": "input", "message": str(error)}
+
+
+def _freeze_at_payload(value: TimestampInput) -> str:
+    return value.isoformat() if isinstance(value, datetime) else value
 
 
 def _audit_payload(audit: AvailabilityAudit) -> dict[str, object]:
