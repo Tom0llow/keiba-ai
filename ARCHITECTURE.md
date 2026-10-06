@@ -130,8 +130,10 @@ This boundary is recorded in ADR-008.
 ## Retrieval boundary
 
 `src/main.py` is the user-facing Typer entry point for historical, latest, and
-prediction-time realtime retrieval and for standalone preprocessing. XML
-transformation and process execution remain below the CLI boundary.
+prediction-time realtime retrieval, standalone preprocessing, and the model
+commands `model audit`, `model features`, and `model walk-forward`. XML
+transformation, feature validation, and model evaluation remain below the CLI
+boundary.
 
 `src/data/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
 and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
@@ -263,11 +265,16 @@ fixed objective, label gain, feature schema, and hashes. A readiness marker is
 published only after the native model and metadata are complete. Model code
 does not read raw SQLite or initiate data acquisition; it receives processed
 feature rows from its caller. ADR-010 records this model boundary and artifact
-contract. Missing feature values, including unavailable
-odds history, remain missing and are passed through without final-odds
-fallback or imputation. Equal scores are ordered by horse ID, independently of
-input row order. Feature construction, temporal availability auditing,
-walk-forward orchestration, and model CLI integration remain future work.
+contract. Missing feature values, including unavailable odds history, remain
+missing and are passed through without final-odds fallback or imputation. Equal
+scores are ordered by horse ID, independently of input row order.
+`src/features/builder.py` validates explicit feature values and their
+timezone-aware availability against `freeze_at`; `src/models/walk_forward.py`
+performs expanding race-level train/validation/test splits. The model CLI uses
+JSON input at this boundary and does not start data retrieval implicitly. These
+modules do not yet interpret raw JRA-VAN business codes or build historical
+aggregates; those transformations remain a separate feature-source
+implementation.
 JRA-VAN acquisition uses the locally installed JVLinkToSQLite/JV-Link environment
 on Windows; no HTTP API key or repository credential is introduced.
 
