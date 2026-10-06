@@ -265,7 +265,8 @@ does not read raw SQLite or initiate data acquisition; it receives processed
 feature rows from its caller. ADR-010 records this model boundary and artifact
 contract. Missing feature values, including unavailable
 odds history, remain missing and are passed through without final-odds
-fallback or imputation. Feature construction, temporal availability auditing,
+fallback or imputation. Equal scores are ordered by horse ID, independently of
+input row order. Feature construction, temporal availability auditing,
 walk-forward orchestration, and model CLI integration remain future work.
 JRA-VAN acquisition uses the locally installed JVLinkToSQLite/JV-Link environment
 on Windows; no HTTP API key or repository credential is introduced.

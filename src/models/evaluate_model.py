@@ -34,7 +34,12 @@ def ndcg_at_3(dataset: RankingDataset, scores: Sequence[float]) -> float:
     validated_scores = _validate_scores(dataset, scores)
     values: list[float] = []
     for start, stop in _race_ranges(dataset.groups):
-        predicted_order = _score_order(validated_scores, start, stop)
+        predicted_order = _score_order(
+            validated_scores,
+            start,
+            stop,
+            tuple(dataset.rows[index].horse_id for index in range(start, stop)),
+        )
         ideal_order = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
         predicted_dcg = _dcg(dataset.labels, predicted_order[:3])
         ideal_dcg = _dcg(dataset.labels, ideal_order[:3])
@@ -47,7 +52,12 @@ def top1_accuracy(dataset: RankingDataset, scores: Sequence[float]) -> float:
     validated_scores = _validate_scores(dataset, scores)
     correct = 0
     for start, stop in _race_ranges(dataset.groups):
-        predicted_winner = _score_order(validated_scores, start, stop)[0]
+        predicted_winner = _score_order(
+            validated_scores,
+            start,
+            stop,
+            tuple(dataset.rows[index].horse_id for index in range(start, stop)),
+        )[0]
         actual_order = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
         if dataset.labels[actual_order[0]] == 3 and predicted_winner == actual_order[0]:
             correct += 1
@@ -62,7 +72,14 @@ def top3_overlap(dataset: RankingDataset, scores: Sequence[float]) -> float:
     validated_scores = _validate_scores(dataset, scores)
     overlaps: list[float] = []
     for start, stop in _race_ranges(dataset.groups):
-        predicted = set(_score_order(validated_scores, start, stop)[:3])
+        predicted = set(
+            _score_order(
+                validated_scores,
+                start,
+                stop,
+                tuple(dataset.rows[index].horse_id for index in range(start, stop)),
+            )[:3]
+        )
         actual_order = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
         actual = set(actual_order[:3])
         overlaps.append(len(predicted & actual) / 3)
@@ -94,8 +111,16 @@ def _race_ranges(groups: Sequence[int]) -> tuple[tuple[int, int], ...]:
     return tuple(ranges)
 
 
-def _score_order(scores: Sequence[float], start: int, stop: int) -> list[int]:
-    return sorted(range(start, stop), key=lambda index: (-scores[index], index))
+def _score_order(
+    scores: Sequence[float],
+    start: int,
+    stop: int,
+    horse_ids: Sequence[str],
+) -> list[int]:
+    return sorted(
+        range(start, stop),
+        key=lambda index: (-scores[index], horse_ids[index - start]),
+    )
 
 
 def _dcg(labels: Sequence[int], order: Sequence[int]) -> float:

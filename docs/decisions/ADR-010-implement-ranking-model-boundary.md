@@ -16,7 +16,8 @@ ADR-009でLambdaRankをランキングMVPへ採用した。実装では、raw SQ
 2. 学習は `LGBMRanker(objective="lambdarank")` を使い、ラベル3/2/1/0、label gain 0/1/3/7、連続したレース行数によるgroupを固定する。出力は有限なscoreとレース内rankに限定し、確率・EV・購入案は生成しない。
 3. `FeatureSchema` はordered feature名、schema ID、数値型、単位、生成規則、欠損方針を保持する。上流の意味が未確定な場合は未確定値を明示して保存し、単位や生成規則を推測しない。結果由来の列名はallow-list境界で拒否する。
 4. 欠損値は補完せず、`None`またはnative `NaN`としてLightGBMへ渡す。特に取得できないオッズ履歴を最終オッズや別期間の値で代用しない。
-5. 成果物はLightGBM native model、JSON metadata、ready markerで構成する。metadataにはobjective、label gain、FeatureSchema、ハッシュを含め、完成前はready markerを公開しない。既存成果物を置換せず、公開途中のmarkerは再実行時に安全に回収できるものとする。
+5. 同点scoreは一意な `horse_id` の昇順で解決する。入力行順を同点規則へ使わず、評価と推論で同じ規則を適用する。
+6. 成果物はLightGBM native model、JSON metadata、ready markerで構成する。metadataにはobjective、label gain、FeatureSchema、ハッシュを含め、完成前はready markerを公開しない。既存成果物を置換せず、公開途中のmarkerは再実行時に安全に回収できるものとする。
 
 ## Consequences
 

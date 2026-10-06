@@ -9,11 +9,11 @@ from types import MappingProxyType
 from typing import Literal
 
 type FeatureValue = int | float | None
-type TieBreakRule = Literal["score_desc_then_row_order"]
+type TieBreakRule = Literal["score_desc_then_horse_id"]
 type FeatureValueType = Literal["numeric"]
 type MissingValuePolicy = Literal["preserve_native_missing"]
 
-TIE_BREAK_RULE: TieBreakRule = "score_desc_then_row_order"
+TIE_BREAK_RULE: TieBreakRule = "score_desc_then_horse_id"
 DEFAULT_LABEL_GAIN: Mapping[int, int] = MappingProxyType({0: 0, 1: 1, 2: 3, 3: 7})
 _RESERVED_RESULT_FEATURE_NAME_ALIASES = frozenset(
     {
@@ -30,6 +30,7 @@ _RESERVED_RESULT_FEATURE_NAME_ALIASES = frozenset(
         "kakuteijyuni",
         "last_3f",
         "last3f",
+        "last_odds",
         "margin",
         "ninki",
         "odds_final",
@@ -59,7 +60,6 @@ _RESERVED_RESULT_FEATURE_NAME_TOKENS = frozenset(
         "finish",
         "last3f",
         "margin",
-        "odds",
         "passing",
         "payout",
         "placing",
@@ -70,6 +70,7 @@ _RESERVED_RESULT_FEATURE_NAME_TOKENS = frozenset(
         "result",
         "speed",
         "time",
+        "outcome",
         "winner",
     }
 )
@@ -80,22 +81,25 @@ class FeatureSpec:
     """Describe one numeric feature at the model boundary."""
 
     name: str
+    generation_rule: str
+    result_derived: bool
     value_type: FeatureValueType = "numeric"
     unit: str | None = None
-    generation_rule: str | None = None
     missing_value_policy: MissingValuePolicy = "preserve_native_missing"
 
     def __post_init__(self) -> None:
         if not isinstance(self.name, str) or not self.name:
             raise ValueError("feature spec names must be non-empty strings")
+        if not isinstance(self.generation_rule, str) or not self.generation_rule:
+            raise ValueError("feature spec generation_rule must be a non-empty string")
+        if not isinstance(self.result_derived, bool):
+            raise ValueError("feature spec result_derived must be a boolean")
+        if self.result_derived:
+            raise ValueError("result-derived features are not allowed in the model schema")
         if self.value_type != "numeric":
             raise ValueError("feature spec value_type must be 'numeric'")
         if self.unit is not None and (not isinstance(self.unit, str) or not self.unit):
             raise ValueError("feature spec unit must be a non-empty string or None")
-        if self.generation_rule is not None and (
-            not isinstance(self.generation_rule, str) or not self.generation_rule
-        ):
-            raise ValueError("feature spec generation_rule must be a non-empty string or None")
         if self.missing_value_policy != "preserve_native_missing":
             raise ValueError("feature spec missing_value_policy must be 'preserve_native_missing'")
 
@@ -125,14 +129,18 @@ class FeatureSchema:
         cls,
         feature_names: Sequence[str],
         *,
-        schema_id: str = "unresolved-numeric-v1",
+        schema_id: str,
+        generation_rule: str,
     ) -> FeatureSchema:
-        """Create an explicit numeric schema when upstream semantics are unresolved."""
+        """Create an explicit numeric schema from an approved generation rule."""
         names = tuple(feature_names)
         _validate_feature_names(names)
         return cls(
             schema_id=schema_id,
-            features=tuple(FeatureSpec(name=name) for name in names),
+            features=tuple(
+                FeatureSpec(name=name, generation_rule=generation_rule, result_derived=False)
+                for name in names
+            ),
         )
 
     def as_metadata(self) -> dict[str, object]:
@@ -144,6 +152,7 @@ class FeatureSchema:
                     "generation_rule": feature.generation_rule,
                     "missing_value_policy": feature.missing_value_policy,
                     "name": feature.name,
+                    "result_derived": feature.result_derived,
                     "unit": feature.unit,
                     "value_type": feature.value_type,
                 }
@@ -211,7 +220,7 @@ class RankingDataset:
         rows: Sequence[RankingRow],
         *,
         feature_names: Sequence[str],
-        feature_schema: FeatureSchema | None = None,
+        feature_schema: FeatureSchema,
     ) -> RankingDataset:
         """Build and validate a dataset from rows already read from Parquet.
 
@@ -220,8 +229,7 @@ class RankingDataset:
                 ranker. Rows for one race must be contiguous.
             feature_names: Required ordered feature schema. Missing keys in a
                 row are represented by ``None``.
-            feature_schema: Optional semantic schema for the ordered feature
-                names. If omitted, an unresolved numeric schema is recorded.
+            feature_schema: Semantic schema for the ordered feature names.
 
         Returns:
             A validated immutable dataset with labels and group sizes.
@@ -234,8 +242,7 @@ class RankingDataset:
             raise ValueError("ranking dataset must contain at least one row")
         names = tuple(feature_names)
         _validate_feature_names(names)
-        schema = feature_schema or FeatureSchema.from_names(names)
-        if schema.feature_names != names:
+        if feature_schema.feature_names != names:
             raise ValueError("feature_schema names must match feature_names")
         allowed = set(names)
         unexpected = sorted(
@@ -249,7 +256,7 @@ class RankingDataset:
         return cls(
             rows=normalized_rows,
             feature_names=names,
-            feature_schema=schema,
+            feature_schema=feature_schema,
             labels=labels,
             groups=_race_groups(normalized_rows),
         )

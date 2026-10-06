@@ -100,12 +100,13 @@ class RankingModel:
         cls,
         booster: _NativeBooster,
         feature_names: Sequence[str],
-        feature_schema: FeatureSchema | None = None,
+        feature_schema: FeatureSchema,
     ) -> RankingModel:
         """Create a model wrapper around a trained native booster."""
         names = tuple(feature_names)
-        schema = feature_schema or FeatureSchema.from_names(names)
-        return cls(booster, names, schema)
+        if feature_schema.feature_names != names:
+            raise ValueError("feature_schema names must match feature_names")
+        return cls(booster, names, feature_schema)
 
     def predict_scores(
         self,
@@ -141,7 +142,10 @@ class RankingModel:
         for group_size in _race_groups(normalized):
             race_rows = normalized[start : start + group_size]
             race_scores = scores[start : start + group_size]
-            order = sorted(range(group_size), key=lambda index: (-race_scores[index], index))
+            order = sorted(
+                range(group_size),
+                key=lambda index: (-race_scores[index], race_rows[index].horse_id),
+            )
             for rank, row_index in enumerate(order, start=1):
                 row = race_rows[row_index]
                 predictions.append(
@@ -394,9 +398,10 @@ def _metadata_feature_schema(
             specs.append(
                 FeatureSpec(
                     name=cast(str, feature.get("name")),
+                    generation_rule=cast(str, feature.get("generation_rule")),
+                    result_derived=cast(bool, feature.get("result_derived")),
                     value_type=cast(FeatureValueType, feature.get("value_type")),
                     unit=cast(str | None, feature.get("unit")),
-                    generation_rule=cast(str | None, feature.get("generation_rule")),
                     missing_value_policy=cast(
                         MissingValuePolicy, feature.get("missing_value_policy")
                     ),
