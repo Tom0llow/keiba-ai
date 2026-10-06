@@ -32,9 +32,11 @@ MVPの確定仕様は次の範囲とする。
 | 公開 | 完全snapshotとrace-local O1/O2 versionを完成後にCURRENTで公開する。失敗時は従前の参照を維持する。 | snapshotの完成は、過去の出馬表・訂正履歴を保持したことを意味しない。 |
 | 読み込み | `DataLoader`は完全表・Arrow batch・RaceKey指定のO1/O2をParquetから読む。 | 各読取でCURRENTを再解決するため、複数表を同一版へ固定する公開APIがない。 |
 | CLI | `src/main.py`の取得フラグと`preprocess rebuild`。 | 監査・特徴量作成・学習・評価・推論のCLIはない。 |
-| モデル | ADR-009で方針を選定済み。 | モデルコード、LightGBM依存、学習済み成果物、予測表示は未実装。 |
+| モデル | ADR-009とADR-010によりLambdaRank境界、FeatureSchema、native成果物形式を決定し、`src/models/`へ実装済み。 | 特徴量生成、時点監査、nested walk-forward、CLI、予測表示の製品統合は未実装。 |
 
 既存の`src/tests/test_data_pipeline.py`は、原本削除後のParquet読取、変換失敗時のCURRENT維持、対象レースだけのO1/O2公開を検証する。これを学習・推論や時点再現の検証済み証拠とは扱わない。
+
+モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、native成果物の保存/再読込である。ラベル・gain・group・同点規則、欠損値を補完しない契約、結果由来列の拒否を実装し、単体・統合テストで検証する。特徴量生成、時点利用可能性監査、nested walk-forward、CLI、購入判断は未実装であり、上流の決定と別実装単位として残す。
 
 ### 2.2. 要件・仕様・ADRへの追跡
 
@@ -373,6 +375,6 @@ MVPの入力時点・対象馬・feature schema・レースgroup・分割・成�
 | DEC-12 | 固定時刻・遅延・発走変更・締切後の扱い。性能数値目標なし。 | 実測に基づく余裕時間と利用可否規則。 | 運用推論前。 | 発走5分前の将来提示期限、古い表示の扱い。 |
 | DEC-13 | CLI/config/schema/artifact形式と保持。新しい永続契約になる。 | 第6・11・12節の候補を最小契約として確定。 | 各公開単位前、必要なADR。 | 互換性、再実行、容量、ロールバック。 |
 
-LightGBM依存は本書では追加しない。採用方針のAccepted ADRと、具体的な依存版・設定・永続形式の承認を区別する。numpy/pandas/scikit-learn等も必要性と実際の依存関係を確認し、未導入のAPIを存在する前提で設計コードへ埋め込まない。
+LightGBM依存とnative成果物形式はADR-010で採用を決定し、具体的な依存版は`pyproject.toml`と`uv.lock`へ固定した。numpy/pandas/scikit-learn等も必要性と実際の依存関係を確認し、未導入のAPIを存在する前提で設計コードへ埋め込まない。
 
 実装開始の判断点、選択肢、影響と検証方法は本節と第13節に示す。決定後に仕様/ADRへ反映して該当単位を実装する。

@@ -432,6 +432,7 @@ def test_model_load_rejects_metadata_contract_override(
 
 def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> None:
     captured_parameters: dict[str, object] = {}
+    captured_fit: dict[str, object] = {}
 
     class _CapturingRanker:
         booster_ = _TieBooster(("ability", "odds"))
@@ -447,6 +448,14 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
             group: Sequence[int],
             feature_name: Sequence[str],
         ) -> object:
+            captured_fit.update(
+                {
+                    "features": features,
+                    "labels": labels,
+                    "group": tuple(group),
+                    "feature_name": tuple(feature_name),
+                }
+            )
             return None
 
     lightgbm_module = ModuleType("lightgbm")
@@ -454,7 +463,7 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
     monkeypatch.setattr(train_model_module, "_load_lightgbm", lambda: lightgbm_module)
 
     dataset = RankingDataset.from_rows(
-        _training_rows()[:4],
+        _training_rows(),
         feature_names=("ability", "odds"),
         feature_schema=_schema(("ability", "odds")),
     )
@@ -465,6 +474,14 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
 
     assert captured_parameters["label_gain"] == [0, 1, 3, 7]
     assert captured_parameters["objective"] == "lambdarank"
+    assert captured_fit["labels"] == list(dataset.labels)
+    assert captured_fit["group"] == dataset.groups
+    assert captured_fit["feature_name"] == dataset.feature_names
+    fit_features = cast(Sequence[Sequence[object]], captured_fit["features"])
+    assert fit_features[0][1] is None
+    assert isinstance(fit_features[4][1], float)
+    assert isnan(fit_features[4][1])
+    assert fit_features[7][1] is None
 
 
 @pytest.mark.integration
