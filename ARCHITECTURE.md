@@ -269,7 +269,11 @@ contract. Missing feature values, including unavailable odds history, remain
 missing and are passed through without final-odds fallback or imputation. Equal
 scores are ordered by horse ID, independently of input row order.
 `src/features/builder.py` validates explicit feature values and their
-timezone-aware availability against `freeze_at`; `src/models/walk_forward.py`
+timezone-aware availability against `freeze_at`. The feature-specific modules
+under `src/features/` build independently validated intermediate Parquet tables
+for previous-race results, odds ratios, and pedigree values. `src/make_datamart/`
+reads those saved tables and performs an ordered, validated left join while
+retaining each feature's availability timestamp. `src/models/walk_forward.py`
 performs expanding race-level train/validation/test splits. The model CLI uses
 JSON input at this boundary and does not start data retrieval implicitly. These
 modules do not yet interpret raw JRA-VAN business codes or build historical

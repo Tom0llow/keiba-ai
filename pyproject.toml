@@ -21,6 +21,8 @@ dependencies = [
     "pyarrow>=25.0.1",
     "scikit-learn>=1.9.1",
     "typer>=0.27.1",
+    # PyArrow needs IANA timezone data to materialize UTC timestamp columns.
+    "tzdata>=2026.5",
 ]
 
 
