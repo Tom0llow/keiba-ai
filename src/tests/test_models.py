@@ -19,7 +19,6 @@ from models.ranking_dataset import (
     TIE_BREAK_RULE,
     FeatureRow,
     FeatureSchema,
-    FeatureSpec,
     RankingDataset,
     RankingRow,
 )
@@ -28,30 +27,26 @@ from models.train_model import train_lambdarank
 
 def _training_rows() -> list[RankingRow]:
     return [
-        RankingRow("race-1", "horse-1", {"ability": 4.0, "odds": None}, 1),
-        RankingRow("race-1", "horse-2", {"ability": 3.0, "odds": 2.0}, 2),
-        RankingRow("race-1", "horse-3", {"ability": 2.0, "odds": 4.0}, 3),
-        RankingRow("race-1", "horse-4", {"ability": 1.0, "odds": 8.0}, 4),
-        RankingRow("race-2", "horse-5", {"ability": 4.5, "odds": float("nan")}, 1),
-        RankingRow("race-2", "horse-6", {"ability": 3.5, "odds": 2.5}, 2),
-        RankingRow("race-2", "horse-7", {"ability": 2.5, "odds": 5.0}, 3),
+        RankingRow("race-1", "horse-1", {"ability": 4.0, "historical_odds": None}, 1),
+        RankingRow("race-1", "horse-2", {"ability": 3.0, "historical_odds": 2.0}, 2),
+        RankingRow("race-1", "horse-3", {"ability": 2.0, "historical_odds": 4.0}, 3),
+        RankingRow("race-1", "horse-4", {"ability": 1.0, "historical_odds": 8.0}, 4),
+        RankingRow("race-2", "horse-5", {"ability": 4.5, "historical_odds": float("nan")}, 1),
+        RankingRow("race-2", "horse-6", {"ability": 3.5, "historical_odds": 2.5}, 2),
+        RankingRow("race-2", "horse-7", {"ability": 2.5, "historical_odds": 5.0}, 3),
         RankingRow("race-2", "horse-8", {"ability": 1.5}, 4),
     ]
 
 
 def _schema(feature_names: Sequence[str], schema_id: str = "test-v1") -> FeatureSchema:
-    return FeatureSchema.from_names(
-        feature_names,
-        schema_id=schema_id,
-        generation_rule="test-approved-feature-rule",
-    )
+    return FeatureSchema.from_names(feature_names, schema_id=schema_id)
 
 
 def test_dataset_maps_labels_and_validates_race_groups() -> None:
     dataset = RankingDataset.from_rows(
         _training_rows(),
-        feature_names=("ability", "odds"),
-        feature_schema=_schema(("ability", "odds")),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
     )
 
     assert dataset.labels == (3, 2, 1, 0, 3, 2, 1, 0)
@@ -99,12 +94,15 @@ def test_dataset_requires_explicit_schema_and_does_not_select_renamed_results() 
         "Time",
         "TimeDiff",
         "Odds",
+        "odds",
         "Ninki",
         "final_odds",
         "winner_speed",
         "last_odds",
         "result_time",
         "outcome",
+        "target",
+        "win_flag",
         "popularity",
         "payouts",
     ],
@@ -115,7 +113,7 @@ def test_dataset_rejects_result_derived_feature_names(reserved_name: str) -> Non
         for position in range(1, 4)
     ]
 
-    with pytest.raises(ValueError, match="reserved"):
+    with pytest.raises(ValueError, match=r"reserved|allow-list"):
         RankingDataset.from_rows(
             rows,
             feature_names=(reserved_name,),
@@ -143,6 +141,15 @@ def test_schema_allows_explicit_historical_odds_feature_name() -> None:
     assert dataset.feature_matrix() == [[None], [None], [None]]
 
 
+def test_schema_rejects_unapproved_generation_rule() -> None:
+    with pytest.raises(ValueError, match="approved feature specification"):
+        FeatureSchema.from_names(
+            ("ability",),
+            schema_id="unapproved-rule-v1",
+            generation_rule="unapproved-rule",
+        )
+
+
 def test_dataset_rejects_non_contiguous_races_and_invalid_positions() -> None:
     non_contiguous = [
         RankingRow("race-1", "horse-1", {"ability": 1.0}, 1),
@@ -165,8 +172,8 @@ def test_dataset_rejects_non_contiguous_races_and_invalid_positions() -> None:
 
     accepted = RankingDataset.from_rows(
         _training_rows()[:4],
-        feature_names=("ability", "odds"),
-        feature_schema=_schema(("ability", "odds")),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
     )
     assert accepted.labels[-1] == 0
 
@@ -175,8 +182,8 @@ def test_dataset_rejects_non_contiguous_races_and_invalid_positions() -> None:
     with pytest.raises(ValueError, match="race group size"):
         RankingDataset.from_rows(
             invalid_position,
-            feature_names=("ability", "odds"),
-            feature_schema=_schema(("ability", "odds")),
+            feature_names=("ability", "historical_odds"),
+            feature_schema=_schema(("ability", "historical_odds")),
         )
 
 
@@ -208,8 +215,8 @@ def test_dataset_rejects_duplicate_or_non_contiguous_finish_positions() -> None:
 def test_metrics_are_race_equal_and_top3_uses_overlap() -> None:
     dataset = RankingDataset.from_rows(
         _training_rows(),
-        feature_names=("ability", "odds"),
-        feature_schema=_schema(("ability", "odds")),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
     )
     scores = (4.0, 3.0, 2.0, 1.0, 1.0, 4.0, 3.0, 2.0)
 
@@ -286,17 +293,7 @@ def test_prediction_ties_keep_input_row_order_and_scores_only() -> None:
 
 
 def test_prediction_rejects_mismatched_feature_schema() -> None:
-    schema = FeatureSchema(
-        schema_id="ability-v1",
-        features=(
-            FeatureSpec(
-                "ability",
-                unit="score",
-                generation_rule="approved-rule",
-                result_derived=False,
-            ),
-        ),
-    )
+    schema = _schema(("ability",), schema_id="ability-v1")
     model = RankingModel.from_native_booster(_TieBooster(), ("ability",), schema)
     rows = [
         FeatureRow("race-1", "horse-1", {"ability": 1.0}),
@@ -310,7 +307,6 @@ def test_prediction_rejects_mismatched_feature_schema() -> None:
             feature_schema=FeatureSchema.from_names(
                 ("ability",),
                 schema_id="different-v1",
-                generation_rule="different-rule",
             ),
         )
 
@@ -399,13 +395,14 @@ def test_model_load_rejects_metadata_change_with_unchanged_native(tmp_path: Path
     ("field", "value", "message"),
     [
         ("objective", "regression", "objective"),
+        ("label_gain", [0, 1, 2, 7], "label_gain"),
         ("tie_break_rule", "other_rule", "tie_break_rule"),
     ],
 )
 def test_model_load_rejects_metadata_contract_override(
     tmp_path: Path,
     field: str,
-    value: str,
+    value: object,
     message: str,
 ) -> None:
     model_path = tmp_path / "ranking.model"
@@ -435,7 +432,7 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
     captured_fit: dict[str, object] = {}
 
     class _CapturingRanker:
-        booster_ = _TieBooster(("ability", "odds"))
+        booster_ = _TieBooster(("ability", "historical_odds"))
 
         def __init__(self, **parameters: object) -> None:
             captured_parameters.update(parameters)
@@ -464,8 +461,8 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
 
     dataset = RankingDataset.from_rows(
         _training_rows(),
-        feature_names=("ability", "odds"),
-        feature_schema=_schema(("ability", "odds")),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
     )
     train_lambdarank(
         dataset,
@@ -486,26 +483,10 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
 
 @pytest.mark.integration
 def test_lightgbm_train_predict_and_native_save_load(tmp_path: Path) -> None:
-    schema = FeatureSchema(
-        schema_id="training-v1",
-        features=(
-            FeatureSpec(
-                "ability",
-                generation_rule="approved-ability-rule",
-                result_derived=False,
-                unit="score",
-            ),
-            FeatureSpec(
-                "odds",
-                generation_rule="approved-odds-rule",
-                result_derived=False,
-                unit="decimal",
-            ),
-        ),
-    )
+    schema = _schema(("ability", "historical_odds"), schema_id="training-v1")
     dataset = RankingDataset.from_rows(
         _training_rows(),
-        feature_names=("ability", "odds"),
+        feature_names=("ability", "historical_odds"),
         feature_schema=schema,
     )
     model = train_lambdarank(
@@ -527,5 +508,8 @@ def test_lightgbm_train_predict_and_native_save_load(tmp_path: Path) -> None:
     assert all(isfinite(prediction.score) for prediction in predictions)
     assert loaded_predictions == predictions
     assert model_path.is_file()
-    assert model_path.with_name("ranking.model.metadata.json").is_file()
+    metadata_path = model_path.with_name("ranking.model.metadata.json")
+    assert metadata_path.is_file()
+    metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+    assert metadata["label_gain"] == [0, 1, 3, 7]
     assert model_path.with_name("ranking.model.ready").is_file()

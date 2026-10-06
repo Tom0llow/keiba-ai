@@ -27,7 +27,7 @@ from models.ranking_dataset import (
     validate_feature_rows,
 )
 
-_MODEL_FORMAT_VERSION = 2
+_MODEL_FORMAT_VERSION = 3
 _OBJECTIVE = "lambdarank"
 _LABEL_GAIN = (0, 1, 3, 7)
 _HASH_CHUNK_SIZE = 1024 * 1024
@@ -197,6 +197,7 @@ class RankingModel:
                 "feature_schema": self.feature_schema.as_metadata(),
                 "feature_names": list(self.feature_names),
                 "format_version": _MODEL_FORMAT_VERSION,
+                "label_gain": list(_LABEL_GAIN),
                 "native_sha256": _sha256_file(temporary_model_path),
                 "objective": self.objective,
                 "tie_break_rule": self.tie_break_rule,
@@ -249,6 +250,7 @@ class RankingModel:
         objective = _metadata_string(metadata, "objective")
         if objective != _OBJECTIVE:
             raise ValueError(f"model metadata objective must be {_OBJECTIVE!r}")
+        _metadata_label_gain(metadata)
         tie_break_rule = _metadata_string(metadata, "tie_break_rule")
         if tie_break_rule != TIE_BREAK_RULE:
             raise ValueError(f"model metadata tie_break_rule must be {TIE_BREAK_RULE!r}")
@@ -443,6 +445,18 @@ def _metadata_string(metadata: Mapping[str, object], name: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"model metadata has invalid {name}")
     return value
+
+
+def _metadata_label_gain(metadata: Mapping[str, object]) -> tuple[int, ...]:
+    value = metadata.get("label_gain")
+    if not isinstance(value, list) or any(
+        isinstance(item, bool) or not isinstance(item, int) for item in value
+    ):
+        raise ValueError("model metadata has invalid label_gain")
+    label_gain = tuple(cast(list[int], value))
+    if label_gain != _LABEL_GAIN:
+        raise ValueError("model metadata label_gain does not match the MVP contract")
+    return label_gain
 
 
 def _metadata_sha256(metadata: Mapping[str, object]) -> str:

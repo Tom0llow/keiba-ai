@@ -104,6 +104,24 @@ class FeatureSpec:
             raise ValueError("feature spec missing_value_policy must be 'preserve_native_missing'")
 
 
+_APPROVED_FEATURE_SPECS: Mapping[str, FeatureSpec] = MappingProxyType(
+    {
+        "ability": FeatureSpec(
+            name="ability",
+            generation_rule="pre_race_ability_v1",
+            result_derived=False,
+            unit="score",
+        ),
+        "historical_odds": FeatureSpec(
+            name="historical_odds",
+            generation_rule="historical_odds_v1",
+            result_derived=False,
+            unit="decimal",
+        ),
+    }
+)
+
+
 @dataclass(frozen=True)
 class FeatureSchema:
     """Describe the ordered feature contract used by training and prediction."""
@@ -118,6 +136,11 @@ class FeatureSchema:
             raise ValueError("feature schema must contain at least one feature")
         names = tuple(feature.name for feature in self.features)
         _validate_feature_names(names)
+        for feature in self.features:
+            if _APPROVED_FEATURE_SPECS.get(feature.name) != feature:
+                raise ValueError(
+                    f"feature {feature.name!r} does not match the approved feature specification"
+                )
 
     @property
     def feature_names(self) -> tuple[str, ...]:
@@ -130,17 +153,19 @@ class FeatureSchema:
         feature_names: Sequence[str],
         *,
         schema_id: str,
-        generation_rule: str,
+        generation_rule: str | None = None,
     ) -> FeatureSchema:
-        """Create an explicit numeric schema from an approved generation rule."""
+        """Create a schema from the approved feature allow-list."""
         names = tuple(feature_names)
         _validate_feature_names(names)
+        specs = tuple(_APPROVED_FEATURE_SPECS[name] for name in names)
+        if generation_rule is not None and any(
+            spec.generation_rule != generation_rule for spec in specs
+        ):
+            raise ValueError("generation_rule does not match the approved feature specification")
         return cls(
             schema_id=schema_id,
-            features=tuple(
-                FeatureSpec(name=name, generation_rule=generation_rule, result_derived=False)
-                for name in names
-            ),
+            features=specs,
         )
 
     def as_metadata(self) -> dict[str, object]:
@@ -348,6 +373,9 @@ def _validate_feature_names(feature_names: Sequence[str]) -> None:
     reserved = sorted(name for name in feature_names if _is_reserved_result_feature_name(name))
     if reserved:
         raise ValueError(f"result-derived feature names are reserved: {reserved!r}")
+    unapproved = sorted(name for name in feature_names if name not in _APPROVED_FEATURE_SPECS)
+    if unapproved:
+        raise ValueError(f"feature names are outside the approved allow-list: {unapproved!r}")
 
 
 def _validate_identity(race_id: str, horse_id: str) -> None:
@@ -372,6 +400,8 @@ def _validate_features(
             raise ValueError("feature names must be non-empty strings")
         if _is_reserved_result_feature_name(name):
             raise ValueError(f"result-derived feature name is reserved: {name!r}")
+        if name not in _APPROVED_FEATURE_SPECS:
+            raise ValueError(f"feature name is outside the approved allow-list: {name!r}")
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
             raise TypeError(f"feature {name!r} must be numeric or None")
         if isinstance(value, float) and not isnan(value) and not isfinite(value):
@@ -420,7 +450,7 @@ def _validate_finish_position(finish_position: int) -> None:
 def _is_reserved_result_feature_name(name: str) -> bool:
     normalized = "".join(character for character in name.casefold() if character.isalnum())
     if normalized == "odds":
-        return name != "odds"
+        return True
     reserved = {
         "".join(character for character in alias.casefold() if character.isalnum())
         for alias in _RESERVED_RESULT_FEATURE_NAME_ALIASES

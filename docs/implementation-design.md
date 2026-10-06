@@ -36,7 +36,7 @@ MVPの確定仕様は次の範囲とする。
 
 既存の`src/tests/test_data_pipeline.py`は、原本削除後のParquet読取、変換失敗時のCURRENT維持、対象レースだけのO1/O2公開を検証する。これを学習・推論や時点再現の検証済み証拠とは扱わない。
 
-モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、native成果物の保存/再読込である。ラベル・gain・group・同点規則、欠損値を補完しない契約、結果由来列の拒否を実装し、単体・統合テストで検証する。特徴量生成、時点利用可能性監査、nested walk-forward、CLI、購入判断は未実装であり、上流の決定と別実装単位として残す。
+モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、native成果物の保存/再読込である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。現時点のallow-listは事前能力値と履歴オッズであり、曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。特徴量生成、時点利用可能性監査、nested walk-forward、CLI、購入判断は未実装であり、上流の決定と別実装単位として残す。
 
 ### 2.2. 要件・仕様・ADRへの追跡
 
