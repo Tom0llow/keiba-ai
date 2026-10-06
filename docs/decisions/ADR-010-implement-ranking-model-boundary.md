@@ -30,7 +30,7 @@ ADR-009でLambdaRankをランキングMVPへ採用した。実装では、raw SQ
 
 ### Negative and follow-up
 
-- 特徴量生成、時点利用可能性監査、nested walk-forward、CLIは別の実装単位であり、このADRでは実装しない。
+- 特徴量生成、時点利用可能性監査、race-level walk-forward、CLIは別の実装単位としてADR-011で定める。
 - 単位や生成規則が未決定の特徴量はランキング評価へ投入する前に上流でFeatureSchemaを確定する必要がある。
 - 同着、取消・失格、3頭未満などの例外規則は既存の未決定事項として残る。
 

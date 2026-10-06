@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
+from datetime import datetime
 from math import isfinite, isnan
 from types import MappingProxyType
 from typing import Literal
@@ -193,6 +194,8 @@ class FeatureRow:
     race_id: str
     horse_id: str
     features: Mapping[str, FeatureValue]
+    freeze_at: datetime | None = None
+    available_at: Mapping[str, datetime | None] = MappingProxyType({})
 
 
 @dataclass(frozen=True)
@@ -203,6 +206,7 @@ class RankingRow:
     horse_id: str
     features: Mapping[str, FeatureValue]
     finish_position: int
+    freeze_at: datetime | None = None
 
 
 @dataclass(frozen=True)
@@ -348,6 +352,7 @@ def _normalize_ranking_row(row: RankingRow) -> RankingRow:
         horse_id=row.horse_id,
         features=MappingProxyType(dict(row.features)),
         finish_position=row.finish_position,
+        freeze_at=row.freeze_at,
     )
 
 
@@ -360,6 +365,8 @@ def _normalize_feature_row(row: FeatureRow) -> FeatureRow:
         race_id=row.race_id,
         horse_id=row.horse_id,
         features=MappingProxyType(dict(row.features)),
+        freeze_at=row.freeze_at,
+        available_at=MappingProxyType(dict(row.available_at)),
     )
 
 

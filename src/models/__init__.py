@@ -21,6 +21,14 @@ from models.ranking_dataset import (
     label_for_finish_position,
 )
 from models.train_model import train_lambdarank
+from models.walk_forward import (
+    WalkForwardConfig,
+    WalkForwardEvaluation,
+    WalkForwardFold,
+    WalkForwardFoldResult,
+    evaluate_walk_forward,
+    make_walk_forward_folds,
+)
 
 __all__ = [
     "DEFAULT_LABEL_GAIN",
@@ -35,8 +43,14 @@ __all__ = [
     "RankingModel",
     "RankingPrediction",
     "RankingRow",
+    "WalkForwardConfig",
+    "WalkForwardEvaluation",
+    "WalkForwardFold",
+    "WalkForwardFoldResult",
     "evaluate_ranking",
+    "evaluate_walk_forward",
     "label_for_finish_position",
+    "make_walk_forward_folds",
     "ndcg_at_3",
     "top1_accuracy",
     "top3_overlap",
