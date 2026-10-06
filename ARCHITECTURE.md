@@ -251,8 +251,22 @@ contents. Git versions the code and declarative retrieval/preprocessing policy,
 not the acquired datasets.
 
 ADR-009 selects LightGBM LambdaRank for the ranking MVP and a later top-3
-Plackett–Luce custom objective for finishing-order probabilities. No prediction
-model has been implemented, and LightGBM is not yet a project dependency.
+Plackett–Luce custom objective for finishing-order probabilities. The current
+MVP implementation lives under `src/models/`: it accepts an explicit ordered
+feature schema, trains `LGBMRanker(objective="lambdarank")`, and returns finite
+race-local scores and ranks. It does not produce probabilities, expected value,
+or purchase recommendations. LightGBM and its scikit-learn runtime dependency
+are locked project dependencies.
+
+Model artifacts use the LightGBM native format plus JSON metadata containing the
+fixed objective, label gain, feature schema, and hashes. A readiness marker is
+published only after the native model and metadata are complete. Model code
+does not read raw SQLite or initiate data acquisition; it receives processed
+feature rows from its caller. ADR-010 records this model boundary and artifact
+contract. Missing feature values, including unavailable
+odds history, remain missing and are passed through without final-odds
+fallback or imputation. Feature construction, temporal availability auditing,
+walk-forward orchestration, and model CLI integration remain future work.
 JRA-VAN acquisition uses the locally installed JVLinkToSQLite/JV-Link environment
 on Windows; no HTTP API key or repository credential is introduced.
 

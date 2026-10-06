@@ -19,12 +19,15 @@ from typing import Protocol, cast
 from models.ranking_dataset import (
     TIE_BREAK_RULE,
     FeatureRow,
+    FeatureSchema,
+    FeatureSpec,
+    FeatureValueType,
+    MissingValuePolicy,
     _validate_feature_names,
     validate_feature_rows,
 )
 
 _MODEL_FORMAT_VERSION = 2
-_FEATURE_SCHEMA_VERSION = 1
 _OBJECTIVE = "lambdarank"
 _LABEL_GAIN = (0, 1, 3, 7)
 _HASH_CHUNK_SIZE = 1024 * 1024
@@ -77,12 +80,15 @@ class RankingModel:
 
     _booster: _NativeBooster
     feature_names: tuple[str, ...]
+    feature_schema: FeatureSchema
     objective: str = _OBJECTIVE
     tie_break_rule: str = TIE_BREAK_RULE
 
     def __post_init__(self) -> None:
         """Validate the fixed model contract."""
         _validate_feature_names(self.feature_names)
+        if self.feature_schema.feature_names != self.feature_names:
+            raise ValueError("feature_schema names must match feature_names")
         if self.objective != _OBJECTIVE:
             raise ValueError(f"objective must be {_OBJECTIVE!r}")
         if self.tie_break_rule != TIE_BREAK_RULE:
@@ -94,13 +100,23 @@ class RankingModel:
         cls,
         booster: _NativeBooster,
         feature_names: Sequence[str],
+        feature_schema: FeatureSchema | None = None,
     ) -> RankingModel:
         """Create a model wrapper around a trained native booster."""
         names = tuple(feature_names)
-        return cls(booster, names)
+        schema = feature_schema or FeatureSchema.from_names(names)
+        return cls(booster, names, schema)
 
-    def predict_scores(self, rows: Sequence[FeatureRow]) -> tuple[float, ...]:
+    def predict_scores(
+        self,
+        rows: Sequence[FeatureRow],
+        *,
+        feature_schema: FeatureSchema | None = None,
+    ) -> tuple[float, ...]:
         """Return finite LightGBM scores in the input row order."""
+        schema = feature_schema or self.feature_schema
+        if schema != self.feature_schema:
+            raise ValueError("feature_schema does not match the trained model")
         normalized = validate_feature_rows(rows, self.feature_names)
         raw_scores = self._booster.predict(
             [[row.features.get(name) for name in self.feature_names] for row in normalized]
@@ -111,10 +127,15 @@ class RankingModel:
         scores = tuple(_finite_score(value) for value in values)
         return scores
 
-    def predict(self, rows: Sequence[FeatureRow]) -> tuple[RankingPrediction, ...]:
+    def predict(
+        self,
+        rows: Sequence[FeatureRow],
+        *,
+        feature_schema: FeatureSchema | None = None,
+    ) -> tuple[RankingPrediction, ...]:
         """Return only race-local finite scores and ranks for all input rows."""
         normalized = validate_feature_rows(rows, self.feature_names)
-        scores = self.predict_scores(normalized)
+        scores = self.predict_scores(normalized, feature_schema=feature_schema)
         predictions: list[RankingPrediction] = []
         start = 0
         for group_size in _race_groups(normalized):
@@ -142,6 +163,10 @@ class RankingModel:
         ready_path = _ready_path(path)
         publishing_path = _publishing_path(path)
         if ready_path.exists():
+            if publishing_path.exists():
+                with suppress(FileNotFoundError):
+                    publishing_path.unlink()
+                return
             raise FileExistsError(ready_path)
         if publishing_path.exists():
             _recover_incomplete_artifact(path, metadata_path, publishing_path)
@@ -165,7 +190,7 @@ class RankingModel:
             self._booster.save_model(str(temporary_model_path))
             _fsync_file(temporary_model_path)
             metadata_payload = {
-                "feature_schema": _feature_schema_payload(self.feature_names),
+                "feature_schema": self.feature_schema.as_metadata(),
                 "feature_names": list(self.feature_names),
                 "format_version": _MODEL_FORMAT_VERSION,
                 "native_sha256": _sha256_file(temporary_model_path),
@@ -224,7 +249,7 @@ class RankingModel:
         if tie_break_rule != TIE_BREAK_RULE:
             raise ValueError(f"model metadata tie_break_rule must be {TIE_BREAK_RULE!r}")
         feature_names = _metadata_feature_names(metadata)
-        _validate_feature_schema(metadata, feature_names)
+        feature_schema = _metadata_feature_schema(metadata, feature_names)
         module = _load_lightgbm()
         booster_constructor = cast(Callable[..., object], module.__dict__["Booster"])
         booster = cast(_NativeBooster, booster_constructor(model_file=str(path)))
@@ -232,6 +257,7 @@ class RankingModel:
         return cls(
             _booster=booster,
             feature_names=feature_names,
+            feature_schema=feature_schema,
             objective=objective,
             tie_break_rule=tie_break_rule,
         )
@@ -347,28 +373,41 @@ def _metadata_feature_names(metadata: Mapping[str, object]) -> tuple[str, ...]:
     return names
 
 
-def _feature_schema_payload(feature_names: Sequence[str]) -> dict[str, object]:
-    return {
-        "version": _FEATURE_SCHEMA_VERSION,
-        "features": [
-            {
-                "generation_rule": None,
-                "missing_value_policy": "preserve_native_missing",
-                "name": name,
-                "unit": None,
-                "value_type": "numeric",
-            }
-            for name in feature_names
-        ],
-    }
-
-
-def _validate_feature_schema(
+def _metadata_feature_schema(
     metadata: Mapping[str, object],
     feature_names: Sequence[str],
-) -> None:
-    if metadata.get("feature_schema") != _feature_schema_payload(feature_names):
-        raise ValueError("model metadata has an incompatible feature_schema")
+) -> FeatureSchema:
+    value = metadata.get("feature_schema")
+    if not isinstance(value, dict):
+        raise ValueError("model metadata has invalid feature_schema")
+    schema_data = cast(dict[str, object], value)
+    schema_id = schema_data.get("schema_id")
+    raw_features = schema_data.get("features")
+    if not isinstance(schema_id, str) or not isinstance(raw_features, list):
+        raise ValueError("model metadata has invalid feature_schema")
+    specs: list[FeatureSpec] = []
+    try:
+        for raw_feature in raw_features:
+            if not isinstance(raw_feature, dict):
+                raise ValueError("feature schema entries must be objects")
+            feature = cast(dict[str, object], raw_feature)
+            specs.append(
+                FeatureSpec(
+                    name=cast(str, feature.get("name")),
+                    value_type=cast(FeatureValueType, feature.get("value_type")),
+                    unit=cast(str | None, feature.get("unit")),
+                    generation_rule=cast(str | None, feature.get("generation_rule")),
+                    missing_value_policy=cast(
+                        MissingValuePolicy, feature.get("missing_value_policy")
+                    ),
+                )
+            )
+        schema = FeatureSchema(schema_id=schema_id, features=tuple(specs))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("model metadata has invalid feature_schema") from exc
+    if schema.feature_names != tuple(feature_names):
+        raise ValueError("model metadata feature_schema names do not match feature_names")
+    return schema
 
 
 def _native_feature_names(booster: _NativeBooster) -> tuple[str, ...]:

@@ -58,7 +58,9 @@ def train_lambdarank(
     )
     if not hasattr(ranker, "booster_"):
         raise ValueError("LightGBM did not expose a trained booster")
-    return RankingModel.from_native_booster(ranker.booster_, dataset.feature_names)
+    return RankingModel.from_native_booster(
+        ranker.booster_, dataset.feature_names, dataset.feature_schema
+    )
 
 
 __all__ = ["LightGBMUnavailableError", "train_lambdarank"]

@@ -18,6 +18,8 @@ from models.predict_model import RankingModel
 from models.ranking_dataset import (
     TIE_BREAK_RULE,
     FeatureRow,
+    FeatureSchema,
+    FeatureSpec,
     RankingDataset,
     RankingRow,
 )
@@ -83,6 +85,9 @@ def test_dataset_requires_explicit_schema_and_does_not_select_renamed_results() 
         "Odds",
         "Ninki",
         "final_odds",
+        "winner_speed",
+        "last_odds",
+        "result_time",
         "popularity",
         "payouts",
     ],
@@ -214,6 +219,22 @@ def test_prediction_ties_keep_input_row_order_and_scores_only() -> None:
     assert not hasattr(predictions[0], "probability")
 
 
+def test_prediction_rejects_mismatched_feature_schema() -> None:
+    schema = FeatureSchema(
+        schema_id="ability-v1",
+        features=(FeatureSpec("ability", unit="score", generation_rule="approved-rule"),),
+    )
+    model = RankingModel.from_native_booster(_TieBooster(), ("ability",), schema)
+    rows = [
+        FeatureRow("race-1", "horse-1", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-2", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-3", {"ability": 1.0}),
+    ]
+
+    with pytest.raises(ValueError, match="feature_schema"):
+        model.predict(rows, feature_schema=FeatureSchema.from_names(("ability",)))
+
+
 def test_prediction_rejects_race_with_fewer_than_three_rows() -> None:
     model = RankingModel.from_native_booster(_TieBooster(), ("ability",))
     rows = [
@@ -257,6 +278,18 @@ def test_model_save_recovers_interrupted_publication(tmp_path: Path) -> None:
     RankingModel.from_native_booster(_SavingBooster(b"native-model"), ("ability",)).save(model_path)
 
     assert model_path.read_bytes() == b"native-model"
+    assert not model_path.with_name("ranking.model.publishing").exists()
+
+
+def test_model_save_is_idempotent_after_ready_publication(tmp_path: Path) -> None:
+    model_path = tmp_path / "ranking.model"
+    model = RankingModel.from_native_booster(_SavingBooster(b"native-model"), ("ability",))
+    model.save(model_path)
+    model_path.with_name("ranking.model.publishing").write_text("publishing\n", encoding="ascii")
+
+    model.save(model_path)
+
+    assert model_path.with_name("ranking.model.ready").is_file()
     assert not model_path.with_name("ranking.model.publishing").exists()
 
 
