@@ -211,6 +211,9 @@ implemented yet.
 The detailed LambdaRank MVP implementation proposal is in
 [implementation design](docs/implementation-design.md).
 
+The current explanatory-variable contracts are listed in the
+[explanatory variable list](docs/feature-list.md).
+
 ## Setup and validation
 
 Install the locked development environment:
