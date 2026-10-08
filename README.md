@@ -80,6 +80,7 @@ Important profiles include:
 [historical_odds]
 realtime_data_specs = ["0B41", "0B42"]
 race_start_date = 2003-10-04
+skip_existing = true
 
 [realtime_history]
 realtime_data_specs = ["0B41", "0B42"]
@@ -87,6 +88,20 @@ realtime_data_specs = ["0B41", "0B42"]
 [realtime_current]
 realtime_data_specs = ["0B31", "0B32"]
 ```
+
+With `[historical_odds].skip_existing = true`, historical retrieval requests
+only the missing O1/O2 DataSpecs for each complete race key in `NL_RA_RACE`.
+`0B41` is skipped when that race has rows in `ARCHIVE_O1_ODDS_TANFUKUWAKU`;
+`0B42` is skipped when it has rows in `ARCHIVE_O2_ODDS_UMAREN`. Missing or empty
+archive tables are retrieved. Row presence does not prove that every time-series
+observation was acquired; set `skip_existing = false` (the default when omitted)
+to re-fetch eligible races. This option does not change realtime retrieval.
+
+The checked-in `[historical]` profile disables all three update sections so the
+historical command uses the existing raw database without retrieving base data
+again. A missing database fails before retrieval. Enable `setup_update` when a
+base-history download is needed; the configured DataSpecs and start dates remain
+available.
 
 The target race for realtime retrieval can also be configured in
 `config/jvlink.toml`:
@@ -128,7 +143,7 @@ uv run python src/main.py --retrieve --mode=realtime
 
 Retrieval and preprocessing are coupled at the CLI boundary:
 
-- `--retrieve --mode=historical`: build raw history, retrieve historical odds, then
+- `--retrieve --mode=historical`: run enabled base updates, retrieve historical odds, then
   publish a complete Parquet snapshot.
 - `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
   snapshot.

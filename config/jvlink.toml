@@ -12,7 +12,7 @@ seed_setting = "C:/JVLinkToSQLite/setting.xml"
 
 [historical]
 normal_update = false
-setup_update = true
+setup_update = false
 realtime_update = false
 normal_data_specs = []
 setup_data_specs = [
@@ -59,6 +59,7 @@ normal_data_specs = []
 setup_data_specs = []
 realtime_data_specs = ["0B41", "0B42"]
 race_start_date = 2003-10-04
+skip_existing = true
 
 [latest]
 normal_update = true

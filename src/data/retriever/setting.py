@@ -44,6 +44,7 @@ class JVLinkProfile:
     start_datetime: datetime | None = None
     race_start_date: date | None = None
     start_datetimes: dict[str, datetime] | None = None
+    skip_existing: bool = False
 
 
 @dataclass(frozen=True)
@@ -147,6 +148,9 @@ def _load_profile(config: dict[str, Any], name: str) -> JVLinkProfile:
         start_datetime=start_datetime,
         start_datetimes=start_datetimes or None,
         race_start_date=_optional_date(section, "race_start_date", name),
+        skip_existing=(
+            _require_bool(section, "skip_existing", name) if "skip_existing" in section else False
+        ),
     )
 
 

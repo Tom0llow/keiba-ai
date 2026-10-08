@@ -5,6 +5,8 @@ from __future__ import annotations
 import sqlite3
 import tempfile
 from collections.abc import Iterator
+from contextlib import closing
+from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
@@ -14,6 +16,10 @@ from data.retriever.odds_archive import OddsArchive
 from data.retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
 _JRA_JYO_CODES = tuple(f"{code:02d}" for code in range(1, 11))
+_ODDS_ARCHIVE_TABLES = {
+    "0B41": "ARCHIVE_O1_ODDS_TANFUKUWAKU",
+    "0B42": "ARCHIVE_O2_ODDS_UMAREN",
+}
 
 
 class HistoricalRetriever:
@@ -39,23 +45,39 @@ class HistoricalRetriever:
         self._odds_start_date = odds_profile.race_start_date
 
     def retrieve(self) -> int:
-        """Retrieve base history, then archive configured time-series odds by race."""
+        """Retrieve enabled base history and return the number of requested odds races."""
         with tempfile.TemporaryDirectory(prefix="keiba-ai-historical-") as temporary_directory:
             temporary_path = Path(temporary_directory)
-            base_setting = self._setting_builder.build(
-                self._historical_profile,
-                temporary_path / "historical.xml",
-            )
-            self._runner.execute(base_setting, skip_last_modified_update=True)
+            if (
+                self._historical_profile.normal_update
+                or self._historical_profile.setup_update
+                or self._historical_profile.realtime_update
+            ):
+                base_setting = self._setting_builder.build(
+                    self._historical_profile,
+                    temporary_path / "historical.xml",
+                )
+                self._runner.execute(base_setting, skip_last_modified_update=True)
             if not self._database.is_file():
                 raise FileNotFoundError(f"raw race database does not exist: {self._database}")
 
             race_keys = tuple(self.iter_race_keys(start_date=self._odds_start_date))
+            archived_races = self._archived_race_keys() if self._odds_profile.skip_existing else {}
             odds_setting = temporary_path / "historical-odds.xml"
             count = 0
             for race_key in race_keys:
+                profile = self._odds_profile
+                if profile.skip_existing:
+                    missing_specs = frozenset(
+                        data_spec
+                        for data_spec in profile.realtime_data_specs
+                        if race_key not in archived_races.get(data_spec, set())
+                    )
+                    if not missing_specs:
+                        continue
+                    profile = replace(profile, realtime_data_specs=missing_specs)
                 self._setting_builder.build(
-                    self._odds_profile,
+                    profile,
                     odds_setting,
                     race_key=race_key,
                 )
@@ -83,7 +105,7 @@ class HistoricalRetriever:
               AND idJyoCD IN ({placeholders})
             ORDER BY idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum
         """
-        with sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True) as database:
+        with closing(sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True)) as database:
             rows = database.execute(
                 query,
                 (start_date.strftime("%Y%m%d"), *_JRA_JYO_CODES),
@@ -91,6 +113,25 @@ class HistoricalRetriever:
 
         for row in rows:
             yield _race_key_from_row(row)
+
+    def _archived_race_keys(self) -> dict[str, set[RaceKey]]:
+        archived_races: dict[str, set[RaceKey]] = {}
+        with closing(sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True)) as database:
+            database.execute("BEGIN")
+            for data_spec, table in _ODDS_ARCHIVE_TABLES.items():
+                if data_spec not in self._odds_profile.realtime_data_specs:
+                    continue
+                exists = database.execute(
+                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+                ).fetchone()
+                if exists is None:
+                    continue
+                rows = database.execute(
+                    f"SELECT DISTINCT idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum "
+                    f'FROM "{table}"'
+                ).fetchall()
+                archived_races[data_spec] = {_race_key_from_row(row) for row in rows}
+        return archived_races
 
 
 def _race_key_from_row(row: tuple[str, str, str, str, str, str]) -> RaceKey:

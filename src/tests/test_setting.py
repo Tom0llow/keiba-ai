@@ -4,6 +4,8 @@ import xml.etree.ElementTree as ET
 from datetime import date, datetime
 from pathlib import Path
 
+import pytest
+
 from data.race_key import RaceKey
 from data.retriever.setting import JVLinkConfig, JVLinkProfile, JVLinkSettingBuilder
 
@@ -128,3 +130,48 @@ def test_config_loads_realtime_race(tmp_path: Path) -> None:
     config = JVLinkConfig.from_toml(config_path)
 
     assert config.realtime_race == RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
+
+
+@pytest.mark.parametrize("value", [None, "true", "false"])
+def test_config_loads_optional_skip_existing(tmp_path: Path, value: str | None) -> None:
+    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = tmp_path / "jvlink.toml"
+    content = source.read_text(encoding="utf-8").replace("skip_existing = true\n", "")
+    if value is not None:
+        content = content.replace(
+            "[historical_odds]\n", f"[historical_odds]\nskip_existing = {value}\n"
+        )
+    config_path.write_text(content, encoding="utf-8")
+
+    config = JVLinkConfig.from_toml(config_path)
+
+    assert config.historical_odds.skip_existing is (value == "true")
+    assert config.realtime_history.skip_existing is False
+
+
+@pytest.mark.parametrize("value", ['"true"', "1", "[]"])
+def test_config_rejects_non_boolean_skip_existing(tmp_path: Path, value: str) -> None:
+    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "skip_existing = true", f"skip_existing = {value}"
+        ),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match=r"\[historical_odds\]\.skip_existing must be a boolean"):
+        JVLinkConfig.from_toml(config_path)
+
+
+def test_repository_config_retrieves_only_missing_historical_odds() -> None:
+    config_path = Path(__file__).parents[2] / "config" / "jvlink.toml"
+
+    config = JVLinkConfig.from_toml(config_path)
+
+    assert not config.historical.normal_update
+    assert not config.historical.setup_update
+    assert not config.historical.realtime_update
+    assert config.historical_odds.skip_existing
+    assert config.historical_odds.race_start_date == date(2003, 10, 4)
+    assert config.historical_odds.realtime_data_specs == frozenset({"0B41", "0B42"})

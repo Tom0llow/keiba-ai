@@ -150,11 +150,20 @@ section enablement plus DataSpec allow-lists are applied explicitly; configured
 DataSpecs missing from the seed fail at this boundary.
 
 `historical.py` generates base and per-race odds settings in a temporary
-directory. After the base database exists, it snapshots JRA-compatible race keys
+directory. It omits base execution when all historical update sections are
+disabled and then requires an existing raw database. After the base database
+exists, it snapshots JRA-compatible race keys
 from `NL_RA_RACE` and closes that SQLite reader before JVLinkToSQLite begins
 realtime odds writes. Non-JRA race records remain in the base database but are
 not sent to the JRA-specific historical-odds DataSpecs. The historical-odds
 profile then generates an exclusive realtime setting for each eligible race.
+The optional `historical_odds.skip_existing` flag defaults to false. When enabled,
+the retriever snapshots distinct complete race keys from each configured O1/O2
+archive table once, closes the read-only connection, and removes already-present
+DataSpecs from each race's request. Fully archived races are omitted; missing
+tables and unrecognized DataSpecs remain eligible for retrieval. Presence is a
+resume criterion, not a guarantee of a complete odds time series. Realtime
+prediction retrieval continues to request its configured history/current specs.
 Because JVLinkToSQLite recreates realtime O1/O2 staging tables on subsequent
 realtime executions, each race's result is archived before the next race is
 requested.
