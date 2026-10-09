@@ -178,11 +178,26 @@ complete `RaceKey` plus DataSpec, accepts the configured initial frontier gaps a
 past-date cutoff. The generated execution TOML and JSON report are derived
 runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
 weekly PowerShell entry point starts one process and exits. It does not register
-Task Scheduler jobs, run a resident loop, or inspect the weekday. Empty or
-missing realtime staging is not classified as provider-side missing data until
-JVLink's real response contract is verified, so such observations remain failed
-and retryable. Historical, latest, realtime, and weekly writes share the raw DB
-OS lock and reject unresolved weekly requests.
+Task Scheduler jobs, run a resident loop, or inspect the weekday. A successful
+JVLink/JVRTOpen request that leaves a valid empty realtime staging table is
+recorded as `provider_missing/jvopen_no_data` only when the captured API result
+is the documented `-1` no-data result; the current run continues with the next
+RaceKey. If the API result is unavailable, the row remains
+`failed/empty_response_unverified` and is eligible for explicit confirmation.
+Missing tables, invalid staging schemas, execution failures, save failures, and
+other JV-Link error results remain `failed` and stop the run.
+The process exit code remains in `returncode`; the API name and return code are
+stored separately in `api_name` and `api_returncode`, with the columns added
+automatically when an older v1 ledger is first updated. An older
+`provider_missing/jvopen_no_data` row without API evidence is migrated to
+`provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data`
+rows require the captured `JVOpen`/`JVRTOpen = -1` result.
+Historical, latest, realtime, and weekly writes share the raw DB OS lock and
+reject unresolved weekly requests. The API return-code mapping is defined by
+the [JRA-VAN JV-Link API error-code list](https://developer.jra-van.jp/t/topic/822).
+After an operator verifies a provider-side gap with JV-Link, the weekly CLI can
+still explicitly promote the exact legacy failed RaceKey/DataSpec from
+`empty_response_unverified` to `provider_missing` without starting JV-Link.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the

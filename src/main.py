@@ -65,6 +65,17 @@ def main(
         bool,
         typer.Option("--recover", help="Quarantine and recover an interrupted weekly request."),
     ] = False,
+    confirm_provider_missing: Annotated[
+        bool,
+        typer.Option(
+            "--confirm-provider-missing",
+            help="Confirm a failed empty response as a JRA-VAN-side gap.",
+        ),
+    ] = False,
+    data_spec: Annotated[
+        list[str] | None,
+        typer.Option("--data-spec", help="DataSpec to confirm; repeat for multiple specs."),
+    ] = None,
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
     race_datetime: Annotated[
@@ -85,6 +96,8 @@ def main(
             or mode is not None
             or plan_only
             or recover
+            or confirm_provider_missing
+            or data_spec
             or any(
                 value is not None
                 for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
@@ -94,31 +107,77 @@ def main(
         return
 
     if not retrieve and mode is None:
-        if plan_only or recover:
-            raise typer.BadParameter(
-                "--plan-only/--recover requires --retrieve --mode historical-weekly"
+        if (
+            plan_only
+            or recover
+            or confirm_provider_missing
+            or data_spec
+            or any(
+                value is not None
+                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
             )
+        ):
+            raise typer.BadParameter("retrieval options require --retrieve --mode")
         return
     if plan_only and recover:
         raise typer.BadParameter("--plan-only cannot be combined with --recover")
+    if confirm_provider_missing and (plan_only or recover):
+        raise typer.BadParameter(
+            "--confirm-provider-missing cannot be combined with --plan-only/--recover"
+        )
     if not retrieve:
         raise typer.BadParameter("--mode requires --retrieve")
     if mode == "historical":
-        if plan_only or recover:
-            raise typer.BadParameter("--plan-only/--recover is only valid for historical-weekly")
+        if (
+            plan_only
+            or recover
+            or confirm_provider_missing
+            or data_spec
+            or any(
+                value is not None
+                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
+            )
+        ):
+            raise typer.BadParameter("weekly-only options require --mode historical-weekly")
         retrieve_historical(data_config, jvlink_config)
         return
     if mode == "historical-weekly":
+        if confirm_provider_missing:
+            race_key = _require_provider_missing_race(
+                race_datetime, jyo_code, kaiji, nichiji, race_number
+            )
+            specs = _provider_missing_specs(data_spec)
+            confirm_historical_weekly_provider_missing(race_key, specs, data_config, jvlink_config)
+            return
+        if (
+            any(
+                value is not None
+                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
+            )
+            or data_spec
+        ):
+            raise typer.BadParameter(
+                "race options and --data-spec require --confirm-provider-missing"
+            )
         retrieve_historical_weekly(data_config, jvlink_config, plan_only=plan_only, recover=recover)
         return
     if mode == "latest":
-        if plan_only or recover:
-            raise typer.BadParameter("--plan-only/--recover is only valid for historical-weekly")
+        if (
+            plan_only
+            or recover
+            or confirm_provider_missing
+            or data_spec
+            or any(
+                value is not None
+                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
+            )
+        ):
+            raise typer.BadParameter("weekly-only options require --mode historical-weekly")
         retrieve_latest(data_config, jvlink_config)
         return
     if mode == "realtime":
-        if plan_only or recover:
-            raise typer.BadParameter("--plan-only/--recover is only valid for historical-weekly")
+        if plan_only or recover or confirm_provider_missing or data_spec:
+            raise typer.BadParameter("weekly-only options require --mode historical-weekly")
         race_key = _resolve_realtime_race(
             jvlink_config,
             race_datetime,
@@ -175,6 +234,38 @@ def _resolve_realtime_race(
     return configured_race
 
 
+def _require_provider_missing_race(
+    race_datetime: datetime | None,
+    jyo_code: str | None,
+    kaiji: str | None,
+    nichiji: str | None,
+    race_number: str | None,
+) -> RaceKey:
+    """Require an explicit complete RaceKey for a provider-gap confirmation."""
+    values = (race_datetime, jyo_code, kaiji, nichiji, race_number)
+    if any(value is None for value in values):
+        raise typer.BadParameter(
+            "--confirm-provider-missing requires --date, --jyo, --kaiji, --nichiji, and --race"
+        )
+    assert race_datetime is not None
+    assert jyo_code is not None
+    assert kaiji is not None
+    assert nichiji is not None
+    assert race_number is not None
+    try:
+        return RaceKey(race_datetime.date(), jyo_code, kaiji, nichiji, race_number)
+    except ValueError as exc:
+        raise typer.BadParameter(f"invalid provider-missing RaceKey: {exc}") from exc
+
+
+def _provider_missing_specs(data_specs: list[str] | None) -> frozenset[str]:
+    """Validate the explicitly confirmed realtime odds DataSpecs."""
+    values = data_specs or ["0B41", "0B42"]
+    if len(values) != len(set(values)) or not set(values) <= {"0B41", "0B42"}:
+        raise typer.BadParameter("--data-spec accepts only unique 0B41 and 0B42 values")
+    return frozenset(values)
+
+
 def retrieve_historical(
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
@@ -200,13 +291,42 @@ def retrieve_historical_weekly(
     else:
         result = retriever.retrieve_historical_weekly(plan_only=plan_only)
     if not plan_only and result.status == "completed" and result.year is not None:
-        tables = retriever.publish_historical_weekly(
-            result.year, lambda: _preprocesser(data_config).rebuild()
-        )
-        typer.echo(f"processed snapshot published: {len(tables)} tables")
+        typer.echo(f"Starting complete Parquet rebuild for historical year {result.year}.")
+        try:
+            tables = retriever.publish_historical_weekly(
+                result.year, lambda: _preprocesser(data_config).rebuild()
+            )
+        except BaseException:
+            typer.echo("Complete Parquet rebuild failed.", err=True)
+            raise
+        typer.echo(f"Complete Parquet rebuild completed: {len(tables)} tables published.")
     typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
     if result.status == "failed":
         raise typer.Exit(code=1)
+
+
+def confirm_historical_weekly_provider_missing(
+    race_key: RaceKey,
+    specs: frozenset[str],
+    data_config: DataConfigOption = Path("config/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+) -> None:
+    """Confirm selected empty-response failures without starting JV-Link."""
+    count = _retriever(data_config, jvlink_config).confirm_historical_weekly_provider_missing(
+        race_key, specs
+    )
+    typer.echo(
+        json.dumps(
+            {
+                "race": str(race_key),
+                "data_specs": sorted(specs),
+                "confirmed": count,
+                "status": "provider_missing",
+            },
+            ensure_ascii=False,
+            sort_keys=True,
+        )
+    )
 
 
 def retrieve_latest(

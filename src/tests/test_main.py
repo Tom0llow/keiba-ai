@@ -83,6 +83,8 @@ def test_historical_weekly_cli_publishes_after_completed_year() -> None:
         result = runner.invoke(app, ["--retrieve", "--mode=historical-weekly"])
 
     assert result.exit_code == 0
+    assert "Starting complete Parquet rebuild for historical year 2008." in result.stdout
+    assert "Complete Parquet rebuild completed: 1 tables published." in result.stdout
     retriever.publish_historical_weekly.assert_called_once()
     assert retriever.publish_historical_weekly.call_args.args[0] == 2008
     assert callable(retriever.publish_historical_weekly.call_args.args[1])
@@ -99,6 +101,36 @@ def test_historical_weekly_cli_returns_failure_for_failed_batch() -> None:
 
     assert result.exit_code == 1
     assert '"status": "failed"' in result.stdout
+
+
+def test_historical_weekly_cli_confirms_explicit_provider_missing_race() -> None:
+    retriever = Mock()
+    retriever.confirm_historical_weekly_provider_missing.return_value = 2
+    with patch("main.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(
+            app,
+            [
+                "--retrieve",
+                "--mode=historical-weekly",
+                "--confirm-provider-missing",
+                "--date",
+                "2008-02-03",
+                "--jyo",
+                "05",
+                "--kaiji",
+                "01",
+                "--nichiji",
+                "02",
+                "--race",
+                "01",
+            ],
+        )
+
+    assert result.exit_code == 0
+    retriever.confirm_historical_weekly_provider_missing.assert_called_once_with(
+        RaceKey(date(2008, 2, 3), "05", "01", "02", "01"), frozenset({"0B41", "0B42"})
+    )
+    assert '"status": "provider_missing"' in result.stdout
 
 
 def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:

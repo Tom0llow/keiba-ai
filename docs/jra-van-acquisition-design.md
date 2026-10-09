@@ -182,10 +182,17 @@ JSONだけで全レースの結果を持つと、1レースの確定ごとに大
 | `pending` | 取得・分類の確定記録がない。 | 取得対象。 |
 | `running` | 要求対象と取得前件数を台帳へ保存し、取得を開始した。 | 中断の有無を照合して復旧する。 |
 | `acquired` | 初期スナップショットに行がある、または今回の成功した取得結果を累積保存して確認できた。 | 通常は再取得しない。 |
-| `provider_missing` | 初期範囲内の穴をユーザー方針で分類した、または新規の正常な空応答を確認した。 | 完了として扱い、再試行しない。 |
+| `provider_missing` | 初期範囲内の穴をユーザー方針で分類した、JVOpen/JVRTOpenの正常な`-1`を確認した、旧台帳の欠損分類を移行した、または空応答を明示確認した。 | 完了として扱い、再試行しない。 |
 | `failed` | 起動・通信・JV-Link・保存・スキーマ検証等に失敗した。 | 次回、同じ年の対象として再試行する。 |
 
-初期欠損の `reason` は `user_accepted_existing_gaps`、新規の正常な空応答は `successful_empty_response` とする。状態名を別途 `assumed_provider_missing` に変えず、ユーザー指定の分類を維持しながら根拠を区別する。
+状態とreasonの組み合わせは固定する。`pending` は`unrequested`または`new_candidate`、
+`running` は`request_started`、`acquired` は`initial_archive_observed`、
+`requested_archive_committed`、`external_archive_observed`、`recovered_archive_commit`の
+いずれかとする。`provider_missing` は`user_accepted_existing_gaps`、
+`jvopen_no_data`、`legacy_provider_missing`、`provider_confirmed_missing`のいずれかとし、`failed` は
+`jvlink_error`、`empty_response_unverified`、`staging_table_missing`、
+`staging_schema_invalid`、`staging_race_mismatch`、`archive_schema_mismatch`、
+`recovered_unconfirmed`のいずれかとする。未知の組み合わせは台帳不正として停止する。
 
 `provider_missing` は業務上の取得完了であり、データ行の存在を意味しない。モデル向け欠損をゼロ値・最終オッズで埋めない。提供元欠損の分類を取り消して再試行する機能は通常の週次実行には含めず、明示した運用変更として扱う。
 
@@ -204,8 +211,8 @@ flowchart TD
     H -->|はい| F
     H -->|いいえ| I[差分確定・完全Parquet公開]
     I --> J[次回configと進捗要約を更新して終了]
-    F -->|実行失敗| K[failedを記録して同じ年を維持]
-    G -->|保存・検証失敗| K
+    G -->|空応答| F
+    F -->|JVLink・保存・検証失敗| K[failedを記録して同じ年を維持]
     K --> L[今回の差分と復旧情報を保存して終了]
 ```
 
@@ -216,7 +223,11 @@ flowchart TD
 5. 各レースで `acquired` / `provider_missing` を除外する。残る0B41/0B42を同じレースの1回のJVLinkToSQLite実行へまとめる。
 6. 要求した全組の状態を `running` にし、要求キー、取得前件数、run IDを台帳へ確定してから外部プロセスを起動する。
 7. 実行結果を検証し、要求対象のRT行を次の取得で置き換わる前にアーカイブへ保存する。原本のトランザクション確定後に台帳を更新する。
-8. エラーがなければ次のレースへ進む。失敗した場合は当該要求組を `failed` として記録し、年を進めず終了する。
+8. DataSpec別に取得したJVOpen/JVRTOpenの戻り値が正常な`-1`で、対応する空RT表が
+   有効なら当該要求組を`provider_missing/jvopen_no_data`として記録し、同じrunの次の
+   レースへ進む。空RT表はあるが戻り値を取得できない場合は
+   `failed/empty_response_unverified`として記録し、`JVLinkToSQLiteError`、保存失敗、
+   スキーマ不一致など他の失敗と同じく年を進めず終了する。
 9. 固定候補の全組が `acquired` / `provider_missing` ならraw取得を完了扱いとし、第11節のParquet公開へ進む。
 10. 台帳に基づいて次回config、要約JSON、今回の報告を更新し、ロックを解放して終了する。
 
@@ -224,24 +235,66 @@ flowchart TD
 
 ## 9. 正常な空応答と失敗の区別
 
-プロセスの終了コード0だけを、提供元欠損の十分条件にしない。要求DataSpecを実際に有効化した設定、実行の成功、今回の要求に対応するステージングの状態を確認する。
+JV-Linkの戻り値と取得プロセスの終了コードを分けて扱う。プロセス終了コード0だけでは
+提供元欠損の十分条件にせず、要求DataSpecを実際に有効化した設定、実行の成功、今回の
+要求に対応するRT表の存在とスキーマを確認する。JRA-VANの
+[JV-Link APIエラーコード一覧](https://developer.jra-van.jp/t/topic/822)では、
+JVOpen/JVRTOpenの`-1`は「該当データ無し」で正常終了であり、`JVClose`を呼んで取り込みを
+終了する扱いである。
 
 | 実行後の状態 | 分類・処置 |
 | --- | --- |
 | 成功し、要求キーの有効なRT行がある。 | 対象だけをアーカイブへ保存し、保存を確認して `acquired`。 |
-| 成功し、新鮮なRTテーブルが正しいスキーマで空、取得エラーを示す結果がない。 | 当該DataSpecだけを `provider_missing`。 |
-| O1は有効行、O2は確認済みの正常な空応答。 | O1を `acquired`、O2を `provider_missing`。 |
-| 非ゼロ終了、起動失敗、通信・メンテナンス失敗、タイムアウト。 | 要求組を `failed`。空テーブルが残っていても欠損確定しない。 |
-| 要求したRTテーブルがない、スキーマ不一致、別レースの行、成功の裏付けが不十分。 | 検証失敗として `failed`。 |
-| プロセス成功後のアーカイブ保存失敗。 | `failed` または未確定として復旧情報を保持し、成功・提供元欠損へ進めない。 |
+| 成功終了後に新鮮なRTテーブルが空で、DataSpec別にJVOpen/JVRTOpenの`-1`を取得できた。 | 当該DataSpecを `provider_missing/jvopen_no_data`として記録し、同じrunの次のレースへ進む。 |
+| 成功終了後に新鮮なRTテーブルが空だが、DataSpec別のAPI戻り値を取得できない。 | `failed/empty_response_unverified`として記録し、明示確認または再取得の対象にする。 |
+| O1は有効行、O2は提供元欠損として明示確認済み。 | O1を `acquired`、O2を `provider_missing`。 |
+| 非ゼロ終了、起動失敗、通信・メンテナンス失敗、タイムアウト。 | 要求組を `failed` として記録し、同じrunの次のレースへ進まず終了する。空テーブルが残っていても欠損確定しない。 |
+| 要求したRTテーブルがない、スキーマ不一致、別レースの行、成功の裏付けが不十分。 | 検証失敗として `failed` として記録し、次のレースへ進まず終了する。 |
+| プロセス成功後のアーカイブ保存失敗。 | `failed` または未確定として復旧情報を保持し、次のレースへ進まず終了する。成功・提供元欠損へ進めない。 |
 
 RTの前回行を今回の成功結果と誤認しないため、取得アダプタで要求対象のステージングを空から開始する。リセット前に、その行がアーカイブへ保存済みかを確認する。成功確認済みの未保存行は先にアーカイブへ復旧する。中断等で成功を確認できない行は、第12節の隔離保存を完了してから再試行する。保存復旧・隔離保存ができない場合は元のRTを維持して停止する。
 
 リセットは要求対象のRT表だけのトランザクションで行い、ARCHIVEやNL表を削除しない。書き込み接続は外部実行前に閉じる。
 
-JVLinkToSQLiteが空応答時にRT表を作成するか、JV-Link内部のエラーをプロセスの終了コードへ伝えるかは、実装前にツールの実物または一次仕様で確認する。エラーが終了コードへ伝わらない場合はアダプタで確実に識別できる返却情報を採用する。内容未確認のログ文言に依存した判定や、「テーブル不在=提供元欠損」という代替規則は採用しない。
+JVLinkToSQLiteは標準出力・標準エラーに含まれるDataSpec別の`RC=<code>`を実行結果へ
+抽出する。正常な`-1`とみなせるのは、要求DataSpecが有効で、プロセスが成功し、要求対象
+RT表が存在し、正しいスキーマで空であり、対象DataSpecのAPIコードが`-1`である場合だけ
+とする。表不在・スキーマ不一致・対象キー不一致・APIコード不明を
+`provider_missing`の代替条件にしない。取得できたAPI名とコードはDataSpec別に台帳の
+`api_name`・`api_returncode`へ保存し、取得できない場合は`NULL`とする。既存の
+`returncode`はJVLinkToSQLiteプロセス終了コードとして維持し、旧v1台帳は最初の更新時に
+API列だけを追加する。その際、旧台帳でAPI証跡なしに記録済みだった
+`provider_missing/jvopen_no_data`は`provider_missing/legacy_provider_missing`へ移行し、
+新しい`jvopen_no_data`の厳密なAPI証跡要件と区別する。
 
-火曜メンテナンスについてはユーザー提示の運用背景として扱い、曜日で原因を決めない。火曜でも正常取得なら成功、メンテナンスで失敗すれば `failed` とする。失敗が正常な空応答に見える場合は、上記の返却情報の検証を解消するまで欠損分類を行わない。
+代表的な戻り値の分類は次のとおりである。`JVOpen/JVRTOpen -1`だけが、今回の履歴取得で
+`provider_missing/jvopen_no_data`になる正常な無データ結果である。
+
+| API戻り値 | 意味 | 台帳分類 |
+| --- | --- | --- |
+| `JVOpen/JVRTOpen: 0` | 正常 | RT行を検証し、行があれば`acquired`。 |
+| `JVOpen/JVRTOpen: -1` | 該当データ無し（正常終了） | 有効な空RT表と組み合わせて`provider_missing/jvopen_no_data`。 |
+| `JVOpen/JVRTOpen: -2` | セットアップ取消 | `failed/jvlink_error`。 |
+| `JVOpen/JVRTOpen: -111`〜`-116` | パラメータ不正 | `failed/jvlink_error`。設定を修正するまで再試行しない。 |
+| `JVOpen/JVRTOpen: -201`、`-202`、`-211` | API呼出順序・レジストリ異常 | `failed/jvlink_error`。 |
+| `JVOpen/JVRTOpen: -301`、`-302`、`-303`、`-305` | 認証・利用キー・規約異常 | `failed/jvlink_error`。 |
+| `JVOpen/JVRTOpen: -401`、`-411`〜`-431` | JV-Link内部・サーバー異常 | `failed/jvlink_error`。復旧後に再試行する。 |
+| `JVOpen/JVRTOpen: -501`、`-504` | セットアップ媒体異常・メンテナンス | `failed/jvlink_error`。 |
+| `JVStatus: -201`、`-203` | API初期化・Open順序不正 | `failed/jvlink_error`。 |
+| `JVStatus: -502` | ダウンロード失敗 | `failed/jvlink_error`。 |
+| `JVRead/JVGets: -201`、`-202`、`-203` | API初期化・Open/Close順序不正 | `failed/jvlink_error`。 |
+| `JVRead/JVGets: -402`、`-403`、`-502`、`-503` | ダウンロード・ファイル異常 | `failed/jvlink_error`。 |
+| `JVRead/JVGets: 0`、`-1`、`-3` | EOF・ファイル切替・ダウンロード中 | API処理上の継続/待機であり、単独では`failed`にしない。最終的な空RT表はJVOpen/JVRTOpenのコードで判定する。 |
+| `JVClose: 0` | 正常終了 | 直前の処理結果に従って台帳を確定する。 |
+
+JV-Link実機で「該当データなし」が提供元側欠損だと確認できた場合は、
+`--confirm-provider-missing` と完全なRaceKeyを指定して、対象の
+`empty_response_unverified` だけを `provider_missing` へ確定する。実行前に同じRaceKey・
+DataSpecのARCHIVE件数が0であることと、台帳が失敗状態であることを検証する。この操作は
+JV-Linkを起動せず、指定していない失敗や通信エラーを欠損へ変更しない。これは、
+公式の正常な`-1`分類を導入する前の旧台帳を移行するための互換経路である。
+
+火曜メンテナンスについてはユーザー提示の運用背景として扱い、曜日で原因を決めない。火曜でも正常取得なら成功、メンテナンスで失敗すれば `failed` とする。JVOpen/JVRTOpenの`-1`をDataSpec別に取得し、対応する有効な空RT表がある場合だけ `provider_missing/jvopen_no_data` として自動分類し、表不在・スキーマ不一致・実行失敗・APIコード不明は欠損へ分類しない。
 
 ## 10. 差分と進捗率
 
@@ -253,7 +306,7 @@ JVLinkToSQLiteが空応答時にRT表を作成するか、JV-Link内部のエラ
 | `requested_specs` | 要求した `(race_id, data_spec)` の組数。 |
 | `new_rows[spec]` | このrunで対象アーカイブへ新規保存した行数。全行一致の重複は含まない。 |
 | `new_races[spec]` | このrunで初めてアーカイブ行を持ったレース数。 |
-| `new_provider_missing[spec]` | このrunの正常な空応答によって初めて欠損確定した組数。初期登録の件数は別に表示する。 |
+| `new_provider_missing[spec]` | このrunでAPI戻り値`-1`と有効な空RT表を確認し、`jvopen_no_data`として初めて欠損確定した組数。初期登録の件数は別に表示する。 |
 | `adopted_races[spec]` | 起動時に別モードのアーカイブ追加を台帳へ取り込んだレース数。今回取得した差分とは別に表示する。 |
 | `failed_specs` | このrunで失敗した要求組数。 |
 | `pending_after` | 今回固定した候補のうち、確定状態になっていない組数。 |
@@ -348,13 +401,13 @@ OSロックはプロセスの異常終了で解放されるものを使い、ロ
 | config更新 | 台帳の世代と生成TOML・JSONが一致する。古いconfigは台帳から再生成し、Git管理下の方針TOMLを書き換えない。 |
 | 事前確認・手動起動 | 事前確認では一切書き込まず、通常実行は1回で終了する。タスク登録と曜日制限が存在しない。 |
 
-通常の自動テストは一時SQLite、固定時刻、偽の外部実行境界で行い、ユーザーの原本・認証・ネットワークに依存させない。実JVLinkToSQLiteでは、成功・正常空応答・通信失敗時の返却情報とRTの作成条件を明示した統合検証で確認する。この検証結果を得るまでは、正常な空応答を自動分類できると報告しない。
+通常の自動テストは一時SQLite、固定時刻、偽の外部実行境界で行い、ユーザーの原本・認証・ネットワークに依存させない。実JVLinkToSQLiteでは、成功・正常空応答・通信失敗時の返却情報とRTの作成条件を明示した統合検証で確認する。正常な空応答は公式の`JVOpen/JVRTOpen -1`定義、DataSpec別のAPIコード、及び有効な空RT表の検証を満たした場合だけ自動分類する。
 
 実装では一時SQLite・偽runnerによる台帳、ロック、初回登録、年選定、アーカイブ保存、回復処理のテストを追加した。Ruffの整形確認・lint、mypy、pytest、ガード検証を実行している。実機JV-Link取得は未実施である。
 
 ## 15. 残る確認事項
 
-1. JVLinkToSQLiteがプロセス終了コード、表、返却情報のどこに成功・正常空応答・JV-Linkエラーを表すかを確認する。未知の情報を補って欠損判定しない。
+1. JVLinkToSQLiteの実機ログ形式が`[API] ... RC=<code> (DataSpec, ...)`という抽出規則に一致することを確認する。未知のログ形式やAPIコード不明の空表は欠損判定せず、`empty_response_unverified`として扱う。
 2. 初期登録時の原本が本書のスナップショットと一致するかを確認し、取得済み範囲の凍結資料を保存する。原本が更新されていれば対象集合・初期設定を調整する。
 3. 台帳形式、年単位の公開操作、生成configの所有、共通ロック、検索インデックスをADRへ整理し、既存の公開契約との互換性を確認する。
 4. 取得、累積保存、完全Parquet公開を含む1年分の所要時間・ディスク容量を測定する。ユーザー提示の約1日を、設計上の保証や固定タイムアウトへ置き換えない。

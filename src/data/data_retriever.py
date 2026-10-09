@@ -129,6 +129,16 @@ class DataRetriever:
             raise ValueError("[historical_odds.batch] is required for historical-weekly")
         self._weekly.mark_publication(year, state)
 
+    def confirm_historical_weekly_provider_missing(
+        self, race_key: RaceKey, specs: frozenset[str]
+    ) -> int:
+        """Confirm empty-response failures as provider-side gaps."""
+        if self._weekly is None:
+            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+        assert self._odds_batch is not None
+        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
+        return self._weekly.confirm_provider_missing(race_key, specs)
+
     def publish_historical_weekly(self, year: int, publisher: Callable[[], T]) -> T:
         """Publish one completed year and record its state under the raw DB lock."""
         if self._weekly is None:

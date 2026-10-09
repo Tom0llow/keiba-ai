@@ -1,8 +1,10 @@
 """Tests for cumulative archiving of transient JVLinkToSQLite odds tables."""
 
 import sqlite3
+from datetime import date
 from pathlib import Path
 
+from data.race_key import RaceKey
 from data.retriever.odds_archive import OddsArchive
 
 
@@ -65,3 +67,25 @@ def test_archive_accumulates_rows_after_realtime_table_replacement(tmp_path: Pat
 
     assert o1_times == [("101000",), ("102000",)]
     assert o2_times == [("101000",), ("102000",)]
+
+
+def test_archive_request_classifies_valid_empty_realtime_tables_as_no_data(
+    tmp_path: Path,
+) -> None:
+    database = tmp_path / "race.db"
+    with sqlite3.connect(database) as connection:
+        for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+            connection.execute(
+                f"CREATE TABLE {table} ("
+                "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,"
+                "idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT)"
+            )
+
+    key = RaceKey(date(2008, 1, 27), "01", "01", "08", "01")
+    results = OddsArchive(database).archive_request(key, frozenset({"0B41", "0B42"}))
+
+    assert {spec: result.reason for spec, result in results.items()} == {
+        "0B41": "jvopen_no_data",
+        "0B42": "jvopen_no_data",
+    }
+    assert not any(result.acquired for result in results.values())

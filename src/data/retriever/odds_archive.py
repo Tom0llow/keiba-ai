@@ -163,8 +163,11 @@ class OddsArchive:
     ) -> dict[str, RequestedArchiveResult]:
         """Save only the requested fresh race/spec rows with full-row deduplication.
 
-        Empty/missing tables remain failures until JV-Link empty-response semantics
-        have been verified; process exit zero alone never establishes provider_missing.
+        A present, valid, empty realtime table is returned as a candidate for
+        the normal ``JVOpen``/``JVRTOpen`` no-data result (RC=-1). The caller
+        must verify that API return code before recording
+        ``provider_missing``. Missing tables and validation failures remain
+        errors.
         """
         results: dict[str, RequestedArchiveResult] = {}
         values = (
@@ -192,7 +195,7 @@ class OddsArchive:
                     f'SELECT DISTINCT {", ".join(KEY_COLUMNS)} FROM "{source}"'
                 ).fetchall()
                 if not keys:
-                    results[spec] = RequestedArchiveResult(False, 0, 0, "empty_response_unverified")
+                    results[spec] = RequestedArchiveResult(False, 0, 0, "jvopen_no_data")
                     continue
                 if keys != [values]:
                     results[spec] = RequestedArchiveResult(False, 0, 0, "staging_race_mismatch")

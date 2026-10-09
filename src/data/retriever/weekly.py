@@ -12,7 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from data.race_key import RaceKey
-from data.retriever.acquisition_lock import AcquisitionLock
+from data.retriever.acquisition_lock import AcquisitionBlocked, AcquisitionLock
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
 from data.retriever.odds_archive import OddsArchive
 from data.retriever.progress import (
@@ -158,18 +158,46 @@ class WeeklyHistoricalOddsRetriever:
                     profile = replace(self._odds_profile, realtime_data_specs=specs)
                     self._setting_builder.build(profile, setting_path, race_key=key)
                     results: dict[str, tuple[str, str, int]] = {}
-                    returncode: int | None = None
+                    process_returncode: int | None = None
+                    api_results: dict[str, tuple[str, int]] = {}
                     try:
-                        self._runner.execute(setting_path, skip_last_modified_update=True)
+                        execution = self._runner.execute(
+                            setting_path, skip_last_modified_update=True
+                        )
+                        process_returncode = getattr(execution, "process_returncode", None)
+                        execution_api_results: dict[str, tuple[str, int]] = getattr(
+                            execution, "api_results", {}
+                        )
+                        no_data_specs: frozenset[str] = getattr(
+                            execution, "no_data_specs", frozenset()
+                        )
+                        fatal_specs: frozenset[str] = getattr(execution, "fatal_specs", frozenset())
                         archived = self._archive.archive_request(key, specs)
                         for spec, value in archived.items():
-                            if value.acquired:
+                            if spec in fatal_specs:
+                                results[spec] = ("failed", "jvlink_error", value.after_rows)
+                                if spec in execution_api_results:
+                                    api_results[spec] = execution_api_results[spec]
+                            elif value.acquired:
                                 results[spec] = ("acquired", value.reason, value.after_rows)
                                 new_rows[spec] += value.inserted_rows
+                                if spec in execution_api_results:
+                                    api_results[spec] = execution_api_results[spec]
+                            elif value.reason == "jvopen_no_data" and spec in no_data_specs:
+                                results[spec] = ("provider_missing", value.reason, 0)
+                                if spec in execution_api_results:
+                                    api_results[spec] = execution_api_results[spec]
+                            elif value.reason == "jvopen_no_data":
+                                results[spec] = ("failed", "empty_response_unverified", 0)
+                                if spec in execution_api_results:
+                                    api_results[spec] = execution_api_results[spec]
                             else:
                                 results[spec] = ("failed", value.reason, value.after_rows)
+                                if spec in execution_api_results:
+                                    api_results[spec] = execution_api_results[spec]
                     except JVLinkToSQLiteError as exc:
-                        returncode = exc.returncode
+                        process_returncode = exc.returncode
+                        api_results = exc.api_results
                         results = {spec: ("failed", "jvlink_error", counts[spec]) for spec in specs}
                     except BaseException:
                         # Keep running rows unresolved so the common lock refuses
@@ -183,7 +211,14 @@ class WeeklyHistoricalOddsRetriever:
                             ledger, run_id, key, failed, label=f"{run_id}-{key.race_id}"
                         )
                     failed_specs += sum(state == "failed" for state, _, _ in results.values())
-                    ledger.finish_request(key, results, now, recovered=True, returncode=returncode)
+                    ledger.finish_request(
+                        key,
+                        results,
+                        now,
+                        recovered=True,
+                        returncode=process_returncode,
+                        api_results=api_results,
+                    )
                     for spec, (state, reason, after_rows) in results.items():
                         prior = states[(key.race_id, spec)]
                         states[(key.race_id, spec)] = SpecState(
@@ -251,6 +286,25 @@ class WeeklyHistoricalOddsRetriever:
     def mark_published(self, year: int) -> None:
         """Record publication only after the complete snapshot is durable."""
         self.mark_publication(year, "published")
+
+    def confirm_provider_missing(self, key: RaceKey, specs: frozenset[str]) -> int:
+        """Confirm selected empty-response failures as provider-side gaps."""
+        now = self._clock()
+        cutoff = now.date() - timedelta(days=1)
+        self._runtime_dir.mkdir(parents=True, exist_ok=True)
+        ledger = self.ledger
+        with AcquisitionLock(self._database, self.ledger_path) as lock:
+            lock.bind()
+            snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+            if key not in snapshot.races:
+                raise AcquisitionBlocked("provider-missing confirmation targets an unknown race")
+            ledger.confirm_provider_missing(
+                key,
+                specs,
+                now,
+                {spec: snapshot.counts.get((key.race_id, spec), 0) for spec in specs},
+            )
+        return len(specs)
 
     def mark_publication(self, year: int, state: str) -> None:
         """Record the outcome of complete-Parquet publication."""

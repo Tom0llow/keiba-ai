@@ -151,7 +151,32 @@ Retrieval and preprocessing are coupled at the CLI boundary:
   historical O1/O2 odds, record per-race progress, and publish after the year completes.
   Use `--plan-only` to inspect the next year without writing or starting JVLinkToSQLite.
   The PowerShell script above is a single-run wrapper; it does not register Task Scheduler
-  jobs or apply a weekday rule.
+  jobs or apply a weekday rule. A successful run with a valid empty realtime table is recorded
+  as `provider_missing/jvopen_no_data` only when the captured JVOpen/JVRTOpen return code is
+  `-1`; it is not retried. If the API code is unavailable, the result remains
+  `failed/empty_response_unverified`. Missing tables, invalid schemas, archive failures, and
+  process failures remain `failed` and stop the run. The official JV-Link API error-code list
+  is published by [JRA-VAN](https://developer.jra-van.jp/t/topic/822).
+  The progress ledger preserves the process exit code separately from the captured
+  DataSpec-specific API name and return code.
+  When a year is complete, the CLI prints an English message before the full Parquet rebuild,
+  then prints whether the rebuild completed or failed. The rebuild can take a long time for
+  a large raw database.
+  When an older v1 ledger has a previously classified `provider_missing/jvopen_no_data`
+  row without API columns, the first write migrates it to
+  `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data` rows always
+  require captured `JVOpen`/`JVRTOpen = -1` evidence.
+  After confirming a JRA-VAN-side gap, confirm that exact failed race without starting
+  JVLinkToSQLite:
+
+  ```powershell
+  uv run python src/main.py --retrieve --mode=historical-weekly `
+    --confirm-provider-missing --date 2008-02-03 --jyo 05 --kaiji 01 --nichiji 02 --race 01
+  ```
+
+  Both O1/O2 (`0B41`/`0B42`) are confirmed by default. Use `--data-spec 0B41` or
+  `--data-spec 0B42` to confirm only one. The command accepts only failed
+  `empty_response_unverified` entries whose current archive count is still zero.
 - `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
   snapshot.
 - `--retrieve --mode=realtime`: retrieve and archive the target race's history/current

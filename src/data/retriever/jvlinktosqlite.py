@@ -4,16 +4,103 @@ from __future__ import annotations
 
 import csv
 import os
+import re
 import subprocess
+import sys
+from dataclasses import dataclass, field
 from pathlib import Path
+
+
+@dataclass(frozen=True)
+class JVLinkExecutionResult:
+    """Return values reported by JV-Link for each requested DataSpec."""
+
+    api_returncodes: dict[str, int]
+    no_data_specs: frozenset[str] = frozenset()
+    fatal_specs: frozenset[str] = frozenset()
+    api_results: dict[str, tuple[str, int]] = field(default_factory=dict)
+    open_returncodes: dict[str, int] = field(default_factory=dict)
+    fatal_returncodes: dict[str, int] = field(default_factory=dict)
+    process_returncode: int | None = None
 
 
 class JVLinkToSQLiteError(RuntimeError):
     """Report a failure while invoking JVLinkToSQLite."""
 
-    def __init__(self, message: str, *, returncode: int | None = None) -> None:
+    def __init__(
+        self,
+        message: str,
+        *,
+        returncode: int | None = None,
+        api_returncodes: dict[str, int] | None = None,
+        fatal_returncodes: dict[str, int] | None = None,
+        api_results: dict[str, tuple[str, int]] | None = None,
+    ) -> None:
         super().__init__(message)
         self.returncode = returncode
+        self.api_returncodes = api_returncodes or {}
+        self.fatal_returncodes = fatal_returncodes or {}
+        self.api_results = api_results or {}
+
+
+_API_RETURNCODE = re.compile(
+    r"\[(?P<api>JVOpen|JVRTOpen|JVStatus|JVRead|JVGets)\][^\r\n]*?"
+    r"RC=(?P<code>-?\d+)\s*\((?P<data_spec>0B\d{2})\s*,"
+)
+
+
+@dataclass(frozen=True)
+class _ParsedApiResults:
+    latest: dict[str, tuple[str, int]]
+    open_returncodes: dict[str, int]
+    fatal_returncodes: dict[str, int]
+    no_data_specs: frozenset[str]
+    fatal_specs: frozenset[str]
+
+
+def _parse_api_returncodes(
+    *outputs: str | bytes | None,
+) -> _ParsedApiResults:
+    """Extract API return codes and their terminal classifications."""
+    latest: dict[str, tuple[str, int]] = {}
+    open_returncodes: dict[str, int] = {}
+    for output in outputs:
+        if output is None:
+            continue
+        text = output.decode(errors="replace") if isinstance(output, bytes) else output
+        for match in _API_RETURNCODE.finditer(text):
+            data_spec = match.group("data_spec")
+            api = match.group("api")
+            code = int(match.group("code"))
+            latest[data_spec] = (api, code)
+            if api in {"JVOpen", "JVRTOpen"}:
+                open_returncodes[data_spec] = code
+    no_data_specs = {
+        spec for spec, (api, code) in latest.items() if api in {"JVOpen", "JVRTOpen"} and code == -1
+    }
+    fatal_returncodes = {
+        spec: code
+        for spec, (api, code) in latest.items()
+        if code < 0
+        and not (api in {"JVRead", "JVGets"} and code in {-1, -3})
+        and not (api in {"JVOpen", "JVRTOpen"} and code == -1)
+    }
+    return _ParsedApiResults(
+        latest,
+        open_returncodes,
+        fatal_returncodes,
+        frozenset(no_data_specs),
+        frozenset(fatal_returncodes),
+    )
+
+
+def _echo_output(output: str | bytes | None, *, error: bool = False) -> None:
+    """Preserve the executable's console output after capturing it for parsing."""
+    if output is None:
+        return
+    text = output.decode(errors="replace") if isinstance(output, bytes) else output
+    stream = sys.stderr if error else sys.stdout
+    print(text, end="" if text.endswith(("\n", "\r")) else "\n", file=stream)
 
 
 class JVLinkToSQLiteRunner:
@@ -54,7 +141,9 @@ class JVLinkToSQLiteRunner:
             raise ValueError("timeout_seconds must be positive")
         self._timeout_seconds = timeout_seconds
 
-    def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> None:
+    def execute(
+        self, setting: Path, *, skip_last_modified_update: bool = False
+    ) -> JVLinkExecutionResult:
         """Run JVLinkToSQLite once in ``Exec`` mode.
 
         The setting and database paths are passed as argv tokens without a shell.
@@ -70,7 +159,8 @@ class JVLinkToSQLiteRunner:
             FileNotFoundError: If the setting file does not exist.
             ValueError: If the setting path is not a file.
             JVLinkToSQLiteError: If the process cannot start, times out, or exits
-                with a non-zero status.
+                with a non-zero status. Any DataSpec-specific JV-Link return
+                codes observed before the failure are attached to the exception.
         """
         setting_path = _resolve_existing_file(setting, "JVLinkToSQLite setting file")
         command = [
@@ -87,21 +177,47 @@ class JVLinkToSQLiteRunner:
             command.append("--skipslastmodifiedupdate")
 
         try:
-            subprocess.run(
+            completed = subprocess.run(
                 command,
                 cwd=self._executable.parent,
                 check=True,
+                encoding="cp932",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
                 timeout=self._timeout_seconds,
                 shell=False,
+                text=True,
+            )
+            _echo_output(completed.stdout)
+            parsed = _parse_api_returncodes(completed.stdout)
+            return JVLinkExecutionResult(
+                {spec: code for spec, (_, code) in parsed.latest.items()},
+                parsed.no_data_specs,
+                parsed.fatal_specs,
+                parsed.latest,
+                parsed.open_returncodes,
+                parsed.fatal_returncodes,
+                None,
             )
         except subprocess.TimeoutExpired as exc:
+            _echo_output(exc.stdout)
+            parsed = _parse_api_returncodes(exc.stdout)
             raise JVLinkToSQLiteError(
-                f"JVLinkToSQLite timed out after {self._timeout_seconds} seconds"
+                f"JVLinkToSQLite timed out after {self._timeout_seconds} seconds",
+                api_returncodes={spec: code for spec, (_, code) in parsed.latest.items()},
+                fatal_returncodes=parsed.fatal_returncodes,
+                api_results=parsed.latest,
             ) from exc
         except subprocess.CalledProcessError as exc:
+            _echo_output(exc.stdout)
+            parsed = _parse_api_returncodes(exc.stdout)
             raise JVLinkToSQLiteError(
                 f"JVLinkToSQLite exited with status {exc.returncode}",
                 returncode=exc.returncode,
+                api_returncodes={spec: code for spec, (_, code) in parsed.latest.items()},
+                fatal_returncodes=parsed.fatal_returncodes,
+                api_results=parsed.latest,
             ) from exc
         except OSError as exc:
             raise JVLinkToSQLiteError(f"failed to start JVLinkToSQLite: {exc}") from exc
