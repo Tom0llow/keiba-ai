@@ -138,19 +138,23 @@ uv sync --locked
 
 uv run python src/main.py --retrieve --mode=historical
 uv run python src/main.py --retrieve --mode=historical-weekly
+uv run python src/main.py preprocess historical-weekly
 pwsh -NoProfile -File scripts/retrieve-historical-odds-weekly.ps1
 uv run python src/main.py --retrieve --mode=latest
+uv run python src/main.py preprocess rebuild
 uv run python src/main.py --retrieve --mode=realtime
+uv run python src/main.py preprocess realtime --date 2026-10-04 --jyo 05 --kaiji 04 --nichiji 08 --race 11
 ```
 
-Retrieval and preprocessing are coupled at the CLI boundary:
+JVLink retrieval and raw-to-Parquet preprocessing are separate CLI operations:
 
-- `--retrieve --mode=historical`: run enabled base updates, retrieve historical odds, then
-  publish a complete Parquet snapshot.
-- `--retrieve --mode=historical-weekly`: manually retrieve the oldest unfinished year of
-  historical O1/O2 odds, record per-race progress, and publish after the year completes.
+- `--retrieve --mode=historical`: run enabled base updates and retrieve historical raw data.
+- `--retrieve --mode=historical-weekly`: retrieve one oldest unfinished year of historical
+  O1/O2 odds and record per-race progress. It does not start Parquet preprocessing. After
+  this command completes, run `preprocess historical-weekly` to publish the completed year
+  and update its publication state before retrieving the next year.
   Use `--plan-only` to inspect the next year without writing or starting JVLinkToSQLite.
-  The PowerShell script above is a single-run wrapper; it does not register Task Scheduler
+  The PowerShell script above starts one retrieval process; it does not register Task Scheduler
   jobs or apply a weekday rule. A successful run with a valid empty realtime table is recorded
   as `provider_missing/jvopen_no_data` only when the captured JVOpen/JVRTOpen return code is
   `-1`; it is not retried. If the API code is unavailable, the result remains
@@ -159,9 +163,6 @@ Retrieval and preprocessing are coupled at the CLI boundary:
   is published by [JRA-VAN](https://developer.jra-van.jp/t/topic/822).
   The progress ledger preserves the process exit code separately from the captured
   DataSpec-specific API name and return code.
-  When a year is complete, the CLI prints an English message before the full Parquet rebuild,
-  then prints whether the rebuild completed or failed. The rebuild can take a long time for
-  a large raw database.
   When an older v1 ledger has a previously classified `provider_missing/jvopen_no_data`
   row without API columns, the first write migrates it to
   `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data` rows always
@@ -177,10 +178,10 @@ Retrieval and preprocessing are coupled at the CLI boundary:
   Both O1/O2 (`0B41`/`0B42`) are confirmed by default. Use `--data-spec 0B41` or
   `--data-spec 0B42` to confirm only one. The command accepts only failed
   `empty_response_unverified` entries whose current archive count is still zero.
-- `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
-  snapshot.
-- `--retrieve --mode=realtime`: retrieve and archive the target race's history/current
-  odds, then publish race-scoped Parquet for that same `RaceKey`.
+- `--retrieve --mode=latest`: update raw data through JVLink.
+- `preprocess rebuild`: rebuild and publish a complete snapshot from the current raw database.
+- `--retrieve --mode=realtime`: retrieve and archive the target race's history/current odds.
+- `preprocess realtime`: publish race-scoped Parquet for an already retrieved `RaceKey`.
 
 All retrieval modes use the flag-based interface. The separate `preprocess`
 command remains available for publishing processed data from existing raw data.

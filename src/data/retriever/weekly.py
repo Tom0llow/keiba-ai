@@ -85,7 +85,7 @@ class WeeklyHistoricalOddsRetriever:
         cutoff: date | None = None,
         recover: bool = False,
     ) -> WeeklyBatchResult:
-        """Run at most one year, or return a read-only plan when requested."""
+        """Run one year, or return a read-only plan when requested."""
         now = self._clock()
         effective_cutoff = cutoff or (now.date() - timedelta(days=1))
         if plan_only:
@@ -259,6 +259,53 @@ class WeeklyHistoricalOddsRetriever:
             self._write_summary(result, ledger)
             return result
 
+    def prepare_publication(self, *, cutoff: date | None = None) -> WeeklyBatchResult:
+        """Reconcile raw additions and plan the next complete-Parquet publication."""
+        now = self._clock()
+        effective_cutoff = cutoff or (now.date() - timedelta(days=1))
+        if not self.ledger_path.is_file():
+            raise AcquisitionBlocked(
+                "historical-weekly publication requires an existing progress ledger"
+            )
+        with AcquisitionLock(self._database, self.ledger_path) as lock:
+            lock.bind()
+            ledger = self.ledger
+            return self.prepare_publication_locked(ledger, effective_cutoff, now)
+
+    def prepare_publication_locked(
+        self, ledger: ProgressLedger, cutoff: date, now: datetime
+    ) -> WeeklyBatchResult:
+        """Reconcile and plan publication while the caller owns the common lock."""
+        snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+        ledger.reconcile(snapshot, now)
+        return self._plan(snapshot, cutoff)
+
+    def verify_publication_locked(self, ledger: ProgressLedger, year: int) -> None:
+        """Reject publication when raw data changed or remains incomplete."""
+        now = self._clock()
+        plan = self.prepare_publication_locked(ledger, now.date() - timedelta(days=1), now)
+        if plan.year != year or plan.requested_specs:
+            raise AcquisitionBlocked(
+                "raw data changed or remains incomplete after publication planning"
+            )
+
+    def repair_derived_publication(self) -> None:
+        """Regenerate derived publication files from the committed ledger state."""
+        if not self.ledger_path.is_file():
+            raise AcquisitionBlocked(
+                "historical-weekly publication requires an existing progress ledger"
+            )
+        with AcquisitionLock(self._database, self.ledger_path) as lock:
+            lock.bind()
+            ledger = self.ledger
+            _, publications, _ = ledger.read()
+            published_years = [
+                year for year, publication in publications.items() if publication == "published"
+            ]
+            year = max(published_years, default=self._batch.last_year)
+            result = WeeklyBatchResult("up_to_date", year, None, 0, 0, 0, 0, {})
+            self.refresh_derived_after_publication_locked(ledger, result, "published")
+
     def _assert_runner_stopped(self) -> None:
         checker = getattr(self._runner, "assert_not_running", None)
         if checker is None:
@@ -316,6 +363,31 @@ class WeeklyHistoricalOddsRetriever:
     def mark_publication_locked(self, ledger: ProgressLedger, year: int, state: str) -> None:
         """Record publication while the caller owns the common acquisition lock."""
         ledger.publication(year, state)
+
+    def refresh_derived_after_publication_locked(
+        self,
+        ledger: ProgressLedger,
+        result: WeeklyBatchResult,
+        publication_state: str,
+    ) -> None:
+        """Refresh derived progress files after changing a publication state."""
+        if publication_state == "published":
+            states, publications, _ = ledger.read()
+            cutoff = self._clock().date() - timedelta(days=1)
+            snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+            next_year = self._select_year(states, snapshot.races, cutoff, publications)
+            effective_year = next_year if next_year is not None else self._batch.last_year
+            phase = "acquire" if next_year is not None else "idle"
+        else:
+            effective_year = result.year if result.year is not None else self._batch.last_year
+            phase = "failed"
+        self._write_summary(
+            result,
+            ledger,
+            effective_year=effective_year,
+            phase=phase,
+            publication_state=publication_state,
+        )
 
     def _plan(self, snapshot: RawSnapshot, cutoff: date) -> WeeklyBatchResult:
         if self.ledger_path.exists():
@@ -423,20 +495,48 @@ class WeeklyHistoricalOddsRetriever:
             "new_rows": result.new_rows,
         }
 
-    def _write_summary(self, result: WeeklyBatchResult, ledger: ProgressLedger) -> None:
-        _, _, state_revision = ledger.read()
-        payload = self._result_payload(result) | {
-            "ledger": str(ledger.path),
-            "plan_only": result.plan_only,
-            "state_revision": state_revision,
-        }
+    def _write_summary(
+        self,
+        result: WeeklyBatchResult,
+        ledger: ProgressLedger,
+        *,
+        effective_year: int | None = None,
+        phase: str | None = None,
+        publication_state: str | None = None,
+    ) -> None:
+        _, publications, state_revision = ledger.read()
+        progress_path = self._runtime_dir / "historical-odds-progress.json"
+        if not result.plan_only and result.run_id is None and result.year is not None:
+            try:
+                existing = json.loads(progress_path.read_text(encoding="utf-8"))
+            except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+                existing = None
+            if isinstance(existing, dict) and existing.get("year") == result.year:
+                payload = existing
+                payload["publication"] = publication_state or publications.get(result.year)
+                payload["state_revision"] = state_revision
+            else:
+                payload = self._result_payload(result) | {
+                    "ledger": str(ledger.path),
+                    "plan_only": result.plan_only,
+                    "state_revision": state_revision,
+                }
+        else:
+            payload = self._result_payload(result) | {
+                "ledger": str(ledger.path),
+                "plan_only": result.plan_only,
+                "state_revision": state_revision,
+            }
+        if result.year is not None:
+            payload["publication"] = publication_state or publications.get(result.year)
         atomic_write(
-            self._runtime_dir / "historical-odds-progress.json",
+            progress_path,
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
         )
         if not result.plan_only:
             effective = self._runtime_dir / "historical-odds-effective.toml"
-            year = result.year if result.year is not None else self._batch.last_year
+            year = effective_year or result.year or self._batch.last_year
+            effective_phase = phase or result.status
             atomic_write(
                 effective,
                 "[execution]\n"
@@ -445,7 +545,7 @@ class WeeklyHistoricalOddsRetriever:
                 f"year = {year}\n"
                 f"start_date = {year:04d}-01-01\n"
                 f"end_date_exclusive = {year + 1:04d}-01-01\n"
-                f'phase = "{result.status}"\n'
+                f'phase = "{effective_phase}"\n'
                 "skip_acquired = true\n"
                 "skip_provider_missing = true\n"
                 f"data_specs = {json.dumps(sorted(self._odds_profile.realtime_data_specs))}\n",

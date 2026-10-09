@@ -35,6 +35,7 @@ class DataRetriever:
         jvlink: JVLinkConfig,
         timeout_seconds: float | None = None,
         create_runtime: bool = True,
+        validate_executable: bool = True,
     ) -> None:
         if create_runtime:
             paths.jvlink_runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -48,6 +49,7 @@ class DataRetriever:
             jvlink.executable,
             paths.raw_db,
             timeout_seconds=timeout_seconds,
+            validate_executable=validate_executable,
         )
         builder = JVLinkSettingBuilder(jvlink.seed_setting)
         archive = OddsArchive(paths.raw_db)
@@ -94,6 +96,7 @@ class DataRetriever:
         jvlink_config: Path,
         timeout_seconds: float | None = None,
         create_runtime: bool = True,
+        validate_executable: bool = True,
     ) -> DataRetriever:
         """Construct the retriever from repository TOML configuration."""
         return cls(
@@ -101,6 +104,7 @@ class DataRetriever:
             jvlink=JVLinkConfig.from_toml(jvlink_config),
             timeout_seconds=timeout_seconds,
             create_runtime=create_runtime,
+            validate_executable=validate_executable,
         )
 
     def retrieve_historical(self) -> int:
@@ -118,6 +122,22 @@ class DataRetriever:
         assert self._odds_batch is not None
         validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
         return self._weekly.run(plan_only=plan_only, recover=recover)
+
+    def prepare_historical_weekly_publication(self) -> WeeklyBatchResult:
+        """Reconcile raw additions and plan one complete-Parquet publication."""
+        if self._weekly is None:
+            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+        assert self._odds_batch is not None
+        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
+        return self._weekly.prepare_publication()
+
+    def repair_historical_weekly_derived(self) -> None:
+        """Regenerate historical weekly derived files from the committed ledger."""
+        if self._weekly is None:
+            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+        assert self._odds_batch is not None
+        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
+        self._weekly.repair_derived_publication()
 
     def mark_historical_weekly_published(self, year: int) -> None:
         """Record successful complete-Parquet publication for one weekly year."""
@@ -139,19 +159,39 @@ class DataRetriever:
         validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
         return self._weekly.confirm_provider_missing(race_key, specs)
 
-    def publish_historical_weekly(self, year: int, publisher: Callable[[], T]) -> T:
+    def publish_historical_weekly(
+        self,
+        year: int,
+        publisher: Callable[[], T],
+        *,
+        result: WeeklyBatchResult | None = None,
+    ) -> T:
         """Publish one completed year and record its state under the raw DB lock."""
         if self._weekly is None:
             raise ValueError("[historical_odds.batch] is required for historical-weekly")
         ledger = self._weekly.ledger
         with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
             lock.bind()
+            if result is not None and result.year != year:
+                raise ValueError("publication result year does not match requested year")
+            if result is not None:
+                self._weekly.verify_publication_locked(ledger, year)
             try:
                 published = publisher()
             except BaseException:
                 self._weekly.mark_publication_locked(ledger, year, "failed")
+                if result is not None:
+                    self._weekly.refresh_derived_after_publication_locked(ledger, result, "failed")
                 raise
             self._weekly.mark_publication_locked(ledger, year, "published")
+            if result is not None:
+                try:
+                    self._weekly.refresh_derived_after_publication_locked(
+                        ledger, result, "published"
+                    )
+                except BaseException:
+                    self._weekly.mark_publication_locked(ledger, year, "failed")
+                    raise
             return published
 
     def retrieve_latest(self) -> None:

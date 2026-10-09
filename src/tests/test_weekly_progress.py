@@ -1,5 +1,6 @@
 """Tests for isolated weekly progress bootstrap and reconciliation."""
 
+import json
 import sqlite3
 from datetime import UTC, date, datetime
 from pathlib import Path
@@ -18,7 +19,7 @@ from data.retriever.jvlinktosqlite import (
 from data.retriever.odds_archive import OddsArchive
 from data.retriever.progress import ProgressLedger, RawSnapshot, read_raw_snapshot
 from data.retriever.setting import HistoricalOddsBatch, JVLinkProfile
-from data.retriever.weekly import WeeklyHistoricalOddsRetriever
+from data.retriever.weekly import WeeklyBatchResult, WeeklyHistoricalOddsRetriever
 
 NOW = datetime(2026, 10, 6, 12, tzinfo=UTC)
 FRONTIER = RaceKey(date(2008, 1, 26), "06", "01", "07", "06")
@@ -82,6 +83,124 @@ def test_external_archive_is_adopted_and_missing_state_recovers(tmp_path: Path) 
     }
     with pytest.raises(AcquisitionBlocked, match="disappeared"):
         ledger.reconcile(RawSnapshot((FRONTIER,), {}, {}), NOW)
+
+
+def test_prepare_publication_reconciles_external_archive_after_published_year(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw.db"
+    with sqlite3.connect(raw) as database:
+        database.execute(
+            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
+        )
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0126','06','01','07','06')")
+        columns = (
+            "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
+        )
+        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns})")
+
+    snapshot = read_raw_snapshot(raw, PROFILE, BATCH, date(2026, 10, 5))
+    ledger = ProgressLedger(
+        tmp_path / "runtime" / "historical-odds-progress.db", raw, PROFILE, BATCH
+    )
+    ledger.bootstrap(snapshot, NOW)
+    ledger.publication(2008, "published")
+    with sqlite3.connect(raw) as database:
+        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
+            database.execute(f"INSERT INTO {table} VALUES ('2008','0126','06','01','07','06')")
+
+    builder = Mock()
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, Mock()),
+        raw,
+        builder,
+        OddsArchive(raw),
+        PROFILE,
+        BATCH,
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+
+    plan = retriever.prepare_publication(cutoff=date(2026, 10, 5))
+
+    assert plan.year == 2008
+    assert plan.requested_specs == 0
+    _, publications, _ = retriever.ledger.read()
+    assert publications[2008] == "pending"
+
+    with sqlite3.connect(raw) as database:
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0126','06','01','07','07')")
+    with AcquisitionLock(raw, retriever.ledger_path) as lock:
+        lock.bind()
+        with pytest.raises(AcquisitionBlocked, match="incomplete"):
+            retriever.verify_publication_locked(retriever.ledger, 2008)
+
+
+def test_prepare_publication_requires_existing_progress_ledger(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    with sqlite3.connect(raw) as database:
+        database.execute(
+            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
+        )
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, Mock()),
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        BATCH,
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+
+    with pytest.raises(AcquisitionBlocked, match="existing progress ledger"):
+        retriever.prepare_publication(cutoff=date(2026, 10, 5))
+
+
+def test_publication_summary_preserves_retrieval_metrics(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    with sqlite3.connect(raw) as database:
+        database.execute(
+            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
+        )
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0126','06','01','07','06')")
+        columns = (
+            "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
+        )
+        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns})")
+    snapshot = read_raw_snapshot(raw, PROFILE, BATCH, date(2026, 10, 5))
+    runtime = tmp_path / "runtime"
+    ledger = ProgressLedger(runtime / "historical-odds-progress.db", raw, PROFILE, BATCH)
+    ledger.bootstrap(snapshot, NOW)
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, Mock()),
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        BATCH,
+        runtime,
+        clock=lambda: NOW,
+    )
+    runtime.mkdir(exist_ok=True)
+    (runtime / "historical-odds-progress.json").write_text(
+        '{"year": 2008, "run_id": "run", "requested_specs": 4, "new_rows": {"0B41": 2}}\n',
+        encoding="utf-8",
+    )
+
+    retriever._write_summary(
+        WeeklyBatchResult("completed", 2008, None, 0, 0, 0, 0, {}, False, {}),
+        ledger,
+        publication_state="published",
+    )
+
+    payload = json.loads((runtime / "historical-odds-progress.json").read_text(encoding="utf-8"))
+    assert payload["run_id"] == "run"
+    assert payload["requested_specs"] == 4
+    assert payload["new_rows"] == {"0B41": 2}
+    assert payload["publication"] == "published"
 
 
 def test_new_past_candidate_is_pending_instead_of_provider_missing(tmp_path: Path) -> None:

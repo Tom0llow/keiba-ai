@@ -160,10 +160,6 @@ class JVLinkSettingBuilder:
 
     def __init__(self, seed_setting: Path) -> None:
         self._seed_setting = seed_setting.expanduser().resolve()
-        if not self._seed_setting.is_file():
-            raise FileNotFoundError(
-                f"JVLinkToSQLite seed setting does not exist: {self._seed_setting}"
-            )
 
     def build(
         self,

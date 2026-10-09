@@ -79,6 +79,7 @@ def test_execute_parses_data_spec_api_returncodes(tmp_path: Path) -> None:
         frozenset({"0B41"}),
         api_results={"0B41": ("JVOpen", -1)},
         open_returncodes={"0B41": -1},
+        process_returncode=0,
     )
 
 
@@ -91,7 +92,9 @@ def test_execute_does_not_treat_jvread_minus_one_as_no_data(tmp_path: Path) -> N
         run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
         result = runner.execute(setting)
 
-    assert result == JVLinkExecutionResult({"0B41": -1}, api_results={"0B41": ("JVRead", -1)})
+    assert result == JVLinkExecutionResult(
+        {"0B41": -1}, api_results={"0B41": ("JVRead", -1)}, process_returncode=0
+    )
 
 
 def test_execute_marks_jvopen_error_as_fatal(tmp_path: Path) -> None:
@@ -109,6 +112,7 @@ def test_execute_marks_jvopen_error_as_fatal(tmp_path: Path) -> None:
         api_results={"0B41": ("JVOpen", -504)},
         open_returncodes={"0B41": -504},
         fatal_returncodes={"0B41": -504},
+        process_returncode=0,
     )
 
 

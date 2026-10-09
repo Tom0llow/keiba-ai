@@ -112,6 +112,7 @@ class JVLinkToSQLiteRunner:
         database: Path,
         *,
         timeout_seconds: float | None = None,
+        validate_executable: bool = True,
     ) -> None:
         """Configure the executable and SQLite destination used by each run.
 
@@ -129,7 +130,11 @@ class JVLinkToSQLiteRunner:
             ValueError: If the executable is not a file, the database path names
                 an existing non-file, or the timeout is not positive.
         """
-        self._executable = _resolve_existing_file(executable, "JVLinkToSQLite executable")
+        self._executable = (
+            _resolve_existing_file(executable, "JVLinkToSQLite executable")
+            if validate_executable
+            else executable.expanduser().resolve()
+        )
         self._database = database.expanduser().resolve()
         if not self._database.parent.is_dir():
             raise FileNotFoundError(
@@ -198,7 +203,7 @@ class JVLinkToSQLiteRunner:
                 parsed.latest,
                 parsed.open_returncodes,
                 parsed.fatal_returncodes,
-                None,
+                completed.returncode,
             )
         except subprocess.TimeoutExpired as exc:
             _echo_output(exc.stdout)

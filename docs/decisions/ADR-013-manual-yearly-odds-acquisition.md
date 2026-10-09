@@ -15,9 +15,12 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
 
 ## Decision
 
-1. `historical-weekly` は一回の起動で最古の未完了年だけを処理し、過去日
-   cutoffまでの候補を時系列に処理する。`scripts/retrieve-historical-odds-weekly.ps1`
-   は単発起動して終了し、タスク登録・常駐ループ・曜日による待機を行わない。
+1. `historical-weekly` は最古の未完了年を1年単位で処理し、過去日
+   cutoffまでの候補を時系列に処理する。JVLink取得とParquet公開は別コマンドとし、取得
+   コマンドは1年分で終了する。`preprocess historical-weekly` はraw取得完了を確認してから
+   完全Parquetを公開し、成功時だけ台帳の公開状態を`published`へ進める。
+   `scripts/retrieve-historical-odds-weekly.ps1` は取得コマンドだけを単発起動し、タスク登録・
+   常駐スケジューラ・曜日による待機を行わない。
 2. 取得ポリシーは `config/jvlink.toml` の
    `[historical_odds.batch]` に置き、実行状態はGit管理外のruntime SQLite
    (`historical-odds-progress.db`)を正とする。race_idとDataSpecの組を台帳の

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
-from dataclasses import asdict
+from dataclasses import asdict, replace
 from datetime import datetime
 from math import isnan
 from pathlib import Path
@@ -191,13 +191,24 @@ def main(
     raise typer.BadParameter("--mode must be 'historical', 'latest', or 'realtime'")
 
 
-def _retriever(data_config: Path, jvlink_config: Path, *, plan_only: bool = False) -> DataRetriever:
+def _retriever(
+    data_config: Path,
+    jvlink_config: Path,
+    *,
+    plan_only: bool = False,
+    validate_executable: bool = True,
+) -> DataRetriever:
     if not plan_only:
-        return DataRetriever.from_toml(data_config=data_config, jvlink_config=jvlink_config)
+        return DataRetriever.from_toml(
+            data_config=data_config,
+            jvlink_config=jvlink_config,
+            validate_executable=validate_executable,
+        )
     return DataRetriever.from_toml(
         data_config=data_config,
         jvlink_config=jvlink_config,
         create_runtime=not plan_only,
+        validate_executable=False,
     )
 
 
@@ -270,11 +281,9 @@ def retrieve_historical(
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
 ) -> None:
-    """Build historical raw data and publish a complete Parquet snapshot."""
+    """Retrieve historical raw data through JVLink."""
     count = _retriever(data_config, jvlink_config).retrieve_historical()
-    tables = _preprocesser(data_config).rebuild()
     typer.echo(f"historical odds retrieved for {count} races")
-    typer.echo(f"processed snapshot published: {len(tables)} tables")
 
 
 def retrieve_historical_weekly(
@@ -284,22 +293,9 @@ def retrieve_historical_weekly(
     plan_only: bool = False,
     recover: bool = False,
 ) -> None:
-    """Run one manually started historical odds year and print its report."""
+    """Retrieve one historical odds year through JVLink."""
     retriever = _retriever(data_config, jvlink_config, plan_only=plan_only)
-    if recover:
-        result = retriever.retrieve_historical_weekly(plan_only=plan_only, recover=True)
-    else:
-        result = retriever.retrieve_historical_weekly(plan_only=plan_only)
-    if not plan_only and result.status == "completed" and result.year is not None:
-        typer.echo(f"Starting complete Parquet rebuild for historical year {result.year}.")
-        try:
-            tables = retriever.publish_historical_weekly(
-                result.year, lambda: _preprocesser(data_config).rebuild()
-            )
-        except BaseException:
-            typer.echo("Complete Parquet rebuild failed.", err=True)
-            raise
-        typer.echo(f"Complete Parquet rebuild completed: {len(tables)} tables published.")
+    result = retriever.retrieve_historical_weekly(plan_only=plan_only, recover=recover)
     typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
     if result.status == "failed":
         raise typer.Exit(code=1)
@@ -333,11 +329,9 @@ def retrieve_latest(
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
 ) -> None:
-    """Retrieve latest raw data and refresh the complete Parquet snapshot."""
+    """Retrieve latest raw data through JVLink."""
     _retriever(data_config, jvlink_config).retrieve_latest()
-    tables = _preprocesser(data_config).update()
     typer.echo("latest race data retrieved")
-    typer.echo(f"processed snapshot published: {len(tables)} tables")
 
 
 def retrieve_realtime(
@@ -345,7 +339,7 @@ def retrieve_realtime(
     data_config: Path,
     jvlink_config: Path,
 ) -> None:
-    """Retrieve and publish prediction-time Parquet for one target race."""
+    """Retrieve prediction-time odds for one target race through JVLink."""
     inserted = _retriever(data_config, jvlink_config).retrieve_realtime(
         race_date=race_key.race_date,
         jyo_code=race_key.jyo_code,
@@ -353,9 +347,7 @@ def retrieve_realtime(
         nichiji=race_key.nichiji,
         race_number=race_key.race_number,
     )
-    tables = _preprocesser(data_config).update_race(race_key)
     typer.echo(f"realtime odds archived: {inserted} rows")
-    typer.echo(f"realtime Parquet published: {sum(tables.values())} rows")
 
 
 @preprocess_app.command("rebuild")
@@ -365,6 +357,74 @@ def preprocess_rebuild(
     """Rebuild a complete Parquet snapshot without retrieving new raw data."""
     tables = _preprocesser(data_config).rebuild()
     typer.echo(f"processed snapshot published: {len(tables)} tables")
+
+
+@preprocess_app.command("historical-weekly")
+def preprocess_historical_weekly(
+    data_config: DataConfigOption = Path("config/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+) -> None:
+    """Publish one raw-complete historical year and mark it published."""
+    retriever = _retriever(data_config, jvlink_config, validate_executable=False)
+    plan = retriever.prepare_historical_weekly_publication()
+    if plan.year is None:
+        retriever.repair_historical_weekly_derived()
+        typer.echo(json.dumps({"status": "up_to_date"}, sort_keys=True))
+        return
+    if plan.requested_specs:
+        typer.echo(
+            json.dumps(
+                {
+                    "status": "retrieval_pending",
+                    "year": plan.year,
+                    "requested_specs": plan.requested_specs,
+                },
+                sort_keys=True,
+            )
+        )
+        raise typer.Exit(code=1)
+    result = replace(plan, status="completed", plan_only=False)
+    assert result.year is not None
+    typer.echo(f"Starting complete Parquet rebuild for historical year {result.year}.")
+    try:
+        tables = retriever.publish_historical_weekly(
+            result.year,
+            lambda: _preprocesser(data_config).rebuild(),
+            result=result,
+        )
+    except BaseException:
+        typer.echo("Complete Parquet rebuild failed.", err=True)
+        raise
+    typer.echo(f"Complete Parquet rebuild completed: {len(tables)} tables published.")
+    typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
+
+
+@preprocess_app.command("realtime")
+def preprocess_realtime(
+    data_config: DataConfigOption = Path("config/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    race_datetime: Annotated[
+        datetime | None,
+        typer.Option("--date", formats=["%Y-%m-%d"], help="Race date (YYYY-MM-DD)."),
+    ] = None,
+    jyo_code: Annotated[str | None, typer.Option("--jyo", help="Two-digit JRA venue code.")] = None,
+    kaiji: Annotated[str | None, typer.Option("--kaiji", help="Two-digit meeting number.")] = None,
+    nichiji: Annotated[str | None, typer.Option("--nichiji", help="Two-digit meeting day.")] = None,
+    race_number: Annotated[
+        str | None, typer.Option("--race", help="Two-digit race number.")
+    ] = None,
+) -> None:
+    """Publish prediction-time Parquet for one already retrieved race."""
+    race_key = _resolve_realtime_race(
+        jvlink_config,
+        race_datetime,
+        jyo_code,
+        kaiji,
+        nichiji,
+        race_number,
+    )
+    tables = _preprocesser(data_config).update_race(race_key)
+    typer.echo(f"realtime Parquet published: {sum(tables.values())} rows")
 
 
 @model_app.command("audit")

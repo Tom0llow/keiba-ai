@@ -177,8 +177,11 @@ complete `RaceKey` plus DataSpec, accepts the configured initial frontier gaps a
 `provider_missing`, and processes only the oldest unfinished year up to a
 past-date cutoff. The generated execution TOML and JSON report are derived
 runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
-weekly PowerShell entry point starts one process and exits. It does not register
-Task Scheduler jobs, run a resident loop, or inspect the weekday. A successful
+weekly PowerShell entry point starts one process and does not register Task
+Scheduler jobs or inspect the weekday. Within that process, the CLI retrieves
+one year, publishes its complete Parquet snapshot, advances the runtime state,
+and continues with the next year until the operator stops it, a retrieval or
+publication fails, or no target years remain. A successful
 JVLink/JVRTOpen request that leaves a valid empty realtime staging table is
 recorded as `provider_missing/jvopen_no_data` only when the captured API result
 is the documented `-1` no-data result; the current run continues with the next
@@ -256,11 +259,12 @@ new version and atomically switches the race-local `CURRENT` pointer only after
 both files validate. Realtime preprocessing therefore stays race-scoped rather
 than rebuilding the complete historical dataset for each prediction refresh.
 
-Historical retrieval automatically calls a complete `rebuild`. Latest retrieval
-automatically calls a complete `update` (currently implemented as a complete
-snapshot refresh). Realtime retrieval automatically calls `update_race` for the
-target race. A standalone `preprocess rebuild` command is also available when
-raw data already exists.
+Retrieval commands only write raw SQLite through JVLink. Complete historical/latest
+Parquet is published separately with `preprocess rebuild`; prediction-time
+Parquet is published with `preprocess realtime` after the target race has been
+retrieved. `preprocess historical-weekly` additionally records the weekly
+publication state after a completed raw year is rebuilt. A standalone
+`preprocess rebuild` command remains available when raw data already exists.
 
 ADR-008 supersedes ADR-003 for this preprocessing/publication contract.
 
