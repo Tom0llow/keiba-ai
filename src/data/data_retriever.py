@@ -2,17 +2,27 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date
 from pathlib import Path
+from typing import TypeVar
 
 from data.config import DataPaths
 from data.race_key import RaceKey
+from data.retriever.acquisition_lock import AcquisitionLock
 from data.retriever.historical import HistoricalRetriever
 from data.retriever.jvlinktosqlite import JVLinkToSQLiteRunner
 from data.retriever.latest import LatestRetriever
 from data.retriever.odds_archive import OddsArchive
 from data.retriever.realtime import RealtimeRetriever
-from data.retriever.setting import JVLinkConfig, JVLinkSettingBuilder
+from data.retriever.setting import (
+    JVLinkConfig,
+    JVLinkSettingBuilder,
+    validate_batch_profiles,
+)
+from data.retriever.weekly import WeeklyBatchResult, WeeklyHistoricalOddsRetriever
+
+T = TypeVar("T")
 
 
 class DataRetriever:
@@ -24,9 +34,16 @@ class DataRetriever:
         paths: DataPaths,
         jvlink: JVLinkConfig,
         timeout_seconds: float | None = None,
+        create_runtime: bool = True,
     ) -> None:
-        paths.jvlink_runtime_dir.mkdir(parents=True, exist_ok=True)
-        paths.raw_db.parent.mkdir(parents=True, exist_ok=True)
+        if create_runtime:
+            paths.jvlink_runtime_dir.mkdir(parents=True, exist_ok=True)
+            paths.raw_db.parent.mkdir(parents=True, exist_ok=True)
+        self._raw_db = paths.raw_db
+        self._ledger_path = paths.jvlink_runtime_dir / "historical-odds-progress.db"
+        self._historical_profile = jvlink.historical
+        self._odds_profile = jvlink.historical_odds
+        self._odds_batch = jvlink.historical_odds_batch
         runner = JVLinkToSQLiteRunner(
             jvlink.executable,
             paths.raw_db,
@@ -55,6 +72,19 @@ class DataRetriever:
             jvlink.realtime_history,
             jvlink.realtime_current,
         )
+        self._weekly = (
+            WeeklyHistoricalOddsRetriever(
+                runner,
+                paths.raw_db,
+                builder,
+                archive,
+                jvlink.historical_odds,
+                jvlink.historical_odds_batch,
+                paths.jvlink_runtime_dir,
+            )
+            if jvlink.historical_odds_batch is not None
+            else None
+        )
 
     @classmethod
     def from_toml(
@@ -63,21 +93,62 @@ class DataRetriever:
         data_config: Path,
         jvlink_config: Path,
         timeout_seconds: float | None = None,
+        create_runtime: bool = True,
     ) -> DataRetriever:
         """Construct the retriever from repository TOML configuration."""
         return cls(
             paths=DataPaths.from_toml(data_config),
             jvlink=JVLinkConfig.from_toml(jvlink_config),
             timeout_seconds=timeout_seconds,
+            create_runtime=create_runtime,
         )
 
     def retrieve_historical(self) -> int:
         """Retrieve historical race data and configured time-series odds."""
-        return self._historical.retrieve()
+        with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
+            lock.bind()
+            return self._historical.retrieve()
+
+    def retrieve_historical_weekly(
+        self, *, plan_only: bool = False, recover: bool = False
+    ) -> WeeklyBatchResult:
+        """Run one manual year-scoped historical odds batch."""
+        if self._weekly is None:
+            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+        assert self._odds_batch is not None
+        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
+        return self._weekly.run(plan_only=plan_only, recover=recover)
+
+    def mark_historical_weekly_published(self, year: int) -> None:
+        """Record successful complete-Parquet publication for one weekly year."""
+        self.mark_historical_weekly_publication(year, "published")
+
+    def mark_historical_weekly_publication(self, year: int, state: str) -> None:
+        """Record a successful or failed complete-Parquet publication."""
+        if self._weekly is None:
+            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+        self._weekly.mark_publication(year, state)
+
+    def publish_historical_weekly(self, year: int, publisher: Callable[[], T]) -> T:
+        """Publish one completed year and record its state under the raw DB lock."""
+        if self._weekly is None:
+            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+        ledger = self._weekly.ledger
+        with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
+            lock.bind()
+            try:
+                published = publisher()
+            except BaseException:
+                self._weekly.mark_publication_locked(ledger, year, "failed")
+                raise
+            self._weekly.mark_publication_locked(ledger, year, "published")
+            return published
 
     def retrieve_latest(self) -> None:
         """Retrieve the configured latest incremental race data."""
-        self._latest.retrieve()
+        with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
+            lock.bind()
+            self._latest.retrieve()
 
     def retrieve_realtime(
         self,
@@ -89,4 +160,8 @@ class DataRetriever:
         race_number: str,
     ) -> int:
         """Retrieve prediction-time O1/O2 odds for one target race."""
-        return self._realtime.retrieve(RaceKey(race_date, jyo_code, kaiji, nichiji, race_number))
+        with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
+            lock.bind()
+            return self._realtime.retrieve(
+                RaceKey(race_date, jyo_code, kaiji, nichiji, race_number)
+            )

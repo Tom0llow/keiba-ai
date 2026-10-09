@@ -112,3 +112,40 @@ def test_timeout_must_be_positive(tmp_path: Path, timeout_seconds: float) -> Non
 
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):
         JVLinkToSQLiteRunner(executable, database, timeout_seconds=timeout_seconds)
+
+
+def test_assert_not_running_uses_tasklist_csv(tmp_path: Path) -> None:
+    executable, _, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+
+    with (
+        patch("data.retriever.jvlinktosqlite.os.name", "nt"),
+        patch("data.retriever.jvlinktosqlite.subprocess.run") as run,
+    ):
+        run.return_value = subprocess.CompletedProcess(
+            ["tasklist"], 0, '"other.exe","1","Console","1","1 K"\n', ""
+        )
+        runner.assert_not_running()
+
+    run.assert_called_once_with(
+        ["tasklist", "/FI", "IMAGENAME eq JVLinkToSQLite.exe", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        check=False,
+        shell=False,
+    )
+
+
+def test_assert_not_running_rejects_matching_process(tmp_path: Path) -> None:
+    executable, _, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+
+    with (
+        patch("data.retriever.jvlinktosqlite.os.name", "nt"),
+        patch("data.retriever.jvlinktosqlite.subprocess.run") as run,
+    ):
+        run.return_value = subprocess.CompletedProcess(
+            ["tasklist"], 0, '"JVLinkToSQLite.exe","1","Console","1","1 K"\n', ""
+        )
+        with pytest.raises(JVLinkToSQLiteError, match="still running"):
+            runner.assert_not_running()

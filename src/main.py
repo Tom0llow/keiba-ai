@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 from collections.abc import Mapping
+from dataclasses import asdict
 from datetime import datetime
 from math import isnan
 from pathlib import Path
@@ -56,6 +57,14 @@ def main(
         str | None,
         typer.Option("--mode", help="Retrieval mode for the flag-based interface."),
     ] = None,
+    plan_only: Annotated[
+        bool,
+        typer.Option("--plan-only", help="Inspect a historical-weekly plan without writing."),
+    ] = False,
+    recover: Annotated[
+        bool,
+        typer.Option("--recover", help="Quarantine and recover an interrupted weekly request."),
+    ] = False,
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
     race_datetime: Annotated[
@@ -74,6 +83,8 @@ def main(
         if (
             retrieve
             or mode is not None
+            or plan_only
+            or recover
             or any(
                 value is not None
                 for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
@@ -83,16 +94,31 @@ def main(
         return
 
     if not retrieve and mode is None:
+        if plan_only or recover:
+            raise typer.BadParameter(
+                "--plan-only/--recover requires --retrieve --mode historical-weekly"
+            )
         return
+    if plan_only and recover:
+        raise typer.BadParameter("--plan-only cannot be combined with --recover")
     if not retrieve:
         raise typer.BadParameter("--mode requires --retrieve")
     if mode == "historical":
+        if plan_only or recover:
+            raise typer.BadParameter("--plan-only/--recover is only valid for historical-weekly")
         retrieve_historical(data_config, jvlink_config)
         return
+    if mode == "historical-weekly":
+        retrieve_historical_weekly(data_config, jvlink_config, plan_only=plan_only, recover=recover)
+        return
     if mode == "latest":
+        if plan_only or recover:
+            raise typer.BadParameter("--plan-only/--recover is only valid for historical-weekly")
         retrieve_latest(data_config, jvlink_config)
         return
     if mode == "realtime":
+        if plan_only or recover:
+            raise typer.BadParameter("--plan-only/--recover is only valid for historical-weekly")
         race_key = _resolve_realtime_race(
             jvlink_config,
             race_datetime,
@@ -106,8 +132,14 @@ def main(
     raise typer.BadParameter("--mode must be 'historical', 'latest', or 'realtime'")
 
 
-def _retriever(data_config: Path, jvlink_config: Path) -> DataRetriever:
-    return DataRetriever.from_toml(data_config=data_config, jvlink_config=jvlink_config)
+def _retriever(data_config: Path, jvlink_config: Path, *, plan_only: bool = False) -> DataRetriever:
+    if not plan_only:
+        return DataRetriever.from_toml(data_config=data_config, jvlink_config=jvlink_config)
+    return DataRetriever.from_toml(
+        data_config=data_config,
+        jvlink_config=jvlink_config,
+        create_runtime=not plan_only,
+    )
 
 
 def _preprocesser(data_config: Path) -> DataPreprocesser:
@@ -152,6 +184,29 @@ def retrieve_historical(
     tables = _preprocesser(data_config).rebuild()
     typer.echo(f"historical odds retrieved for {count} races")
     typer.echo(f"processed snapshot published: {len(tables)} tables")
+
+
+def retrieve_historical_weekly(
+    data_config: DataConfigOption = Path("config/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    *,
+    plan_only: bool = False,
+    recover: bool = False,
+) -> None:
+    """Run one manually started historical odds year and print its report."""
+    retriever = _retriever(data_config, jvlink_config, plan_only=plan_only)
+    if recover:
+        result = retriever.retrieve_historical_weekly(plan_only=plan_only, recover=True)
+    else:
+        result = retriever.retrieve_historical_weekly(plan_only=plan_only)
+    if not plan_only and result.status == "completed" and result.year is not None:
+        tables = retriever.publish_historical_weekly(
+            result.year, lambda: _preprocesser(data_config).rebuild()
+        )
+        typer.echo(f"processed snapshot published: {len(tables)} tables")
+    typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
+    if result.status == "failed":
+        raise typer.Exit(code=1)
 
 
 def retrieve_latest(

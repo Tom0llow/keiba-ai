@@ -98,8 +98,11 @@ src/
 │  │  ├─ jvlinktosqlite.py
 │  │  ├─ latest.py
 │  │  ├─ odds_archive.py
+│  │  ├─ acquisition_lock.py
+│  │  ├─ progress.py
 │  │  ├─ realtime.py
-│  │  └─ setting.py
+│  │  ├─ setting.py
+│  │  └─ weekly.py
 │  ├─ preprocesser/
 │  │  ├─ __init__.py
 │  │  ├─ read_sqlite.py
@@ -167,6 +170,19 @@ prediction retrieval continues to request its configured history/current specs.
 Because JVLinkToSQLite recreates realtime O1/O2 staging tables on subsequent
 realtime executions, each race's result is archived before the next race is
 requested.
+
+`historical-weekly` is the manual, year-scoped batch boundary for long-running
+historical odds acquisition. It uses a runtime SQLite progress ledger keyed by
+complete `RaceKey` plus DataSpec, accepts the configured initial frontier gaps as
+`provider_missing`, and processes only the oldest unfinished year up to a
+past-date cutoff. The generated execution TOML and JSON report are derived
+runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
+weekly PowerShell entry point starts one process and exits. It does not register
+Task Scheduler jobs, run a resident loop, or inspect the weekday. Empty or
+missing realtime staging is not classified as provider-side missing data until
+JVLink's real response contract is verified, so such observations remain failed
+and retryable. Historical, latest, realtime, and weekly writes share the raw DB
+OS lock and reject unresolved weekly requests.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the
@@ -260,6 +276,11 @@ XML tag details remain inside the adapter.
 snapshots, and realtime Parquet versions are local artifacts rather than Git
 contents. Git versions the code and declarative retrieval/preprocessing policy,
 not the acquired datasets.
+
+The weekly progress ledger, derived execution TOML, reports, and recovery
+artifacts live under the configured JVLink runtime directory and are not model
+inputs. The ledger is the source of truth for weekly state; generated artifacts
+are atomically regenerated from it after a raw archive commit.
 
 ADR-009 selects LightGBM LambdaRank for the ranking MVP and a later top-3
 Plackett–Luce custom objective for finishing-order probabilities. The current

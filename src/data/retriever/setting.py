@@ -48,6 +48,37 @@ class JVLinkProfile:
 
 
 @dataclass(frozen=True)
+class HistoricalOddsBatch:
+    """Fixed year range and user-approved bootstrap frontier for weekly retrieval."""
+
+    first_year: int
+    last_year: int
+    years_per_run: int
+    accept_existing_gaps_through: RaceKey
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not int
+            for value in (self.first_year, self.last_year, self.years_per_run)
+        ):
+            raise ValueError("historical_odds.batch years must be integers")
+        if not 1000 <= self.first_year <= self.last_year <= 9998:
+            raise ValueError("historical_odds.batch year range is invalid")
+        if self.years_per_run != 1:
+            raise ValueError("historical_odds.batch.years_per_run must be 1")
+        if (
+            not self.first_year
+            <= self.accept_existing_gaps_through.race_date.year
+            <= self.last_year
+        ):
+            raise ValueError("historical_odds.batch frontier must lie in the managed year range")
+        if self.accept_existing_gaps_through.jyo_code not in {
+            f"{code:02d}" for code in range(1, 11)
+        }:
+            raise ValueError("historical_odds.batch frontier must identify a JRA venue")
+
+
+@dataclass(frozen=True)
 class JVLinkConfig:
     """Local JVLinkToSQLite paths, retrieval profiles, and target race."""
 
@@ -59,6 +90,7 @@ class JVLinkConfig:
     realtime_history: JVLinkProfile
     realtime_current: JVLinkProfile
     realtime_race: RaceKey | None = None
+    historical_odds_batch: HistoricalOddsBatch | None = None
 
     @classmethod
     def from_toml(cls, config_path: Path) -> JVLinkConfig:
@@ -77,7 +109,50 @@ class JVLinkConfig:
             realtime_history=_load_profile(config, "realtime_history"),
             realtime_current=_load_profile(config, "realtime_current"),
             realtime_race=_optional_race_key(config, "realtime"),
+            historical_odds_batch=_load_batch(config),
         )
+
+
+def validate_batch_profiles(
+    historical: JVLinkProfile, odds: JVLinkProfile, batch: HistoricalOddsBatch
+) -> None:
+    """Reject incompatible base updates and unsupported weekly odds policies."""
+    if historical.normal_update or historical.setup_update or historical.realtime_update:
+        raise ValueError("historical-weekly requires all historical base updates to be disabled")
+    if odds.normal_update or odds.setup_update or not odds.realtime_update:
+        raise ValueError("historical-weekly requires only realtime odds updates")
+    if not odds.realtime_data_specs or not odds.realtime_data_specs <= {"0B41", "0B42"}:
+        raise ValueError("historical-weekly supports only 0B41 and 0B42")
+    if odds.race_start_date is None or odds.race_start_date.year != batch.first_year:
+        raise ValueError("historical_odds.race_start_date must lie in batch.first_year")
+    if batch.accept_existing_gaps_through.race_date < odds.race_start_date:
+        raise ValueError("historical_odds.batch frontier precedes race_start_date")
+
+
+def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
+    odds = _require_table(config, "historical_odds")
+    if "batch" not in odds:
+        return None
+    section = _require_table(odds, "batch")
+    allowed = {"first_year", "last_year", "years_per_run", "accept_existing_gaps_through"}
+    if section.keys() - allowed:
+        raise ValueError("historical_odds.batch contains unsupported settings")
+    years: list[int] = []
+    for key in ("first_year", "last_year", "years_per_run"):
+        value = section.get(key)
+        if type(value) is not int:
+            raise ValueError(f"historical_odds.batch.{key} must be an integer")
+        years.append(value)
+    frontier = _require_string(section, "accept_existing_gaps_through", "historical_odds.batch")
+    try:
+        race_date, jyo, kaiji, nichiji, race = frontier.split("/")
+        parsed_date = date.fromisoformat(race_date)
+        if parsed_date.isoformat() != race_date:
+            raise ValueError("date must use YYYY-MM-DD")
+        race_key = RaceKey(parsed_date, jyo, kaiji, nichiji, race)
+    except ValueError as exc:
+        raise ValueError("historical_odds.batch.accept_existing_gaps_through is invalid") from exc
+    return HistoricalOddsBatch(years[0], years[1], years[2], race_key)
 
 
 class JVLinkSettingBuilder:

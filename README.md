@@ -137,6 +137,8 @@ Install dependencies and run commands from the repository root:
 uv sync --locked
 
 uv run python src/main.py --retrieve --mode=historical
+uv run python src/main.py --retrieve --mode=historical-weekly
+pwsh -NoProfile -File scripts/retrieve-historical-odds-weekly.ps1
 uv run python src/main.py --retrieve --mode=latest
 uv run python src/main.py --retrieve --mode=realtime
 ```
@@ -145,6 +147,11 @@ Retrieval and preprocessing are coupled at the CLI boundary:
 
 - `--retrieve --mode=historical`: run enabled base updates, retrieve historical odds, then
   publish a complete Parquet snapshot.
+- `--retrieve --mode=historical-weekly`: manually retrieve the oldest unfinished year of
+  historical O1/O2 odds, record per-race progress, and publish after the year completes.
+  Use `--plan-only` to inspect the next year without writing or starting JVLinkToSQLite.
+  The PowerShell script above is a single-run wrapper; it does not register Task Scheduler
+  jobs or apply a weekday rule.
 - `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
   snapshot.
 - `--retrieve --mode=realtime`: retrieve and archive the target race's history/current

@@ -175,3 +175,10 @@ def test_repository_config_retrieves_only_missing_historical_odds() -> None:
     assert config.historical_odds.skip_existing
     assert config.historical_odds.race_start_date == date(2003, 10, 4)
     assert config.historical_odds.realtime_data_specs == frozenset({"0B41", "0B42"})
+    assert config.historical_odds_batch is not None
+    assert config.historical_odds_batch.first_year == 2003
+    assert config.historical_odds_batch.last_year == 2026
+    assert config.historical_odds_batch.years_per_run == 1
+    assert config.historical_odds_batch.accept_existing_gaps_through == RaceKey(
+        date(2008, 1, 26), "06", "01", "07", "06"
+    )

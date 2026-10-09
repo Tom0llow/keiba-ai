@@ -9,6 +9,7 @@ from unittest.mock import Mock, patch
 from typer.testing import CliRunner
 
 from data.race_key import RaceKey
+from data.retriever.weekly import WeeklyBatchResult
 from main import app
 from models.evaluate_model import RankingMetrics
 
@@ -48,6 +49,56 @@ def test_latest_cli_retrieves_then_refreshes_processed_data() -> None:
     assert result.exit_code == 0
     retriever.retrieve_latest.assert_called_once_with()
     preprocesser.update.assert_called_once_with()
+
+
+def test_historical_weekly_cli_is_single_shot_and_plan_only_is_forwarded() -> None:
+    retriever = Mock()
+    retriever.retrieve_historical_weekly.return_value = WeeklyBatchResult(
+        "plan", 2008, None, 4, 8, 0, 8, {}, True
+    )
+    with patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml:
+        result = runner.invoke(
+            app,
+            ["--retrieve", "--mode=historical-weekly", "--plan-only"],
+        )
+
+    assert result.exit_code == 0
+    assert '"year": 2008' in result.stdout
+    retriever.retrieve_historical_weekly.assert_called_once_with(plan_only=True)
+    assert from_toml.call_args.kwargs["create_runtime"] is False
+
+
+def test_historical_weekly_cli_publishes_after_completed_year() -> None:
+    retriever = Mock()
+    retriever.retrieve_historical_weekly.return_value = WeeklyBatchResult(
+        "completed", 2008, "run", 4, 8, 0, 0, {}
+    )
+    preprocesser = Mock()
+    preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
+    retriever.publish_historical_weekly.side_effect = lambda year, publisher: publisher()
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
+        result = runner.invoke(app, ["--retrieve", "--mode=historical-weekly"])
+
+    assert result.exit_code == 0
+    retriever.publish_historical_weekly.assert_called_once()
+    assert retriever.publish_historical_weekly.call_args.args[0] == 2008
+    assert callable(retriever.publish_historical_weekly.call_args.args[1])
+    preprocesser.rebuild.assert_called_once_with()
+
+
+def test_historical_weekly_cli_returns_failure_for_failed_batch() -> None:
+    retriever = Mock()
+    retriever.retrieve_historical_weekly.return_value = WeeklyBatchResult(
+        "failed", 2008, "run", 1, 2, 2, 2, {}
+    )
+    with patch("main.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(app, ["--retrieve", "--mode=historical-weekly"])
+
+    assert result.exit_code == 1
+    assert '"status": "failed"' in result.stdout
 
 
 def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:

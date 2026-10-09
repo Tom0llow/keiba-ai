@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import csv
+import os
 import subprocess
 from pathlib import Path
 
@@ -103,6 +105,36 @@ class JVLinkToSQLiteRunner:
             ) from exc
         except OSError as exc:
             raise JVLinkToSQLiteError(f"failed to start JVLinkToSQLite: {exc}") from exc
+
+    def assert_not_running(self) -> None:
+        """Fail closed unless no configured JV-Link executable is still running."""
+        if os.name != "nt":
+            raise JVLinkToSQLiteError("cannot verify JVLinkToSQLite process on this platform")
+        try:
+            result = subprocess.run(
+                [
+                    "tasklist",
+                    "/FI",
+                    f"IMAGENAME eq {self._executable.name}",
+                    "/FO",
+                    "CSV",
+                    "/NH",
+                ],
+                capture_output=True,
+                text=True,
+                check=False,
+                shell=False,
+            )
+        except OSError as exc:
+            raise JVLinkToSQLiteError(f"failed to inspect JVLinkToSQLite process: {exc}") from exc
+        if result.returncode != 0:
+            raise JVLinkToSQLiteError(
+                f"tasklist failed while inspecting JVLinkToSQLite: {result.returncode}"
+            )
+        executable_name = self._executable.name.casefold()
+        for row in csv.reader(result.stdout.splitlines()):
+            if row and row[0].strip().casefold() == executable_name:
+                raise JVLinkToSQLiteError("JVLinkToSQLite is still running")
 
 
 def _resolve_existing_file(path: Path, label: str) -> Path:
