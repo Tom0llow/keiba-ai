@@ -65,7 +65,6 @@ skip_existing = true
 first_year = 2003
 last_year = 2026
 years_per_run = 1
-accept_existing_gaps_through = "2008-01-26/06/01/07/06"
 
 [latest]
 normal_update = true

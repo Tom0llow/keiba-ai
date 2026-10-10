@@ -17,9 +17,14 @@ from data.retriever.jvlinktosqlite import (
     JVLinkToSQLiteRunner,
 )
 from data.retriever.odds_archive import OddsArchive
-from data.retriever.progress import ProgressLedger, RawSnapshot, read_raw_snapshot
+from data.retriever.progress import (
+    ProgressLedger,
+    RawSnapshot,
+    _legacy_policy_hash,
+    read_raw_snapshot,
+)
 from data.retriever.setting import HistoricalOddsBatch, JVLinkProfile
-from data.retriever.weekly import WeeklyBatchResult, WeeklyHistoricalOddsRetriever
+from data.retriever.weekly import WeeklyHistoricalOddsRetriever
 
 NOW = datetime(2026, 10, 6, 12, tzinfo=UTC)
 FRONTIER = RaceKey(date(2008, 1, 26), "06", "01", "07", "06")
@@ -32,10 +37,10 @@ PROFILE = JVLinkProfile(
     frozenset({"0B41", "0B42"}),
     race_start_date=date(2003, 10, 4),
 )
-BATCH = HistoricalOddsBatch(2003, 2026, 1, FRONTIER)
+BATCH = HistoricalOddsBatch(2003, 2026, 1)
 
 
-def test_bootstrap_accepts_initial_gaps_only_through_complete_frontier(tmp_path: Path) -> None:
+def test_bootstrap_leaves_initial_archive_gaps_pending(tmp_path: Path) -> None:
     earlier = RaceKey(date(2003, 10, 4), "05", "04", "01", "01")
     later = RaceKey(date(2008, 1, 26), "06", "01", "07", "07")
     ledger = ProgressLedger(tmp_path / "progress.db", tmp_path / "raw.db", PROFILE, BATCH)
@@ -44,15 +49,18 @@ def test_bootstrap_accepts_initial_gaps_only_through_complete_frontier(tmp_path:
     ledger.bootstrap(snapshot, NOW)
     states, _, _ = ledger.read()
 
-    assert states[(earlier.race_id, "0B41")].state == "provider_missing"
-    assert states[(earlier.race_id, "0B42")].reason == "user_accepted_existing_gaps"
+    assert states[(earlier.race_id, "0B41")].state == "pending"
+    assert states[(earlier.race_id, "0B42")].reason == "unrequested"
     assert states[(FRONTIER.race_id, "0B41")].state == "acquired"
-    assert states[(FRONTIER.race_id, "0B42")].state == "provider_missing"
+    assert states[(FRONTIER.race_id, "0B42")].state == "pending"
     assert states[(later.race_id, "0B41")].state == "pending"
+    assert all(publication == "pending" for publication in ledger.read()[1].values())
     assert not (tmp_path / "raw.db").exists()
 
 
-def test_bootstrap_adopts_existing_archive_after_frontier(tmp_path: Path) -> None:
+def test_bootstrap_adopts_existing_archive_without_initial_gap_classification(
+    tmp_path: Path,
+) -> None:
     later = RaceKey(date(2008, 1, 26), "06", "01", "07", "07")
     ledger = ProgressLedger(tmp_path / "progress.db", tmp_path / "raw.db", PROFILE, BATCH)
     ledger.bootstrap(
@@ -66,6 +74,45 @@ def test_bootstrap_adopts_existing_archive_after_frontier(tmp_path: Path) -> Non
     assert states[(later.race_id, "0B42")].state == "pending"
     _, publications, _ = ledger.read()
     assert publications[2008] == "pending"
+
+
+def test_legacy_frontier_ledger_is_migrated_without_losing_raw_state(tmp_path: Path) -> None:
+    earlier = RaceKey(date(2003, 10, 4), "05", "04", "01", "01")
+    snapshot = RawSnapshot((earlier, FRONTIER), {}, {"0B41": "schema"})
+    path = tmp_path / "progress.db"
+    ledger = ProgressLedger(path, tmp_path / "raw.db", PROFILE, BATCH)
+    ledger.bootstrap(snapshot, NOW)
+
+    with sqlite3.connect(path) as database:
+        database.execute(
+            "UPDATE metadata SET value=? WHERE key='policy_hash'",
+            (_legacy_policy_hash(PROFILE, BATCH, FRONTIER),),
+        )
+        database.executemany(
+            "INSERT INTO metadata (key,value) VALUES (?,?)",
+            (
+                ("frontier", str(FRONTIER)),
+                ("bootstrap_reason", "user_accepted_existing_gaps"),
+            ),
+        )
+        database.execute(
+            "UPDATE race_specs SET state='provider_missing',reason='user_accepted_existing_gaps' "
+            "WHERE race_id=? AND data_spec='0B41'",
+            (earlier.race_id,),
+        )
+        database.execute("UPDATE years SET publication='baseline' WHERE year=2003")
+
+    assert ledger.migrate_legacy_frontier(snapshot, NOW)
+    states, years, _ = ledger.read()
+
+    assert states[(earlier.race_id, "0B41")].state == "pending"
+    assert states[(earlier.race_id, "0B41")].reason == "unrequested"
+    assert years[2003] == "pending"
+    with sqlite3.connect(path) as database:
+        metadata = dict(database.execute("SELECT key,value FROM metadata"))
+    assert "frontier" not in metadata
+    assert metadata["migration_reason"] == "remove_initial_gap_classification"
+    assert not ledger.migrate_legacy_frontier(snapshot, NOW)
 
 
 def test_external_archive_is_adopted_and_missing_state_recovers(tmp_path: Path) -> None:
@@ -85,124 +132,6 @@ def test_external_archive_is_adopted_and_missing_state_recovers(tmp_path: Path) 
     }
     with pytest.raises(AcquisitionBlocked, match="disappeared"):
         ledger.reconcile(RawSnapshot((FRONTIER,), {}, {}), NOW)
-
-
-def test_prepare_publication_reconciles_external_archive_after_published_year(
-    tmp_path: Path,
-) -> None:
-    raw = tmp_path / "raw.db"
-    with sqlite3.connect(raw) as database:
-        database.execute(
-            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
-        )
-        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0126','06','01','07','06')")
-        columns = (
-            "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
-        )
-        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
-            database.execute(f"CREATE TABLE {table} ({columns})")
-
-    snapshot = read_raw_snapshot(raw, PROFILE, BATCH, date(2026, 10, 5))
-    ledger = ProgressLedger(
-        tmp_path / "runtime" / "historical-odds-progress.db", raw, PROFILE, BATCH
-    )
-    ledger.bootstrap(snapshot, NOW)
-    ledger.publication(2008, "published")
-    with sqlite3.connect(raw) as database:
-        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
-            database.execute(f"INSERT INTO {table} VALUES ('2008','0126','06','01','07','06')")
-
-    builder = Mock()
-    retriever = WeeklyHistoricalOddsRetriever(
-        cast(JVLinkToSQLiteRunner, Mock()),
-        raw,
-        builder,
-        OddsArchive(raw),
-        PROFILE,
-        BATCH,
-        tmp_path / "runtime",
-        clock=lambda: NOW,
-    )
-
-    plan = retriever.prepare_publication(cutoff=date(2026, 10, 5))
-
-    assert plan.year == 2008
-    assert plan.requested_specs == 0
-    _, publications, _ = retriever.ledger.read()
-    assert publications[2008] == "pending"
-
-    with sqlite3.connect(raw) as database:
-        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0126','06','01','07','07')")
-    with AcquisitionLock(raw, retriever.ledger_path) as lock:
-        lock.bind()
-        with pytest.raises(AcquisitionBlocked, match="incomplete"):
-            retriever.verify_publication_locked(retriever.ledger, 2008)
-
-
-def test_prepare_publication_requires_existing_progress_ledger(tmp_path: Path) -> None:
-    raw = tmp_path / "raw.db"
-    with sqlite3.connect(raw) as database:
-        database.execute(
-            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
-        )
-    retriever = WeeklyHistoricalOddsRetriever(
-        cast(JVLinkToSQLiteRunner, Mock()),
-        raw,
-        Mock(),
-        OddsArchive(raw),
-        PROFILE,
-        BATCH,
-        tmp_path / "runtime",
-        clock=lambda: NOW,
-    )
-
-    with pytest.raises(AcquisitionBlocked, match="existing progress ledger"):
-        retriever.prepare_publication(cutoff=date(2026, 10, 5))
-
-
-def test_publication_summary_preserves_retrieval_metrics(tmp_path: Path) -> None:
-    raw = tmp_path / "raw.db"
-    with sqlite3.connect(raw) as database:
-        database.execute(
-            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
-        )
-        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0126','06','01','07','06')")
-        columns = (
-            "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
-        )
-        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
-            database.execute(f"CREATE TABLE {table} ({columns})")
-    snapshot = read_raw_snapshot(raw, PROFILE, BATCH, date(2026, 10, 5))
-    runtime = tmp_path / "runtime"
-    ledger = ProgressLedger(runtime / "historical-odds-progress.db", raw, PROFILE, BATCH)
-    ledger.bootstrap(snapshot, NOW)
-    retriever = WeeklyHistoricalOddsRetriever(
-        cast(JVLinkToSQLiteRunner, Mock()),
-        raw,
-        Mock(),
-        OddsArchive(raw),
-        PROFILE,
-        BATCH,
-        runtime,
-        clock=lambda: NOW,
-    )
-    runtime.mkdir(exist_ok=True)
-    (runtime / "historical-odds-progress.json").write_text(
-        '{"year": 2008, "run_id": "run", "requested_specs": 4, "new_rows": {"0B41": 2}}\n',
-        encoding="utf-8",
-    )
-
-    retriever._write_summary(
-        WeeklyBatchResult("completed", 2008, None, 0, 0, 0, 0, {}, False, {}),
-        ledger,
-        publication_state="published",
-    )
-
-    payload = json.loads((runtime / "historical-odds-progress.json").read_text(encoding="utf-8"))
-    assert payload["run_id"] == "run"
-    assert payload["requested_specs"] == 4
-    assert payload["new_rows"] == {"0B41": 2}
-    assert payload["publication"] == "published"
 
 
 def test_new_past_candidate_is_pending_instead_of_provider_missing(tmp_path: Path) -> None:
@@ -313,7 +242,7 @@ def test_confirm_provider_missing_requires_owned_initialized_ledger(tmp_path: Pa
         path,
         raw,
         PROFILE,
-        HistoricalOddsBatch(2003, 2025, 1, FRONTIER),
+        HistoricalOddsBatch(2003, 2025, 1),
     )
     with pytest.raises(AcquisitionBlocked, match="raw database or policy"):
         mismatched.confirm_provider_missing(key, frozenset({"0B41"}), NOW, {"0B41": 0})
@@ -444,7 +373,9 @@ def test_legacy_provider_missing_reason_is_migrated_without_api_evidence(
     ledger.bootstrap(RawSnapshot((FRONTIER,), {}, {}), NOW)
     with sqlite3.connect(path) as database:
         database.execute(
-            "UPDATE race_specs SET reason='jvopen_no_data' WHERE state='provider_missing'"
+            "UPDATE race_specs SET state='provider_missing',reason='jvopen_no_data' "
+            "WHERE race_id=? AND data_spec='0B41'",
+            (FRONTIER.race_id,),
         )
         database.execute("ALTER TABLE race_specs DROP COLUMN api_name")
         database.execute("ALTER TABLE race_specs DROP COLUMN api_returncode")
@@ -681,7 +612,6 @@ def test_weekly_run_reports_current_year_as_up_to_date_after_complete_request(
         2026,
         2026,
         1,
-        RaceKey(date(2026, 1, 1), "01", "01", "01", "01"),
     )
     profile = JVLinkProfile(
         False,

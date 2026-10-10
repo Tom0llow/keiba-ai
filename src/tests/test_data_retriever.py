@@ -43,6 +43,8 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
         retriever = DataRetriever(paths=paths, jvlink=jvlink)
 
         retriever.retrieve_historical_basic()
+        historical.retrieve.return_value = 7
+        assert retriever.retrieve_historical() == 7
         retriever.retrieve_latest()
         inserted = retriever.retrieve_realtime(
             race_date=date(2026, 10, 4),
@@ -54,6 +56,7 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
 
     assert inserted == 15
     historical.retrieve_basic.assert_called_once_with()
+    historical.retrieve.assert_called_once_with()
     latest.retrieve.assert_called_once_with()
     realtime.retrieve.assert_called_once()
     race_key = realtime.retrieve.call_args.args[0]

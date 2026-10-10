@@ -49,12 +49,11 @@ class JVLinkProfile:
 
 @dataclass(frozen=True)
 class HistoricalOddsBatch:
-    """Fixed year range and user-approved bootstrap frontier for weekly retrieval."""
+    """Fixed year range for weekly historical odds retrieval."""
 
     first_year: int
     last_year: int
     years_per_run: int
-    accept_existing_gaps_through: RaceKey
 
     def __post_init__(self) -> None:
         if any(
@@ -66,16 +65,6 @@ class HistoricalOddsBatch:
             raise ValueError("historical_odds.batch year range is invalid")
         if self.years_per_run != 1:
             raise ValueError("historical_odds.batch.years_per_run must be 1")
-        if (
-            not self.first_year
-            <= self.accept_existing_gaps_through.race_date.year
-            <= self.last_year
-        ):
-            raise ValueError("historical_odds.batch frontier must lie in the managed year range")
-        if self.accept_existing_gaps_through.jyo_code not in {
-            f"{code:02d}" for code in range(1, 11)
-        }:
-            raise ValueError("historical_odds.batch frontier must identify a JRA venue")
 
 
 @dataclass(frozen=True)
@@ -123,8 +112,6 @@ def validate_historical_odds_batch(odds: JVLinkProfile, batch: HistoricalOddsBat
         raise ValueError("historical-odds supports only 0B41 and 0B42")
     if odds.race_start_date is None or odds.race_start_date.year != batch.first_year:
         raise ValueError("historical_odds.race_start_date must lie in batch.first_year")
-    if batch.accept_existing_gaps_through.race_date < odds.race_start_date:
-        raise ValueError("historical_odds.batch frontier precedes race_start_date")
 
 
 def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
@@ -132,7 +119,7 @@ def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
     if "batch" not in odds:
         return None
     section = _require_table(odds, "batch")
-    allowed = {"first_year", "last_year", "years_per_run", "accept_existing_gaps_through"}
+    allowed = {"first_year", "last_year", "years_per_run"}
     if section.keys() - allowed:
         raise ValueError("historical_odds.batch contains unsupported settings")
     years: list[int] = []
@@ -141,16 +128,7 @@ def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
         if type(value) is not int:
             raise ValueError(f"historical_odds.batch.{key} must be an integer")
         years.append(value)
-    frontier = _require_string(section, "accept_existing_gaps_through", "historical_odds.batch")
-    try:
-        race_date, jyo, kaiji, nichiji, race = frontier.split("/")
-        parsed_date = date.fromisoformat(race_date)
-        if parsed_date.isoformat() != race_date:
-            raise ValueError("date must use YYYY-MM-DD")
-        race_key = RaceKey(parsed_date, jyo, kaiji, nichiji, race)
-    except ValueError as exc:
-        raise ValueError("historical_odds.batch.accept_existing_gaps_through is invalid") from exc
-    return HistoricalOddsBatch(years[0], years[1], years[2], race_key)
+    return HistoricalOddsBatch(years[0], years[1], years[2])
 
 
 class JVLinkSettingBuilder:
@@ -158,6 +136,10 @@ class JVLinkSettingBuilder:
 
     def __init__(self, seed_setting: Path) -> None:
         self._seed_setting = seed_setting.expanduser().resolve()
+        if not self._seed_setting.is_file():
+            raise FileNotFoundError(
+                f"JVLinkToSQLite seed setting does not exist: {self._seed_setting}"
+            )
 
     def build(
         self,

@@ -176,8 +176,9 @@ per-race odds loop.
 
 `historical-odds` is the manual, year-scoped batch boundary for long-running
 historical odds acquisition. It uses a runtime SQLite progress ledger keyed by
-complete `RaceKey` plus DataSpec, accepts the configured initial frontier gaps as
-`provider_missing`, and processes only the oldest unfinished year up to a
+complete `RaceKey` plus DataSpec, records observed archive rows as `acquired`
+and leaves initial archive gaps as `pending`,
+then processes only the oldest unfinished year up to a
 past-date cutoff. The generated execution TOML and JSON report are derived
 runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
 PowerShell entry point starts one process and does not register Task Scheduler

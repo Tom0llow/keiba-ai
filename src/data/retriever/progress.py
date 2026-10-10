@@ -40,7 +40,6 @@ STATE_REASONS = {
             "jvopen_no_data",
             "legacy_provider_missing",
             "provider_confirmed_missing",
-            "user_accepted_existing_gaps",
         }
     ),
     "failed": frozenset(
@@ -94,7 +93,21 @@ def policy_hash(profile: JVLinkProfile, batch: HistoricalOddsBatch) -> str:
         "first_year": batch.first_year,
         "last_year": batch.last_year,
         "years_per_run": batch.years_per_run,
-        "frontier": str(batch.accept_existing_gaps_through),
+        "race_start_date": str(profile.race_start_date),
+        "data_specs": sorted(profile.realtime_data_specs),
+    }
+    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def _legacy_policy_hash(
+    profile: JVLinkProfile, batch: HistoricalOddsBatch, frontier: RaceKey
+) -> str:
+    """Recreate the removed frontier policy hash for a one-time ledger migration."""
+    payload = {
+        "first_year": batch.first_year,
+        "last_year": batch.last_year,
+        "years_per_run": batch.years_per_run,
+        "frontier": str(frontier),
         "race_start_date": str(profile.race_start_date),
         "data_specs": sorted(profile.realtime_data_specs),
     }
@@ -166,7 +179,7 @@ class ProgressLedger:
             )
 
     def bootstrap(self, snapshot: RawSnapshot, now: datetime) -> None:
-        """Freeze initial candidates and accept only initial frontier gaps."""
+        """Freeze initial candidates without classifying missing archive rows."""
         if self.path.exists():
             raise AcquisitionBlocked("existing ledger must be validated, never reinitialized")
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -192,32 +205,19 @@ class ProgressLedger:
                 "state_revision": "1",
                 "raw_db": canonical_path(self.raw_db),
                 "policy_hash": self.policy_hash,
-                "frontier": str(self.batch.accept_existing_gaps_through),
                 "bootstrap_at": now.isoformat(),
                 "bootstrap_candidate_hash": candidate_hash(snapshot.races),
-                "bootstrap_reason": "user_accepted_existing_gaps",
                 "recovery_required": "false",
                 "archive_schemas": json.dumps(snapshot.schemas, sort_keys=True),
             }
             database.executemany("INSERT INTO metadata VALUES (?,?)", metadata.items())
-            frontier_year = self.batch.accept_existing_gaps_through.race_date.year
-            managed_years = {
-                key.race_date.year for key in snapshot.races if key.race_date.year >= frontier_year
-            }
             for year in range(self.batch.first_year, self.batch.last_year + 1):
-                publication = (
-                    "pending"
-                    if year in managed_years
-                    else ("baseline" if year < frontier_year else "published")
-                )
-                database.execute("INSERT INTO years VALUES (?,?,NULL)", (year, publication))
+                database.execute("INSERT INTO years VALUES (?,?,NULL)", (year, "pending"))
             for key in snapshot.races:
                 for spec in sorted(self.profile.realtime_data_specs):
                     count = snapshot.counts.get((key.race_id, spec), 0)
                     if count:
                         state, reason = "acquired", "initial_archive_observed"
-                    elif key <= self.batch.accept_existing_gaps_through:
-                        state, reason = "provider_missing", "user_accepted_existing_gaps"
                     else:
                         state, reason = "pending", "unrequested"
                     database.execute(
@@ -233,6 +233,82 @@ class ProgressLedger:
                             now.isoformat(),
                         ),
                     )
+
+    def migrate_legacy_frontier(self, snapshot: RawSnapshot, now: datetime) -> bool:
+        """Migrate one recognized frontier ledger without discarding raw data."""
+        if not self.path.is_file():
+            return False
+        with closing(sqlite3.connect(self.path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            if (
+                database.execute("PRAGMA user_version").fetchone()[0] != 1
+                or dict(database.execute("SELECT key,value FROM metadata")).get("schema_version")
+                != "1"
+            ):
+                raise AcquisitionBlocked("unsupported progress ledger schema version")
+            metadata = dict(database.execute("SELECT key,value FROM metadata"))
+            if metadata.get("raw_db") != canonical_path(self.raw_db):
+                raise AcquisitionBlocked("progress ledger raw database or policy differs")
+            if metadata.get("policy_hash") == self.policy_hash:
+                return False
+            if metadata.get("bootstrap_reason") != "user_accepted_existing_gaps":
+                raise AcquisitionBlocked(
+                    "progress ledger raw database or policy differs; explicit migration is required"
+                )
+            frontier = _parse_legacy_frontier(metadata.get("frontier"))
+            if (
+                not self.batch.first_year <= frontier.race_date.year <= self.batch.last_year
+                or frontier.jyo_code not in {f"{code:02d}" for code in range(1, 11)}
+                or self.profile.race_start_date is None
+                or frontier.race_date < self.profile.race_start_date
+                or metadata.get("policy_hash")
+                != _legacy_policy_hash(self.profile, self.batch, frontier)
+            ):
+                raise AcquisitionBlocked(
+                    "progress ledger raw database or policy differs; explicit migration is required"
+                )
+            try:
+                prior_schemas = json.loads(metadata["archive_schemas"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AcquisitionBlocked("invalid progress archive schema metadata") from exc
+            if not isinstance(prior_schemas, dict) or any(
+                snapshot.schemas.get(spec) != schema for spec, schema in prior_schemas.items()
+            ):
+                raise AcquisitionBlocked("archive schema disappeared or changed")
+            _ensure_api_result_columns(database)
+            converted_years = {
+                row[0]
+                for row in database.execute(
+                    "SELECT year FROM race_specs WHERE state='provider_missing' "
+                    "AND reason='user_accepted_existing_gaps'"
+                )
+            }
+            database.execute(
+                "UPDATE race_specs SET state='pending',reason='unrequested',before_rows=0,"
+                "after_rows=0,last_run=NULL,requested_at=NULL,returncode=NULL,api_name=NULL,"
+                "api_returncode=NULL,updated_at=? WHERE state='provider_missing' "
+                "AND reason='user_accepted_existing_gaps'",
+                (now.isoformat(),),
+            )
+            database.execute("UPDATE years SET publication='pending' WHERE publication='baseline'")
+            for year in converted_years:
+                database.execute("UPDATE years SET publication='pending' WHERE year=?", (year,))
+            database.execute(
+                "UPDATE metadata SET value=? WHERE key='policy_hash'", (self.policy_hash,)
+            )
+            database.executemany(
+                "INSERT INTO metadata (key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    ("migration_at", now.isoformat()),
+                    ("migration_reason", "remove_initial_gap_classification"),
+                ),
+            )
+            database.execute("DELETE FROM metadata WHERE key IN ('frontier','bootstrap_reason')")
+            database.execute(
+                "UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='state_revision'"
+            )
+        return True
 
     def read(self) -> tuple[dict[tuple[str, str], SpecState], dict[int, str], int]:
         """Validate ledger ownership and return its committed states."""
@@ -284,7 +360,7 @@ class ProgressLedger:
             years = dict(database.execute("SELECT year,publication FROM years"))
             if set(years) != set(range(self.batch.first_year, self.batch.last_year + 1)) or not set(
                 years.values()
-            ) <= {"baseline", "published", "pending", "failed"}:
+            ) <= {"published", "pending", "failed"}:
                 raise AcquisitionBlocked("invalid publication year states")
             revision = int(metadata["state_revision"])
             if revision < 1:
@@ -354,7 +430,7 @@ class ProgressLedger:
                 years = dict(database.execute("SELECT year,publication FROM years"))
                 if set(years) != set(
                     range(self.batch.first_year, self.batch.last_year + 1)
-                ) or not set(years.values()) <= {"baseline", "published", "pending", "failed"}:
+                ) or not set(years.values()) <= {"published", "pending", "failed"}:
                     raise AcquisitionBlocked("invalid publication year states")
                 for run_id, _ in grouped:
                     if not database.execute(
@@ -695,6 +771,26 @@ def _ensure_api_result_columns(database: sqlite3.Connection) -> None:
             "UPDATE race_specs SET reason='legacy_provider_missing' "
             "WHERE state='provider_missing' AND reason='jvopen_no_data'"
         )
+
+
+def _parse_legacy_frontier(value: object) -> RaceKey:
+    """Parse the removed frontier metadata without restoring it as configuration."""
+    if not isinstance(value, str):
+        raise AcquisitionBlocked("invalid legacy frontier metadata")
+    components = value.split("/")
+    if len(components) != 5:
+        raise AcquisitionBlocked("invalid legacy frontier metadata")
+    date_text, *race_components = components
+    try:
+        race_date = date.fromisoformat(date_text)
+    except ValueError as exc:
+        raise AcquisitionBlocked("invalid legacy frontier metadata") from exc
+    if race_date.isoformat() != date_text:
+        raise AcquisitionBlocked("invalid legacy frontier metadata")
+    try:
+        return RaceKey(race_date, *race_components)
+    except ValueError as exc:
+        raise AcquisitionBlocked("invalid legacy frontier metadata") from exc
 
 
 def _validate_api_observation(

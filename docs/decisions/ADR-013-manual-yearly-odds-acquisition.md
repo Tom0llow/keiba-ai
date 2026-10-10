@@ -4,7 +4,7 @@
 - Date: 2026-10-09
 - Decision Owners: Repository maintainers
 - Supersedes: N/A
-- Superseded by: ADR-014（公開CLI名とParquet公開タイミングのみ）
+- Superseded by: ADR-014（公開CLI名とParquet公開タイミングのみ）、ADR-015（初回台帳作成時の欠損判定のみ）
 
 ## Context
 
@@ -16,20 +16,19 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
 ## Decision
 
 1. `historical-weekly` は最古の未完了年を1年単位で処理し、過去日
-   cutoffまでの候補を時系列に処理する。JVLink取得とParquet公開は別コマンドとし、取得
-   コマンドは1年分で終了する。`preprocess historical-weekly` はraw取得完了を確認してから
-   完全Parquetを公開し、成功時だけ台帳の公開状態を`published`へ進める。
-   `historical-odds` CLIは取得コマンドだけを単発起動し、タスク登録・
-   常駐スケジューラ・曜日による待機を行わない。
+   cutoffまでの候補を時系列に処理する。取得と完全Parquet公開が成功したら、台帳から
+   導出した実行設定を次年へ更新して同じ起動で継続する。利用者の停止、取得または公開の
+   異常、対象年の枯渇で終了する。`historical-odds` CLIは
+   この連続実行プロセスを単発起動し、タスク登録・常駐スケジューラ・曜日による待機を行わない。
 2. 取得ポリシーは `config/jvlink.toml` の
    `[historical_odds.batch]` に置き、実行状態はGit管理外のruntime SQLite
    (`historical-odds-progress.db`)を正とする。race_idとDataSpecの組を台帳の
    主キーにして、`pending`、`running`、`acquired`、`provider_missing`、
    `failed`を保持する。
-3. 初回台帳作成時は、既存アーカイブを完全なレースキーで観測する。指定した
-   frontierまでの未取得組は、利用者がJRA-VAN側欠損として受理した
-   `provider_missing`にする。frontier後に新しく候補となった組は取得対象の
-   `pending`とし、後からアーカイブへ現れた行は外部観測として台帳へ取り込む。
+3. 初回台帳作成時は、既存アーカイブを完全なレースキーで観測する。行がある組は
+   `acquired`、行がない組は `pending` とし、初期状態の欠損を
+   `provider_missing` へ分類しない。後からアーカイブへ現れた行は外部観測として
+   台帳へ取り込む。
 4. raw SQLiteへ書き込む全取得モードは同じOSロックを保持する。別runtimeの
    台帳で同じraw DBを扱う設定を拒否し、未確定の`running`がある間は新しい
    JV-Link起動を拒否する。
@@ -59,7 +58,7 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
 
 ### Positive
 
-- 週次の取得差分、初期受理した欠損、別モードで追加された行を分けて追跡できる。
+- 週次の取得差分、実取得で確認した提供元欠損、別モードで追加された行を分けて追跡できる。
 - 年途中で停止しても、次回は同じ年の未確定組から再開できる。
 - 曜日やタスクスケジューラを製品コードへ埋め込まず、メンテナンス結果を実際の
   JV-Link応答として扱える。
@@ -75,7 +74,7 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
 
 ## Validation
 
-一時SQLiteと偽のJV-Link実行境界で、frontier境界、全10競馬場、DataSpec別差分、
+一時SQLiteと偽のJV-Link実行境界で、初回欠損をpendingにする規則、全10競馬場、DataSpec別差分、
 年選択、ロック、別runtime拒否、外部追加の取り込み、再実行、火曜日を特別扱い
 しない失敗分類を検証する。実機の成功・正常空応答・メンテナンス失敗の判定は、
 一次仕様として [JRA-VANのエラーコード一覧](https://developer.jra-van.jp/t/topic/822) を参照し、

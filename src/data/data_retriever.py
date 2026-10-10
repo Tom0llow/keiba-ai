@@ -114,6 +114,12 @@ class DataRetriever:
             if publisher is not None:
                 publisher()
 
+    def retrieve_historical(self) -> int:
+        """Keep the legacy combined retrieval API for existing Python callers."""
+        with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
+            lock.bind()
+            return self._historical.retrieve()
+
     def retrieve_historical_odds(
         self,
         *,

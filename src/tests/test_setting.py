@@ -185,9 +185,21 @@ def test_repository_config_retrieves_only_missing_historical_odds() -> None:
     assert config.historical_odds_batch.first_year == 2003
     assert config.historical_odds_batch.last_year == 2026
     assert config.historical_odds_batch.years_per_run == 1
-    assert config.historical_odds_batch.accept_existing_gaps_through == RaceKey(
-        date(2008, 1, 26), "06", "01", "07", "06"
+
+
+def test_config_rejects_removed_initial_gap_policy(tmp_path: Path) -> None:
+    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(
+        source.read_text(encoding="utf-8").replace(
+            "years_per_run = 1\n",
+            'years_per_run = 1\naccept_existing_gaps_through = "2008-01-26/06/01/07/06"\n',
+        ),
+        encoding="utf-8",
     )
+
+    with pytest.raises(ValueError, match=r"historical_odds\.batch contains unsupported settings"):
+        JVLinkConfig.from_toml(config_path)
 
 
 def test_historical_odds_rejects_refetch_policy() -> None:

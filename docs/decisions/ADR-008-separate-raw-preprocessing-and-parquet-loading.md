@@ -44,12 +44,11 @@ filtering, and preprocessing drift.
 - Realtime preprocessing filters the cumulative raw archive tables to the exact
   race key and writes only that race's O1/O2 processed files. It does not rebuild
   the complete historical snapshot before inference.
-- Historical and latest retrieval only update raw SQLite. Complete processed
-  snapshots are published by the standalone `preprocess rebuild` CLI.
-- Realtime retrieval only archives the target race. The separate
-  `preprocess realtime` command publishes its race-scoped Parquet.
-- `preprocess historical-weekly` publishes a raw-complete weekly year and records
-  its publication state in the weekly ledger.
+- Historical retrieval automatically rebuilds the complete processed snapshot.
+  Latest retrieval refreshes the complete processed snapshot. Realtime retrieval
+  automatically publishes the target race's processed Parquet after acquisition.
+- A standalone `preprocess rebuild` CLI remains available when raw data already
+  exists and no retrieval is needed.
 
 ## Rationale
 
@@ -70,10 +69,10 @@ bounded without forcing a full historical Parquet rebuild for every odds refresh
   than one mutable directory of Parquet files.
 - Old snapshot/version directories are retained until a separate retention policy
   removes them; this favors rollback and reproducibility over minimum disk usage.
-- `latest` retrieval and complete snapshot publication are separate operations.
-  Run `preprocess rebuild` after retrieval when the complete snapshot must be
-  refreshed. Any later table- or partition-level incremental publication must
-  preserve the same public loader contract and atomic publication semantics.
+- `latest` currently performs a complete snapshot refresh after retrieval. A later
+  optimization may implement table- or partition-level incremental publication,
+  but it must preserve the same public loader contract and atomic publication
+  semantics.
 - Realtime inference must call preprocessing successfully before the model reads
   the corresponding race-scoped Parquet version.
 - The raw SQLite database remains Git-ignored and mutable. Processed Parquet is
@@ -107,10 +106,11 @@ on the local filesystem and remain outside Git.
 
 ## Operational Impact
 
-Retrieval commands do not perform Parquet publication. The corresponding
-preprocess command must be run after raw retrieval. A preprocessing failure
-leaves the previous published pointer unchanged and causes the command to fail
-rather than exposing partial processed data.
+Historical and latest commands perform Parquet publication after successful raw
+retrieval. Realtime commands perform race-scoped Parquet publication after
+successful realtime acquisition. A preprocessing failure leaves the previous
+published pointer unchanged and causes the command to fail rather than exposing
+partial processed data.
 
 ## Migration / Rollback
 

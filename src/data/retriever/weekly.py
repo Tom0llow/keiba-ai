@@ -109,12 +109,16 @@ class WeeklyHistoricalOddsRetriever:
         ledger = self.ledger
         with AcquisitionLock(self._database, self.ledger_path, allow_unresolved=recover) as lock:
             lock.bind()
+            if recover:
+                self._assert_runner_stopped()
+            snapshot = read_raw_snapshot(
+                self._database, self._odds_profile, self._batch, effective_cutoff
+            )
+            if self.ledger_path.exists():
+                ledger.migrate_legacy_frontier(snapshot, now)
             recovery_snapshot: RawSnapshot | None = None
             if recover and self.ledger_path.exists():
-                self._assert_runner_stopped()
-                recovery_snapshot = read_raw_snapshot(
-                    self._database, self._odds_profile, self._batch, effective_cutoff
-                )
+                recovery_snapshot = snapshot
                 for run_id, key, specs in ledger.running_requests():
                     self._quarantine_and_reset(
                         ledger, run_id, key, specs, label=f"{run_id}-{key.race_id}-recovery"
@@ -129,9 +133,10 @@ class WeeklyHistoricalOddsRetriever:
                             for spec in specs
                         },
                     )
-            snapshot = read_raw_snapshot(
-                self._database, self._odds_profile, self._batch, effective_cutoff
-            )
+            if recover:
+                snapshot = read_raw_snapshot(
+                    self._database, self._odds_profile, self._batch, effective_cutoff
+                )
             adopted_races: dict[str, int] = {}
             if not self.ledger_path.exists():
                 ledger.bootstrap(snapshot, now)
@@ -312,6 +317,7 @@ class WeeklyHistoricalOddsRetriever:
     ) -> WeeklyBatchResult:
         """Reconcile and plan publication while the caller owns the common lock."""
         snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+        ledger.migrate_legacy_frontier(snapshot, now)
         ledger.reconcile(snapshot, now)
         return self._plan(snapshot, cutoff)
 
@@ -353,6 +359,7 @@ class WeeklyHistoricalOddsRetriever:
                 self._batch,
                 now.date() - timedelta(days=1),
             )
+            ledger.migrate_legacy_frontier(snapshot, now)
             ledger.reconcile(snapshot, now)
             states, publications, _ = ledger.read()
             if any(
@@ -416,6 +423,7 @@ class WeeklyHistoricalOddsRetriever:
         with AcquisitionLock(self._database, self.ledger_path) as lock:
             lock.bind()
             snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+            ledger.migrate_legacy_frontier(snapshot, now)
             if key not in snapshot.races:
                 raise AcquisitionBlocked("provider-missing confirmation targets an unknown race")
             ledger.confirm_provider_missing(
@@ -478,23 +486,11 @@ class WeeklyHistoricalOddsRetriever:
                 (key.race_id, spec): SpecState(
                     key.race_id,
                     spec,
-                    (
-                        "acquired"
-                        if snapshot.counts.get((key.race_id, spec), 0)
-                        else (
-                            "provider_missing"
-                            if key <= self._batch.accept_existing_gaps_through
-                            else "pending"
-                        )
-                    ),
+                    "acquired" if snapshot.counts.get((key.race_id, spec), 0) else "pending",
                     (
                         "initial_archive_observed"
                         if snapshot.counts.get((key.race_id, spec), 0)
-                        else (
-                            "user_accepted_existing_gaps"
-                            if key <= self._batch.accept_existing_gaps_through
-                            else "unrequested"
-                        )
+                        else "unrequested"
                     ),
                     snapshot.counts.get((key.race_id, spec), 0),
                     snapshot.counts.get((key.race_id, spec), 0),

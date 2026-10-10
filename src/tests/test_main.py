@@ -36,13 +36,19 @@ def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
     assert kwargs["jvlink_config"].as_posix() == "config/jvlink.toml"
 
 
-def test_latest_cli_retrieves_without_refreshing_processed_data() -> None:
+def test_latest_cli_retrieves_then_refreshes_processed_data() -> None:
     retriever = Mock()
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
+    preprocesser = Mock()
+    preprocesser.update.return_value = {"NL_RA_RACE": 100}
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
         result = runner.invoke(app, ["--retrieve", "--mode=latest"])
 
     assert result.exit_code == 0
     retriever.retrieve_latest.assert_called_once_with()
+    preprocesser.update.assert_called_once_with()
 
 
 def test_historical_odds_cli_plan_only_is_forwarded() -> None:
@@ -132,10 +138,18 @@ def test_historical_odds_cli_confirms_explicit_provider_missing_race() -> None:
     assert '"status": "provider_missing"' in result.stdout
 
 
-def test_realtime_cli_retrieves_without_publishing_race_parquet() -> None:
+def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:
     retriever = Mock()
     retriever.retrieve_realtime.return_value = 17
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
+    preprocesser = Mock()
+    preprocesser.update_race.return_value = {
+        "ARCHIVE_O1_ODDS_TANFUKUWAKU": 10,
+        "ARCHIVE_O2_ODDS_UMAREN": 7,
+    }
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
         result = runner.invoke(
             app,
             [
@@ -163,15 +177,24 @@ def test_realtime_cli_retrieves_without_publishing_race_parquet() -> None:
         nichiji="08",
         race_number="11",
     )
+    preprocesser.update_race.assert_called_once_with(
+        RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
+    )
 
 
 def test_realtime_cli_uses_race_config_when_options_are_omitted() -> None:
     retriever = Mock()
     retriever.retrieve_realtime.return_value = 17
+    preprocesser = Mock()
+    preprocesser.update_race.return_value = {
+        "ARCHIVE_O1_ODDS_TANFUKUWAKU": 10,
+        "ARCHIVE_O2_ODDS_UMAREN": 7,
+    }
     race_key = RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
     with (
         patch("main.JVLinkConfig.from_toml", return_value=Mock(realtime_race=race_key)),
         patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
     ):
         result = runner.invoke(app, ["--retrieve", "--mode=realtime"])
 
@@ -183,6 +206,7 @@ def test_realtime_cli_uses_race_config_when_options_are_omitted() -> None:
         nichiji="08",
         race_number="11",
     )
+    preprocesser.update_race.assert_called_once_with(race_key)
 
 
 def test_retrieve_subcommand_is_removed() -> None:
@@ -206,89 +230,6 @@ def test_preprocess_rebuild_can_run_without_retrieval() -> None:
 
     assert result.exit_code == 0
     preprocesser.rebuild.assert_called_once_with()
-
-
-def test_preprocess_historical_weekly_publishes_completed_raw_year() -> None:
-    retriever = Mock()
-    retriever.prepare_historical_weekly_publication.return_value = WeeklyBatchResult(
-        "plan", 2008, None, 0, 0, 0, 0, {}, True
-    )
-    retriever.publish_historical_weekly.side_effect = lambda year, publisher, **kwargs: publisher()
-    preprocesser = Mock()
-    preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
-    with (
-        patch("main.DataRetriever.from_toml", return_value=retriever),
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
-    ):
-        result = runner.invoke(app, ["preprocess", "historical-weekly"])
-
-    assert result.exit_code == 0
-    assert "Starting complete Parquet rebuild for historical year 2008." in result.stdout
-    retriever.prepare_historical_weekly_publication.assert_called_once_with()
-    retriever.publish_historical_weekly.assert_called_once()
-    assert retriever.publish_historical_weekly.call_args.args[0] == 2008
-    preprocesser.rebuild.assert_called_once_with()
-
-
-def test_preprocess_historical_weekly_repairs_derived_files_when_up_to_date() -> None:
-    retriever = Mock()
-    retriever.prepare_historical_weekly_publication.return_value = WeeklyBatchResult(
-        "plan", None, None, 0, 0, 0, 0, {}, True
-    )
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
-        result = runner.invoke(app, ["preprocess", "historical-weekly"])
-
-    assert result.exit_code == 0
-    retriever.repair_historical_weekly_derived.assert_called_once_with()
-
-
-def test_preprocess_realtime_publishes_already_retrieved_race() -> None:
-    preprocesser = Mock()
-    preprocesser.update_race.return_value = {
-        "ARCHIVE_O1_ODDS_TANFUKUWAKU": 10,
-        "ARCHIVE_O2_ODDS_UMAREN": 7,
-    }
-    with patch("main.DataPreprocesser.from_toml", return_value=preprocesser):
-        result = runner.invoke(
-            app,
-            [
-                "preprocess",
-                "realtime",
-                "--date",
-                "2026-10-04",
-                "--jyo",
-                "05",
-                "--kaiji",
-                "04",
-                "--nichiji",
-                "08",
-                "--race",
-                "11",
-            ],
-        )
-
-    assert result.exit_code == 0
-    preprocesser.update_race.assert_called_once_with(
-        RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
-    )
-
-
-def test_preprocess_historical_weekly_rejects_incomplete_raw_year() -> None:
-    retriever = Mock()
-    retriever.prepare_historical_weekly_publication.return_value = WeeklyBatchResult(
-        "plan", 2008, None, 1, 2, 0, 2, {}, True
-    )
-    preprocesser = Mock()
-    with (
-        patch("main.DataRetriever.from_toml", return_value=retriever),
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
-    ):
-        result = runner.invoke(app, ["preprocess", "historical-weekly"])
-
-    assert result.exit_code == 1
-    assert '"status": "retrieval_pending"' in result.stdout
-    retriever.publish_historical_weekly.assert_not_called()
-    preprocesser.rebuild.assert_not_called()
 
 
 def _feature_payload(*, future_odds: bool = False) -> dict[str, object]:
