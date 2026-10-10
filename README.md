@@ -89,13 +89,14 @@ realtime_data_specs = ["0B41", "0B42"]
 realtime_data_specs = ["0B31", "0B32"]
 ```
 
-With `[historical_odds].skip_existing = true`, historical retrieval requests
+`historical-odds` requires `[historical_odds].skip_existing = true` and requests
 only the missing O1/O2 DataSpecs for each complete race key in `NL_RA_RACE`.
 `0B41` is skipped when that race has rows in `ARCHIVE_O1_ODDS_TANFUKUWAKU`;
 `0B42` is skipped when it has rows in `ARCHIVE_O2_ODDS_UMAREN`. Missing or empty
 archive tables are retrieved. Row presence does not prove that every time-series
-observation was acquired; set `skip_existing = false` (the default when omitted)
-to re-fetch eligible races. This option does not change realtime retrieval.
+observation was acquired, so this workflow intentionally does not support
+refetching already archived race/spec pairs. This option does not change realtime
+retrieval.
 
 The checked-in `[historical]` profile enables `setup_update`, so the
 `historical-basic` command retrieves the configured base-data DataSpecs before

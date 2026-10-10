@@ -629,6 +629,8 @@ def test_weekly_run_continues_after_no_data_response_and_marks_provider_missing(
     assert result.requested_specs == 4
     assert result.failed_specs == 0
     assert result.pending_after == 0
+    assert result.new_races == {"0B41": 1, "0B42": 1}
+    assert result.new_provider_missing == {"0B41": 1, "0B42": 1}
     with sqlite3.connect(tmp_path / "runtime" / "historical-odds-progress.db") as database:
         rows = database.execute(
             "SELECT race_id,state,reason,returncode,api_name,api_returncode "
@@ -642,6 +644,9 @@ def test_weekly_run_continues_after_no_data_response_and_marks_provider_missing(
         ("2008012701010802", "acquired", "requested_archive_committed", None, "JVOpen", 0),
     }
     assert publication == "pending"
+    with sqlite3.connect(raw) as database:
+        assert database.execute("SELECT COUNT(*) FROM RT_O1_ODDS_TANFUKUWAKU").fetchone()[0] == 0
+        assert database.execute("SELECT COUNT(*) FROM RT_O2_ODDS_UMAREN").fetchone()[0] == 0
 
 
 def test_weekly_run_reports_current_year_as_up_to_date_after_complete_request(

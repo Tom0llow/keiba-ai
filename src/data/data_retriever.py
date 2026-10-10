@@ -106,11 +106,13 @@ class DataRetriever:
             validate_executable=validate_executable,
         )
 
-    def retrieve_historical_basic(self) -> None:
-        """Retrieve configured historical base data."""
+    def retrieve_historical_basic(self, publisher: Callable[[], object] | None = None) -> None:
+        """Retrieve configured historical base data and optionally publish under the lock."""
         with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
             lock.bind()
             self._historical.retrieve_basic()
+            if publisher is not None:
+                publisher()
 
     def retrieve_historical_odds(
         self,

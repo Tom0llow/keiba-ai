@@ -4,9 +4,12 @@ from __future__ import annotations
 
 import csv
 import os
+import queue
 import re
 import subprocess
 import sys
+import threading
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -181,6 +184,9 @@ class JVLinkToSQLiteRunner:
         if skip_last_modified_update:
             command.append("--skipslastmodifiedupdate")
 
+        if sys.stdout.isatty():
+            return self._execute_streaming(command)
+
         try:
             completed = subprocess.run(
                 command,
@@ -226,6 +232,84 @@ class JVLinkToSQLiteRunner:
             ) from exc
         except OSError as exc:
             raise JVLinkToSQLiteError(f"failed to start JVLinkToSQLite: {exc}") from exc
+
+    def _execute_streaming(self, command: list[str]) -> JVLinkExecutionResult:
+        """Run the provider process while echoing each output line immediately."""
+        try:
+            process = subprocess.Popen(
+                command,
+                cwd=self._executable.parent,
+                encoding="cp932",
+                errors="replace",
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                shell=False,
+                text=True,
+                bufsize=1,
+            )
+        except OSError as exc:
+            raise JVLinkToSQLiteError(f"failed to start JVLinkToSQLite: {exc}") from exc
+
+        stream = process.stdout
+        assert stream is not None
+        events: queue.Queue[str | None] = queue.Queue()
+
+        def read_output() -> None:
+            for line in stream:
+                events.put(line)
+            events.put(None)
+
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        output: list[str] = []
+        deadline = (
+            time.monotonic() + self._timeout_seconds if self._timeout_seconds is not None else None
+        )
+        stream_closed = False
+        while not stream_closed:
+            remaining = 0.1
+            if deadline is not None:
+                remaining = max(0.0, min(remaining, deadline - time.monotonic()))
+                if remaining == 0.0:
+                    process.kill()
+                    process.wait()
+                    parsed = _parse_api_returncodes("".join(output))
+                    raise JVLinkToSQLiteError(
+                        f"JVLinkToSQLite timed out after {self._timeout_seconds} seconds",
+                        api_returncodes={spec: code for spec, (_, code) in parsed.latest.items()},
+                        fatal_returncodes=parsed.fatal_returncodes,
+                        api_results=parsed.latest,
+                    )
+            try:
+                line = events.get(timeout=remaining)
+            except queue.Empty:
+                continue
+            if line is None:
+                stream_closed = True
+                continue
+            output.append(line)
+            _echo_output(line)
+
+        returncode = process.wait()
+        combined = "".join(output)
+        parsed = _parse_api_returncodes(combined)
+        if returncode != 0:
+            raise JVLinkToSQLiteError(
+                f"JVLinkToSQLite exited with status {returncode}",
+                returncode=returncode,
+                api_returncodes={spec: code for spec, (_, code) in parsed.latest.items()},
+                fatal_returncodes=parsed.fatal_returncodes,
+                api_results=parsed.latest,
+            )
+        return JVLinkExecutionResult(
+            {spec: code for spec, (_, code) in parsed.latest.items()},
+            parsed.no_data_specs,
+            parsed.fatal_specs,
+            parsed.latest,
+            parsed.open_returncodes,
+            parsed.fatal_returncodes,
+            returncode,
+        )
 
     def assert_not_running(self) -> None:
         """Fail closed unless no configured JV-Link executable is still running."""

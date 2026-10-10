@@ -45,6 +45,8 @@ class WeeklyBatchResult:
     adopted_races: dict[str, int]
     plan_only: bool = False
     new_rows: dict[str, int] = field(default_factory=dict)
+    new_races: dict[str, int] = field(default_factory=dict)
+    new_provider_missing: dict[str, int] = field(default_factory=dict)
 
 
 class WeeklyHistoricalOddsRetriever:
@@ -156,6 +158,10 @@ class WeeklyHistoricalOddsRetriever:
             requested_specs = 0
             failed_specs = 0
             new_rows: dict[str, int] = dict.fromkeys(self._odds_profile.realtime_data_specs, 0)
+            new_races: dict[str, int] = dict.fromkeys(self._odds_profile.realtime_data_specs, 0)
+            new_provider_missing: dict[str, int] = dict.fromkeys(
+                self._odds_profile.realtime_data_specs, 0
+            )
             with tempfile.TemporaryDirectory(prefix="keiba-ai-weekly-") as temporary_directory:
                 setting_path = Path(temporary_directory) / "historical-odds.xml"
                 for key in races:
@@ -197,10 +203,12 @@ class WeeklyHistoricalOddsRetriever:
                             elif value.acquired:
                                 results[spec] = ("acquired", value.reason, value.after_rows)
                                 new_rows[spec] += value.inserted_rows
+                                new_races[spec] += 1
                                 if spec in execution_api_results:
                                     api_results[spec] = execution_api_results[spec]
                             elif value.reason == "jvopen_no_data" and spec in no_data_specs:
                                 results[spec] = ("provider_missing", value.reason, 0)
+                                new_provider_missing[spec] += 1
                                 if spec in execution_api_results:
                                     api_results[spec] = execution_api_results[spec]
                             elif value.reason == "jvopen_no_data":
@@ -226,6 +234,9 @@ class WeeklyHistoricalOddsRetriever:
                         self._quarantine_and_reset(
                             ledger, run_id, key, failed, label=f"{run_id}-{key.race_id}"
                         )
+                    successful = specs - failed
+                    if successful:
+                        self._archive.reset_staging(successful)
                     failed_specs += sum(state == "failed" for state, _, _ in results.values())
                     ledger.finish_request(
                         key,
@@ -276,6 +287,8 @@ class WeeklyHistoricalOddsRetriever:
                 adopted_races,
                 False,
                 new_rows,
+                new_races,
+                new_provider_missing,
             )
             ledger.finish_run(run_id, self._result_payload(result), self._clock())
             self._write_summary(result, ledger)
@@ -560,6 +573,8 @@ class WeeklyHistoricalOddsRetriever:
             "pending_after": result.pending_after,
             "adopted_races": result.adopted_races,
             "new_rows": result.new_rows,
+            "new_races": result.new_races,
+            "new_provider_missing": result.new_provider_missing,
         }
 
     def _write_summary(

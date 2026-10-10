@@ -18,6 +18,7 @@ runner = CliRunner()
 
 def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
     retriever = Mock()
+    retriever.retrieve_historical_basic.side_effect = lambda publisher: publisher()
     preprocesser = Mock()
     preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
     with (
@@ -28,7 +29,7 @@ def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
 
     assert result.exit_code == 0
     assert "historical basic data retrieved" in result.stdout
-    retriever.retrieve_historical_basic.assert_called_once_with()
+    retriever.retrieve_historical_basic.assert_called_once()
     preprocesser.rebuild.assert_called_once_with()
     kwargs = from_toml.call_args.kwargs
     assert kwargs["data_config"].as_posix() == "config/data.toml"

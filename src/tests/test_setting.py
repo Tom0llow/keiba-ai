@@ -1,13 +1,19 @@
 """Tests for declarative JVLinkToSQLite setting generation."""
 
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
 import pytest
 
 from data.race_key import RaceKey
-from data.retriever.setting import JVLinkConfig, JVLinkProfile, JVLinkSettingBuilder
+from data.retriever.setting import (
+    JVLinkConfig,
+    JVLinkProfile,
+    JVLinkSettingBuilder,
+    validate_historical_odds_batch,
+)
 
 
 def _write_seed(path: Path) -> None:
@@ -182,3 +188,14 @@ def test_repository_config_retrieves_only_missing_historical_odds() -> None:
     assert config.historical_odds_batch.accept_existing_gaps_through == RaceKey(
         date(2008, 1, 26), "06", "01", "07", "06"
     )
+
+
+def test_historical_odds_rejects_refetch_policy() -> None:
+    config_path = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config = JVLinkConfig.from_toml(config_path)
+    assert config.historical_odds_batch is not None
+
+    with pytest.raises(ValueError, match="skip_existing=true"):
+        validate_historical_odds_batch(
+            replace(config.historical_odds, skip_existing=False), config.historical_odds_batch
+        )

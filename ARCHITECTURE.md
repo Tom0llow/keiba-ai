@@ -161,9 +161,9 @@ from `NL_RA_RACE` and closes that SQLite reader before JVLinkToSQLite begins
 realtime odds writes. Non-JRA race records remain in the base database but are
 not sent to the JRA-specific historical-odds DataSpecs. The historical-odds
 profile then generates an exclusive realtime setting for each eligible race.
-The optional `historical_odds.skip_existing` flag defaults to false. When enabled,
-the retriever snapshots distinct complete race keys from each configured O1/O2
-archive table once, closes the read-only connection, and removes already-present
+The `historical_odds.skip_existing` flag must be true for the historical-odds
+workflow. The retriever snapshots distinct complete race keys from each
+configured O1/O2 archive table once, closes the read-only connection, and removes already-present
 DataSpecs from each race's request. Fully archived races are omitted; missing
 tables and unrecognized DataSpecs remain eligible for retrieval. Presence is a
 resume criterion, not a guarantee of a complete odds time series. Realtime

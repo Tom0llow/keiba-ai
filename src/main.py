@@ -286,8 +286,12 @@ def retrieve_historical_basic(
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
 ) -> None:
     """Retrieve historical base data and publish a complete Parquet snapshot."""
-    _retriever(data_config, jvlink_config).retrieve_historical_basic()
-    tables = _preprocesser(data_config).rebuild()
+    tables: dict[str, int] = {}
+
+    def publish() -> None:
+        tables.update(_preprocesser(data_config).rebuild())
+
+    _retriever(data_config, jvlink_config).retrieve_historical_basic(publish)
     typer.echo("historical basic data retrieved")
     typer.echo(f"processed snapshot published: {len(tables)} tables")
 

@@ -1,6 +1,8 @@
 """Tests for the local JVLinkToSQLite subprocess boundary."""
 
+import io
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
@@ -81,6 +83,29 @@ def test_execute_parses_data_spec_api_returncodes(tmp_path: Path) -> None:
         open_returncodes={"0B41": -1},
         process_returncode=0,
     )
+
+
+def test_execute_streams_provider_output_on_interactive_console(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = "[INFO] [JVOpen] RC=-1 (0B41, 2008012701010801)\n"
+
+    class Process:
+        stdout = io.StringIO(output)
+
+        def wait(self) -> int:
+            return 0
+
+    with (
+        patch("data.retriever.jvlinktosqlite.subprocess.Popen", return_value=Process()),
+        patch.object(sys.stdout, "isatty", return_value=True),
+    ):
+        result = runner.execute(setting)
+
+    assert result.no_data_specs == frozenset({"0B41"})
+    assert "JVOpen" in capsys.readouterr().out
 
 
 def test_execute_does_not_treat_jvread_minus_one_as_no_data(tmp_path: Path) -> None:
