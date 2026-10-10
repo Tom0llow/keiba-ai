@@ -16,15 +16,20 @@ from models.evaluate_model import RankingMetrics
 runner = CliRunner()
 
 
-def test_historical_cli_retrieves_without_rebuilding_processed_data() -> None:
+def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
     retriever = Mock()
-    retriever.retrieve_historical.return_value = 12
-    with patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml:
-        result = runner.invoke(app, ["--retrieve", "--mode=historical"])
+    preprocesser = Mock()
+    preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml,
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
+        result = runner.invoke(app, ["--retrieve", "--mode=historical-basic"])
 
     assert result.exit_code == 0
-    assert "12 races" in result.stdout
-    retriever.retrieve_historical.assert_called_once_with()
+    assert "historical basic data retrieved" in result.stdout
+    retriever.retrieve_historical_basic.assert_called_once_with()
+    preprocesser.rebuild.assert_called_once_with()
     kwargs = from_toml.call_args.kwargs
     assert kwargs["data_config"].as_posix() == "config/data.toml"
     assert kwargs["jvlink_config"].as_posix() == "config/jvlink.toml"
@@ -39,59 +44,72 @@ def test_latest_cli_retrieves_without_refreshing_processed_data() -> None:
     retriever.retrieve_latest.assert_called_once_with()
 
 
-def test_historical_weekly_cli_plan_only_is_forwarded() -> None:
+def test_historical_odds_cli_plan_only_is_forwarded() -> None:
     retriever = Mock()
-    retriever.retrieve_historical_weekly.return_value = WeeklyBatchResult(
+    retriever.retrieve_historical_odds.return_value = WeeklyBatchResult(
         "plan", 2008, None, 4, 8, 0, 8, {}, True
     )
     with patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml:
         result = runner.invoke(
             app,
-            ["--retrieve", "--mode=historical-weekly", "--plan-only"],
+            ["--retrieve", "--mode=historical-odds", "--plan-only"],
         )
 
     assert result.exit_code == 0
     assert '"year": 2008' in result.stdout
-    retriever.retrieve_historical_weekly.assert_called_once_with(plan_only=True, recover=False)
+    retriever.retrieve_historical_odds.assert_called_once_with(plan_only=True, raw_only=True)
     assert from_toml.call_args.kwargs["create_runtime"] is False
     assert from_toml.call_args.kwargs["validate_executable"] is False
 
 
-def test_historical_weekly_cli_retrieves_one_year_without_parquet() -> None:
+def test_historical_odds_cli_publishes_once_after_all_years_complete() -> None:
     retriever = Mock()
-    retriever.retrieve_historical_weekly.return_value = WeeklyBatchResult(
-        "completed", 2008, "run", 4, 8, 0, 0, {}
-    )
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
-        result = runner.invoke(app, ["--retrieve", "--mode=historical-weekly"])
+    retriever.retrieve_historical_odds.side_effect = [
+        WeeklyBatchResult("completed", 2008, "run", 4, 8, 0, 0, {}),
+        WeeklyBatchResult("completed", 2009, "run-2009", 5, 10, 0, 0, {}),
+        WeeklyBatchResult("up_to_date", None, None, 0, 0, 0, 0, {}),
+    ]
+    preprocesser = Mock()
+    preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
+    retriever.publish_historical_odds.side_effect = lambda publisher: publisher()
+    with (
+        patch("main.DataRetriever.from_toml", return_value=retriever),
+        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+    ):
+        result = runner.invoke(app, ["--retrieve", "--mode=historical-odds"])
 
     assert result.exit_code == 0
-    assert '"year": 2008' in result.stdout
-    retriever.retrieve_historical_weekly.assert_called_once_with(plan_only=False, recover=False)
-    retriever.publish_historical_weekly.assert_not_called()
+    assert "Parquet publication is deferred" in result.stdout
+    assert "Complete Parquet rebuild completed: 1 tables published." in result.stdout
+    assert (
+        "Starting complete Parquet rebuild after all historical odds are acquired." in result.stdout
+    )
+    assert retriever.retrieve_historical_odds.call_count == 3
+    retriever.publish_historical_odds.assert_called_once()
+    assert preprocesser.rebuild.call_count == 1
 
 
-def test_historical_weekly_cli_returns_failure_for_failed_batch() -> None:
+def test_historical_odds_cli_returns_failure_for_failed_batch() -> None:
     retriever = Mock()
-    retriever.retrieve_historical_weekly.return_value = WeeklyBatchResult(
+    retriever.retrieve_historical_odds.return_value = WeeklyBatchResult(
         "failed", 2008, "run", 1, 2, 2, 2, {}
     )
     with patch("main.DataRetriever.from_toml", return_value=retriever):
-        result = runner.invoke(app, ["--retrieve", "--mode=historical-weekly"])
+        result = runner.invoke(app, ["--retrieve", "--mode=historical-odds"])
 
     assert result.exit_code == 1
     assert '"status": "failed"' in result.stdout
 
 
-def test_historical_weekly_cli_confirms_explicit_provider_missing_race() -> None:
+def test_historical_odds_cli_confirms_explicit_provider_missing_race() -> None:
     retriever = Mock()
-    retriever.confirm_historical_weekly_provider_missing.return_value = 2
+    retriever.confirm_historical_odds_provider_missing.return_value = 2
     with patch("main.DataRetriever.from_toml", return_value=retriever):
         result = runner.invoke(
             app,
             [
                 "--retrieve",
-                "--mode=historical-weekly",
+                "--mode=historical-odds",
                 "--confirm-provider-missing",
                 "--date",
                 "2008-02-03",
@@ -107,7 +125,7 @@ def test_historical_weekly_cli_confirms_explicit_provider_missing_race() -> None
         )
 
     assert result.exit_code == 0
-    retriever.confirm_historical_weekly_provider_missing.assert_called_once_with(
+    retriever.confirm_historical_odds_provider_missing.assert_called_once_with(
         RaceKey(date(2008, 2, 3), "05", "01", "02", "01"), frozenset({"0B41", "0B42"})
     )
     assert '"status": "provider_missing"' in result.stdout
@@ -170,6 +188,13 @@ def test_retrieve_subcommand_is_removed() -> None:
     result = runner.invoke(app, ["retrieve", "historical"])
 
     assert result.exit_code == 2
+
+
+def test_legacy_historical_mode_names_are_rejected() -> None:
+    for mode in ("historical", "historical-weekly"):
+        result = runner.invoke(app, ["--retrieve", f"--mode={mode}"])
+
+        assert result.exit_code == 2
 
 
 def test_preprocess_rebuild_can_run_without_retrieval() -> None:

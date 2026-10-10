@@ -4,7 +4,7 @@
 - Date: 2026-10-09
 - Decision Owners: Repository maintainers
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-014（公開CLI名とParquet公開タイミングのみ）
 
 ## Context
 
@@ -19,7 +19,7 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
    cutoffまでの候補を時系列に処理する。JVLink取得とParquet公開は別コマンドとし、取得
    コマンドは1年分で終了する。`preprocess historical-weekly` はraw取得完了を確認してから
    完全Parquetを公開し、成功時だけ台帳の公開状態を`published`へ進める。
-   `scripts/retrieve-historical-odds-weekly.ps1` は取得コマンドだけを単発起動し、タスク登録・
+   `historical-odds` CLIは取得コマンドだけを単発起動し、タスク登録・
    常駐スケジューラ・曜日による待機を行わない。
 2. 取得ポリシーは `config/jvlink.toml` の
    `[historical_odds.batch]` に置き、実行状態はGit管理外のruntime SQLite

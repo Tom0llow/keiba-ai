@@ -9,6 +9,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, field, replace
 from datetime import date, datetime, timedelta
 from pathlib import Path
+from typing import TypeVar
 from zoneinfo import ZoneInfo
 
 from data.race_key import RaceKey
@@ -26,6 +27,8 @@ from data.retriever.progress import (
     reconcile_states,
 )
 from data.retriever.setting import HistoricalOddsBatch, JVLinkProfile, JVLinkSettingBuilder
+
+T = TypeVar("T")
 
 
 @dataclass(frozen=True)
@@ -84,15 +87,21 @@ class WeeklyHistoricalOddsRetriever:
         plan_only: bool = False,
         cutoff: date | None = None,
         recover: bool = False,
+        raw_only: bool = False,
     ) -> WeeklyBatchResult:
-        """Run one year, or return a read-only plan when requested."""
+        """Run one year, or return a read-only plan when requested.
+
+        When ``raw_only`` is true, publication state does not select another
+        year. This lets the caller defer one complete Parquet publication until
+        all raw historical odds have been acquired.
+        """
         now = self._clock()
         effective_cutoff = cutoff or (now.date() - timedelta(days=1))
         if plan_only:
             snapshot = read_raw_snapshot(
                 self._database, self._odds_profile, self._batch, effective_cutoff
             )
-            return self._plan(snapshot, effective_cutoff)
+            return self._plan(snapshot, effective_cutoff, raw_only=raw_only)
 
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
         ledger = self.ledger
@@ -127,10 +136,17 @@ class WeeklyHistoricalOddsRetriever:
             else:
                 adopted_races = ledger.reconcile(snapshot, now)
             states, publications, _ = ledger.read()
-            year = self._select_year(states, snapshot.races, effective_cutoff, publications)
+            year = self._select_year(
+                states,
+                snapshot.races,
+                effective_cutoff,
+                None if raw_only else publications,
+            )
             if year is None:
                 result = WeeklyBatchResult("up_to_date", None, None, 0, 0, 0, 0, {})
-                self._write_summary(result, ledger)
+                self._write_summary(
+                    result, ledger, effective_year=self._batch.last_year, phase="idle"
+                )
                 return result
 
             races = self._races_for_year(states, snapshot.races, year)
@@ -241,7 +257,13 @@ class WeeklyHistoricalOddsRetriever:
                 and state.state not in {"acquired", "provider_missing"}
             )
             status = (
-                "failed" if failed_specs else ("completed" if pending_after == 0 else "up_to_date")
+                "failed"
+                if failed_specs
+                else (
+                    "completed"
+                    if pending_after == 0 and year < effective_cutoff.year
+                    else "up_to_date"
+                )
             )
             result = WeeklyBatchResult(
                 status,
@@ -265,7 +287,7 @@ class WeeklyHistoricalOddsRetriever:
         effective_cutoff = cutoff or (now.date() - timedelta(days=1))
         if not self.ledger_path.is_file():
             raise AcquisitionBlocked(
-                "historical-weekly publication requires an existing progress ledger"
+                "historical-odds publication requires an existing progress ledger"
             )
         with AcquisitionLock(self._database, self.ledger_path) as lock:
             lock.bind()
@@ -293,7 +315,7 @@ class WeeklyHistoricalOddsRetriever:
         """Regenerate derived publication files from the committed ledger state."""
         if not self.ledger_path.is_file():
             raise AcquisitionBlocked(
-                "historical-weekly publication requires an existing progress ledger"
+                "historical-odds publication requires an existing progress ledger"
             )
         with AcquisitionLock(self._database, self.ledger_path) as lock:
             lock.bind()
@@ -305,6 +327,44 @@ class WeeklyHistoricalOddsRetriever:
             year = max(published_years, default=self._batch.last_year)
             result = WeeklyBatchResult("up_to_date", year, None, 0, 0, 0, 0, {})
             self.refresh_derived_after_publication_locked(ledger, result, "published")
+
+    def publish_complete(self, publisher: Callable[[], T]) -> T | None:
+        """Publish all raw-complete years in one Parquet rebuild."""
+        now = self._clock()
+        with AcquisitionLock(self._database, self.ledger_path) as lock:
+            lock.bind()
+            ledger = self.ledger
+            snapshot = read_raw_snapshot(
+                self._database,
+                self._odds_profile,
+                self._batch,
+                now.date() - timedelta(days=1),
+            )
+            ledger.reconcile(snapshot, now)
+            states, publications, _ = ledger.read()
+            if any(
+                state.state not in {"acquired", "provider_missing"} for state in states.values()
+            ):
+                raise AcquisitionBlocked("historical odds remain incomplete")
+            years = [
+                year
+                for year, publication in publications.items()
+                if publication in {"pending", "failed"}
+            ]
+            if not years:
+                return None
+            result = WeeklyBatchResult("up_to_date", None, None, 0, 0, 0, 0, {})
+            try:
+                published = publisher()
+            except BaseException:
+                for year in years:
+                    ledger.publication(year, "failed")
+                self.refresh_derived_after_publication_locked(ledger, result, "failed")
+                raise
+            for year in years:
+                ledger.publication(year, "published")
+            self.refresh_derived_after_publication_locked(ledger, result, "published")
+            return published
 
     def _assert_runner_stopped(self) -> None:
         checker = getattr(self._runner, "assert_not_running", None)
@@ -389,7 +449,9 @@ class WeeklyHistoricalOddsRetriever:
             publication_state=publication_state,
         )
 
-    def _plan(self, snapshot: RawSnapshot, cutoff: date) -> WeeklyBatchResult:
+    def _plan(
+        self, snapshot: RawSnapshot, cutoff: date, *, raw_only: bool = False
+    ) -> WeeklyBatchResult:
         if self.ledger_path.exists():
             ledger = ProgressLedger(
                 self.ledger_path, self._database, self._odds_profile, self._batch
@@ -429,7 +491,12 @@ class WeeklyHistoricalOddsRetriever:
             }
             adopted_races = dict.fromkeys(sorted(self._odds_profile.realtime_data_specs), 0)
             publications = None
-        year = self._select_year(states, snapshot.races, cutoff, publications)
+        year = self._select_year(
+            states,
+            snapshot.races,
+            cutoff,
+            None if raw_only else publications,
+        )
         races = self._races_for_year(states, snapshot.races, year) if year is not None else ()
         specs = sum(
             1
@@ -527,8 +594,10 @@ class WeeklyHistoricalOddsRetriever:
                 "plan_only": result.plan_only,
                 "state_revision": state_revision,
             }
-        if result.year is not None:
-            payload["publication"] = publication_state or publications.get(result.year)
+        if publication_state is not None:
+            payload["publication"] = publication_state
+        elif result.year is not None:
+            payload["publication"] = publications.get(result.year)
         atomic_write(
             progress_path,
             json.dumps(payload, ensure_ascii=False, indent=2) + "\n",

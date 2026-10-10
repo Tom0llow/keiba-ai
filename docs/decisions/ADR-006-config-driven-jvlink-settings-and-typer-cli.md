@@ -57,7 +57,7 @@ JVLinkToSQLite persist updated read positions back into that runtime file.
 Expose retrieval through a Typer CLI at `src/main.py`:
 
 ```text
-uv run python src/main.py --retrieve --mode=historical
+uv run python src/main.py --retrieve --mode=historical-basic
 uv run python src/main.py --retrieve --mode=latest
 ```
 

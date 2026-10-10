@@ -12,7 +12,7 @@ seed_setting = "C:/JVLinkToSQLite/setting.xml"
 
 [historical]
 normal_update = false
-setup_update = false
+setup_update = true
 realtime_update = false
 normal_data_specs = []
 setup_data_specs = [

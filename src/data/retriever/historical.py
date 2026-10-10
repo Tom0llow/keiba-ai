@@ -40,27 +40,28 @@ class HistoricalRetriever:
         self._archive = archive
         self._historical_profile = historical_profile
         self._odds_profile = odds_profile
-        if odds_profile.race_start_date is None:
-            raise ValueError("historical_odds.race_start_date is required")
         self._odds_start_date = odds_profile.race_start_date
 
-    def retrieve(self) -> int:
-        """Retrieve enabled base history and return the number of requested odds races."""
-        with tempfile.TemporaryDirectory(prefix="keiba-ai-historical-") as temporary_directory:
+    def retrieve_basic(self) -> None:
+        """Retrieve enabled base history and ensure the raw database exists."""
+        with tempfile.TemporaryDirectory(
+            prefix="keiba-ai-historical-basic-"
+        ) as temporary_directory:
             temporary_path = Path(temporary_directory)
-            if (
-                self._historical_profile.normal_update
-                or self._historical_profile.setup_update
-                or self._historical_profile.realtime_update
-            ):
-                base_setting = self._setting_builder.build(
-                    self._historical_profile,
-                    temporary_path / "historical.xml",
-                )
-                self._runner.execute(base_setting, skip_last_modified_update=True)
+            self._retrieve_base(temporary_path)
             if not self._database.is_file():
                 raise FileNotFoundError(f"raw race database does not exist: {self._database}")
 
+    def retrieve(self) -> int:
+        """Retrieve enabled base history and configured time-series odds."""
+        with tempfile.TemporaryDirectory(prefix="keiba-ai-historical-") as temporary_directory:
+            temporary_path = Path(temporary_directory)
+            self._retrieve_base(temporary_path)
+            if not self._database.is_file():
+                raise FileNotFoundError(f"raw race database does not exist: {self._database}")
+
+            if self._odds_start_date is None:
+                raise ValueError("historical_odds.race_start_date is required")
             race_keys = tuple(self.iter_race_keys(start_date=self._odds_start_date))
             archived_races = self._archived_race_keys() if self._odds_profile.skip_existing else {}
             odds_setting = temporary_path / "historical-odds.xml"
@@ -91,6 +92,19 @@ class HistoricalRetriever:
                 self._archive.archive()
                 count += 1
             return count
+
+    def _retrieve_base(self, temporary_path: Path) -> None:
+        if not (
+            self._historical_profile.normal_update
+            or self._historical_profile.setup_update
+            or self._historical_profile.realtime_update
+        ):
+            return
+        base_setting = self._setting_builder.build(
+            self._historical_profile,
+            temporary_path / "historical.xml",
+        )
+        self._runner.execute(base_setting, skip_last_modified_update=True)
 
     def iter_race_keys(self, *, start_date: date) -> Iterator[RaceKey]:
         """Yield a snapshot of race keys after closing the SQLite reader connection."""

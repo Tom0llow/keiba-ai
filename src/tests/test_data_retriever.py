@@ -33,7 +33,7 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
         patch("data.data_retriever.JVLinkSettingBuilder"),
     ):
         historical = Mock()
-        historical.retrieve.return_value = 42
+        historical.retrieve_basic.return_value = None
         historical_type.return_value = historical
         latest = Mock()
         latest_type.return_value = latest
@@ -42,7 +42,7 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
         realtime_type.return_value = realtime
         retriever = DataRetriever(paths=paths, jvlink=jvlink)
 
-        assert retriever.retrieve_historical() == 42
+        retriever.retrieve_historical_basic()
         retriever.retrieve_latest()
         inserted = retriever.retrieve_realtime(
             race_date=date(2026, 10, 4),
@@ -53,7 +53,7 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
         )
 
     assert inserted == 15
-    historical.retrieve.assert_called_once_with()
+    historical.retrieve_basic.assert_called_once_with()
     latest.retrieve.assert_called_once_with()
     realtime.retrieve.assert_called_once()
     race_key = realtime.retrieve.call_args.args[0]

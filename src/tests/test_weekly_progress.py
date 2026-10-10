@@ -64,6 +64,8 @@ def test_bootstrap_adopts_existing_archive_after_frontier(tmp_path: Path) -> Non
     assert states[(later.race_id, "0B41")].state == "acquired"
     assert states[(later.race_id, "0B41")].reason == "initial_archive_observed"
     assert states[(later.race_id, "0B42")].state == "pending"
+    _, publications, _ = ledger.read()
+    assert publications[2008] == "pending"
 
 
 def test_external_archive_is_adopted_and_missing_state_recovers(tmp_path: Path) -> None:
@@ -540,10 +542,19 @@ def test_weekly_run_retrieves_one_year_and_resumes_without_repeating(tmp_path: P
             == "110000"
         )
 
-    retriever.mark_published(2008)
-    second = retriever.run(cutoff=date(2026, 10, 5))
+    second = retriever.run(cutoff=date(2026, 10, 5), raw_only=True)
     assert second.status == "up_to_date"
     assert second.requested_races == 0
+    assert retriever.publish_complete(lambda: "published") == "published"
+    progress = json.loads(
+        (tmp_path / "runtime" / "historical-odds-progress.json").read_text(encoding="utf-8")
+    )
+    assert progress["publication"] == "published"
+    third = retriever.run(cutoff=date(2026, 10, 5))
+    assert third.status == "up_to_date"
+    assert 'phase = "idle"' in (tmp_path / "runtime" / "historical-odds-effective.toml").read_text(
+        encoding="utf-8"
+    )
     with sqlite3.connect(raw) as database:
         assert (
             database.execute("SELECT COUNT(*) FROM ARCHIVE_O1_ODDS_TANFUKUWAKU").fetchone()[0] == 1
@@ -623,10 +634,77 @@ def test_weekly_run_continues_after_no_data_response_and_marks_provider_missing(
             "SELECT race_id,state,reason,returncode,api_name,api_returncode "
             "FROM race_specs ORDER BY race_id,data_spec"
         ).fetchall()
+        publication = database.execute("SELECT publication FROM years WHERE year=2008").fetchone()[
+            0
+        ]
     assert set(rows) == {
         ("2008012701010801", "provider_missing", "jvopen_no_data", None, "JVOpen", -1),
         ("2008012701010802", "acquired", "requested_archive_committed", None, "JVOpen", 0),
     }
+    assert publication == "pending"
+
+
+def test_weekly_run_reports_current_year_as_up_to_date_after_complete_request(
+    tmp_path: Path,
+) -> None:
+    raw = tmp_path / "raw.db"
+    with sqlite3.connect(raw) as database:
+        database.execute(
+            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
+        )
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2026','1004','01','01','01','01')")
+        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT"
+        database.execute(f"CREATE TABLE RT_O1_ODDS_TANFUKUWAKU ({columns})")
+        database.execute(f"CREATE TABLE RT_O2_ODDS_UMAREN ({columns})")
+
+    class Runner:
+        def execute(
+            self, setting: Path, *, skip_last_modified_update: bool
+        ) -> JVLinkExecutionResult:
+            with sqlite3.connect(raw) as database:
+                for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+                    database.execute(
+                        f"INSERT INTO {table} VALUES ('2026','1004','01','01','01','01','120000')"
+                    )
+            return JVLinkExecutionResult(
+                {"0B41": 0, "0B42": 0},
+                api_results={"0B41": ("JVOpen", 0), "0B42": ("JVOpen", 0)},
+                open_returncodes={"0B41": 0, "0B42": 0},
+            )
+
+    batch = HistoricalOddsBatch(
+        2026,
+        2026,
+        1,
+        RaceKey(date(2026, 1, 1), "01", "01", "01", "01"),
+    )
+    profile = JVLinkProfile(
+        False,
+        False,
+        True,
+        frozenset(),
+        frozenset(),
+        frozenset({"0B41", "0B42"}),
+        race_start_date=date(2026, 1, 1),
+    )
+    builder = Mock()
+    builder.build.side_effect = lambda profile, destination, **kwargs: destination
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, Runner()),
+        raw,
+        builder,
+        OddsArchive(raw),
+        profile,
+        batch,
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+
+    result = retriever.run(cutoff=date(2026, 10, 5))
+
+    assert result.status == "up_to_date"
+    assert result.year == 2026
+    assert result.pending_after == 0
 
 
 @pytest.mark.parametrize(

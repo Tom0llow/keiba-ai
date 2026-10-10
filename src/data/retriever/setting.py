@@ -113,16 +113,12 @@ class JVLinkConfig:
         )
 
 
-def validate_batch_profiles(
-    historical: JVLinkProfile, odds: JVLinkProfile, batch: HistoricalOddsBatch
-) -> None:
-    """Reject incompatible base updates and unsupported weekly odds policies."""
-    if historical.normal_update or historical.setup_update or historical.realtime_update:
-        raise ValueError("historical-weekly requires all historical base updates to be disabled")
+def validate_historical_odds_batch(odds: JVLinkProfile, batch: HistoricalOddsBatch) -> None:
+    """Validate the profile used by the historical-odds workflow."""
     if odds.normal_update or odds.setup_update or not odds.realtime_update:
-        raise ValueError("historical-weekly requires only realtime odds updates")
+        raise ValueError("historical-odds requires only realtime odds updates")
     if not odds.realtime_data_specs or not odds.realtime_data_specs <= {"0B41", "0B42"}:
-        raise ValueError("historical-weekly supports only 0B41 and 0B42")
+        raise ValueError("historical-odds supports only 0B41 and 0B42")
     if odds.race_start_date is None or odds.race_start_date.year != batch.first_year:
         raise ValueError("historical_odds.race_start_date must lie in batch.first_year")
     if batch.accept_existing_gaps_through.race_date < odds.race_start_date:

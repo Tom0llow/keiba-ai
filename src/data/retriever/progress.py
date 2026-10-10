@@ -200,11 +200,15 @@ class ProgressLedger:
                 "archive_schemas": json.dumps(snapshot.schemas, sort_keys=True),
             }
             database.executemany("INSERT INTO metadata VALUES (?,?)", metadata.items())
+            frontier_year = self.batch.accept_existing_gaps_through.race_date.year
+            managed_years = {
+                key.race_date.year for key in snapshot.races if key.race_date.year >= frontier_year
+            }
             for year in range(self.batch.first_year, self.batch.last_year + 1):
                 publication = (
-                    "baseline"
-                    if year < self.batch.accept_existing_gaps_through.race_date.year
-                    else "published"
+                    "pending"
+                    if year in managed_years
+                    else ("baseline" if year < frontier_year else "published")
                 )
                 database.execute("INSERT INTO years VALUES (?,?,NULL)", (year, publication))
             for key in snapshot.races:

@@ -170,7 +170,7 @@ def test_repository_config_retrieves_only_missing_historical_odds() -> None:
     config = JVLinkConfig.from_toml(config_path)
 
     assert not config.historical.normal_update
-    assert not config.historical.setup_update
+    assert config.historical.setup_update
     assert not config.historical.realtime_update
     assert config.historical_odds.skip_existing
     assert config.historical_odds.race_start_date == date(2003, 10, 4)

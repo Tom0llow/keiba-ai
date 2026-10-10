@@ -132,7 +132,8 @@ This boundary is recorded in ADR-008.
 
 ## Retrieval boundary
 
-`src/main.py` is the user-facing Typer entry point for historical, latest, and
+`src/main.py` is the user-facing Typer entry point for historical-basic,
+historical-odds, latest, and
 prediction-time realtime retrieval, standalone preprocessing, and the model
 commands `model audit`, `model features`, and `model walk-forward`. XML
 transformation, feature validation, and model evaluation remain below the CLI
@@ -169,19 +170,23 @@ resume criterion, not a guarantee of a complete odds time series. Realtime
 prediction retrieval continues to request its configured history/current specs.
 Because JVLinkToSQLite recreates realtime O1/O2 staging tables on subsequent
 realtime executions, each race's result is archived before the next race is
-requested.
+requested. The `historical-basic` CLI uses only the base profile and publishes
+one complete Parquet snapshot after that base retrieval; it does not run the
+per-race odds loop.
 
-`historical-weekly` is the manual, year-scoped batch boundary for long-running
+`historical-odds` is the manual, year-scoped batch boundary for long-running
 historical odds acquisition. It uses a runtime SQLite progress ledger keyed by
 complete `RaceKey` plus DataSpec, accepts the configured initial frontier gaps as
 `provider_missing`, and processes only the oldest unfinished year up to a
 past-date cutoff. The generated execution TOML and JSON report are derived
 runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
-weekly PowerShell entry point starts one process and does not register Task
-Scheduler jobs or inspect the weekday. Within that process, the CLI retrieves
-one year, publishes its complete Parquet snapshot, advances the runtime state,
-and continues with the next year until the operator stops it, a retrieval or
-publication fails, or no target years remain. A successful
+PowerShell entry point starts one process and does not register Task Scheduler
+jobs or inspect the weekday. Within that process, the CLI retrieves one year,
+retains raw progress, and continues with the next year. It publishes one
+complete Parquet snapshot only after every managed year is raw-complete; a
+retrieval or publication failure leaves the raw database and ledger available
+for the next manual run. It stops when the operator interrupts it, a retrieval
+or publication fails, or no target years remain. A successful
 JVLink/JVRTOpen request that leaves a valid empty realtime staging table is
 recorded as `provider_missing/jvopen_no_data` only when the captured API result
 is the documented `-1` no-data result; the current run continues with the next
@@ -195,10 +200,10 @@ automatically when an older v1 ledger is first updated. An older
 `provider_missing/jvopen_no_data` row without API evidence is migrated to
 `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data`
 rows require the captured `JVOpen`/`JVRTOpen = -1` result.
-Historical, latest, realtime, and weekly writes share the raw DB OS lock and
-reject unresolved weekly requests. The API return-code mapping is defined by
+Historical-basic, historical-odds, latest, and realtime writes share the raw DB OS lock and
+reject unresolved historical-odds requests. The API return-code mapping is defined by
 the [JRA-VAN JV-Link API error-code list](https://developer.jra-van.jp/t/topic/822).
-After an operator verifies a provider-side gap with JV-Link, the weekly CLI can
+After an operator verifies a provider-side gap with JV-Link, the historical-odds CLI can
 still explicitly promote the exact legacy failed RaceKey/DataSpec from
 `empty_response_unverified` to `provider_missing` without starting JV-Link.
 
@@ -259,12 +264,13 @@ new version and atomically switches the race-local `CURRENT` pointer only after
 both files validate. Realtime preprocessing therefore stays race-scoped rather
 than rebuilding the complete historical dataset for each prediction refresh.
 
-Retrieval commands only write raw SQLite through JVLink. Complete historical/latest
-Parquet is published separately with `preprocess rebuild`; prediction-time
-Parquet is published with `preprocess realtime` after the target race has been
-retrieved. `preprocess historical-weekly` additionally records the weekly
-publication state after a completed raw year is rebuilt. A standalone
-`preprocess rebuild` command remains available when raw data already exists.
+Historical-basic retrieval automatically calls a complete `rebuild` after base
+data retrieval. Historical-odds retrieval defers that complete `rebuild` until
+all raw odds years are complete and then calls it once. Latest retrieval
+automatically calls a complete `update` (currently implemented as a complete
+snapshot refresh). Realtime retrieval automatically calls `update_race` for the
+target race. A standalone `preprocess rebuild` command is also available when
+raw data already exists.
 
 ADR-008 supersedes ADR-003 for this preprocessing/publication contract.
 
@@ -296,9 +302,9 @@ snapshots, and realtime Parquet versions are local artifacts rather than Git
 contents. Git versions the code and declarative retrieval/preprocessing policy,
 not the acquired datasets.
 
-The weekly progress ledger, derived execution TOML, reports, and recovery
+The historical-odds progress ledger, derived execution TOML, reports, and recovery
 artifacts live under the configured JVLink runtime directory and are not model
-inputs. The ledger is the source of truth for weekly state; generated artifacts
+inputs. The ledger is the source of truth for historical-odds state; generated artifacts
 are atomically regenerated from it after a raw archive commit.
 
 ADR-009 selects LightGBM LambdaRank for the ranking MVP and a later top-3

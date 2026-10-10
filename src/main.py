@@ -59,11 +59,13 @@ def main(
     ] = None,
     plan_only: Annotated[
         bool,
-        typer.Option("--plan-only", help="Inspect a historical-weekly plan without writing."),
+        typer.Option("--plan-only", help="Inspect a historical-odds plan without writing."),
     ] = False,
     recover: Annotated[
         bool,
-        typer.Option("--recover", help="Quarantine and recover an interrupted weekly request."),
+        typer.Option(
+            "--recover", help="Quarantine and recover an interrupted historical-odds request."
+        ),
     ] = False,
     confirm_provider_missing: Annotated[
         bool,
@@ -127,7 +129,7 @@ def main(
         )
     if not retrieve:
         raise typer.BadParameter("--mode requires --retrieve")
-    if mode == "historical":
+    if mode == "historical-basic":
         if (
             plan_only
             or recover
@@ -138,16 +140,16 @@ def main(
                 for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
             )
         ):
-            raise typer.BadParameter("weekly-only options require --mode historical-weekly")
-        retrieve_historical(data_config, jvlink_config)
+            raise typer.BadParameter("odds-only options require --mode historical-odds")
+        retrieve_historical_basic(data_config, jvlink_config)
         return
-    if mode == "historical-weekly":
+    if mode == "historical-odds":
         if confirm_provider_missing:
             race_key = _require_provider_missing_race(
                 race_datetime, jyo_code, kaiji, nichiji, race_number
             )
             specs = _provider_missing_specs(data_spec)
-            confirm_historical_weekly_provider_missing(race_key, specs, data_config, jvlink_config)
+            confirm_historical_odds_provider_missing(race_key, specs, data_config, jvlink_config)
             return
         if (
             any(
@@ -159,7 +161,7 @@ def main(
             raise typer.BadParameter(
                 "race options and --data-spec require --confirm-provider-missing"
             )
-        retrieve_historical_weekly(data_config, jvlink_config, plan_only=plan_only, recover=recover)
+        retrieve_historical_odds(data_config, jvlink_config, plan_only=plan_only, recover=recover)
         return
     if mode == "latest":
         if (
@@ -172,12 +174,12 @@ def main(
                 for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
             )
         ):
-            raise typer.BadParameter("weekly-only options require --mode historical-weekly")
+            raise typer.BadParameter("odds-only options require --mode historical-odds")
         retrieve_latest(data_config, jvlink_config)
         return
     if mode == "realtime":
         if plan_only or recover or confirm_provider_missing or data_spec:
-            raise typer.BadParameter("weekly-only options require --mode historical-weekly")
+            raise typer.BadParameter("odds-only options require --mode historical-odds")
         race_key = _resolve_realtime_race(
             jvlink_config,
             race_datetime,
@@ -188,7 +190,9 @@ def main(
         )
         retrieve_realtime(race_key, data_config, jvlink_config)
         return
-    raise typer.BadParameter("--mode must be 'historical', 'latest', or 'realtime'")
+    raise typer.BadParameter(
+        "--mode must be 'historical-basic', 'historical-odds', 'latest', or 'realtime'"
+    )
 
 
 def _retriever(
@@ -277,38 +281,69 @@ def _provider_missing_specs(data_specs: list[str] | None) -> frozenset[str]:
     return frozenset(values)
 
 
-def retrieve_historical(
+def retrieve_historical_basic(
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
 ) -> None:
-    """Retrieve historical raw data through JVLink."""
-    count = _retriever(data_config, jvlink_config).retrieve_historical()
-    typer.echo(f"historical odds retrieved for {count} races")
+    """Retrieve historical base data and publish a complete Parquet snapshot."""
+    _retriever(data_config, jvlink_config).retrieve_historical_basic()
+    tables = _preprocesser(data_config).rebuild()
+    typer.echo("historical basic data retrieved")
+    typer.echo(f"processed snapshot published: {len(tables)} tables")
 
 
-def retrieve_historical_weekly(
+def retrieve_historical_odds(
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
     *,
     plan_only: bool = False,
     recover: bool = False,
 ) -> None:
-    """Retrieve one historical odds year through JVLink."""
+    """Acquire historical odds years and publish one snapshot after raw completion."""
     retriever = _retriever(data_config, jvlink_config, plan_only=plan_only)
-    result = retriever.retrieve_historical_weekly(plan_only=plan_only, recover=recover)
-    typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
-    if result.status == "failed":
-        raise typer.Exit(code=1)
+    recover_pending = recover
+    while True:
+        if recover_pending:
+            result = retriever.retrieve_historical_odds(
+                plan_only=plan_only, recover=True, raw_only=True
+            )
+        else:
+            result = retriever.retrieve_historical_odds(plan_only=plan_only, raw_only=True)
+        recover_pending = False
+        if not plan_only and result.status == "completed" and result.year is not None:
+            typer.echo(
+                f"Historical odds raw acquisition completed for year {result.year}; "
+                "Parquet publication is deferred until all years are acquired."
+            )
+            typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
+            continue
+        if not plan_only and result.status == "up_to_date":
+            typer.echo("Starting complete Parquet rebuild after all historical odds are acquired.")
+            try:
+                tables = retriever.publish_historical_odds(
+                    lambda: _preprocesser(data_config).rebuild()
+                )
+            except BaseException:
+                typer.echo("Complete Parquet rebuild failed.", err=True)
+                raise
+            if tables is not None:
+                typer.echo(f"Complete Parquet rebuild completed: {len(tables)} tables published.")
+            typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
+            return
+        typer.echo(json.dumps(asdict(result), ensure_ascii=False, sort_keys=True))
+        if result.status == "failed":
+            raise typer.Exit(code=1)
+        return
 
 
-def confirm_historical_weekly_provider_missing(
+def confirm_historical_odds_provider_missing(
     race_key: RaceKey,
     specs: frozenset[str],
     data_config: DataConfigOption = Path("config/data.toml"),
     jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
 ) -> None:
     """Confirm selected empty-response failures without starting JV-Link."""
-    count = _retriever(data_config, jvlink_config).confirm_historical_weekly_provider_missing(
+    count = _retriever(data_config, jvlink_config).confirm_historical_odds_provider_missing(
         race_key, specs
     )
     typer.echo(

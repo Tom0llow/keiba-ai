@@ -161,6 +161,30 @@ def test_retrieve_builds_temporary_base_and_archives_each_odds_result(tmp_path: 
     assert archive.archive.call_count == 2
 
 
+def test_retrieve_basic_runs_only_base_update(tmp_path: Path) -> None:
+    database = tmp_path / "race.db"
+    runner = Mock()
+    runner.execute.side_effect = lambda *_args, **_kwargs: _create_race_db(database)
+    builder = Mock()
+    builder.build.side_effect = lambda profile, destination, **kwargs: destination
+    archive = Mock()
+    retriever = HistoricalRetriever(
+        runner,
+        database,
+        builder,
+        archive,
+        _profile(),
+        _profile(),
+    )
+
+    retriever.retrieve_basic()
+
+    runner.execute.assert_called_once()
+    assert runner.execute.call_args.args[0].name == "historical.xml"
+    assert builder.build.call_count == 1
+    archive.archive.assert_not_called()
+
+
 def test_iter_race_keys_skips_non_jra_races(tmp_path: Path) -> None:
     database = tmp_path / "race.db"
     with sqlite3.connect(database) as connection:

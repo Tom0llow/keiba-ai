@@ -18,7 +18,7 @@ from data.retriever.realtime import RealtimeRetriever
 from data.retriever.setting import (
     JVLinkConfig,
     JVLinkSettingBuilder,
-    validate_batch_profiles,
+    validate_historical_odds_batch,
 )
 from data.retriever.weekly import WeeklyBatchResult, WeeklyHistoricalOddsRetriever
 
@@ -42,7 +42,6 @@ class DataRetriever:
             paths.raw_db.parent.mkdir(parents=True, exist_ok=True)
         self._raw_db = paths.raw_db
         self._ledger_path = paths.jvlink_runtime_dir / "historical-odds-progress.db"
-        self._historical_profile = jvlink.historical
         self._odds_profile = jvlink.historical_odds
         self._odds_batch = jvlink.historical_odds_batch
         runner = JVLinkToSQLiteRunner(
@@ -107,92 +106,43 @@ class DataRetriever:
             validate_executable=validate_executable,
         )
 
-    def retrieve_historical(self) -> int:
-        """Retrieve historical race data and configured time-series odds."""
+    def retrieve_historical_basic(self) -> None:
+        """Retrieve configured historical base data."""
         with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
             lock.bind()
-            return self._historical.retrieve()
+            self._historical.retrieve_basic()
 
-    def retrieve_historical_weekly(
-        self, *, plan_only: bool = False, recover: bool = False
+    def retrieve_historical_odds(
+        self,
+        *,
+        plan_only: bool = False,
+        recover: bool = False,
+        raw_only: bool = False,
     ) -> WeeklyBatchResult:
         """Run one manual year-scoped historical odds batch."""
         if self._weekly is None:
-            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+            raise ValueError("[historical_odds.batch] is required for historical-odds")
         assert self._odds_batch is not None
-        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
-        return self._weekly.run(plan_only=plan_only, recover=recover)
+        validate_historical_odds_batch(self._odds_profile, self._odds_batch)
+        return self._weekly.run(plan_only=plan_only, recover=recover, raw_only=raw_only)
 
-    def prepare_historical_weekly_publication(self) -> WeeklyBatchResult:
-        """Reconcile raw additions and plan one complete-Parquet publication."""
-        if self._weekly is None:
-            raise ValueError("[historical_odds.batch] is required for historical-weekly")
-        assert self._odds_batch is not None
-        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
-        return self._weekly.prepare_publication()
-
-    def repair_historical_weekly_derived(self) -> None:
-        """Regenerate historical weekly derived files from the committed ledger."""
-        if self._weekly is None:
-            raise ValueError("[historical_odds.batch] is required for historical-weekly")
-        assert self._odds_batch is not None
-        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
-        self._weekly.repair_derived_publication()
-
-    def mark_historical_weekly_published(self, year: int) -> None:
-        """Record successful complete-Parquet publication for one weekly year."""
-        self.mark_historical_weekly_publication(year, "published")
-
-    def mark_historical_weekly_publication(self, year: int, state: str) -> None:
-        """Record a successful or failed complete-Parquet publication."""
-        if self._weekly is None:
-            raise ValueError("[historical_odds.batch] is required for historical-weekly")
-        self._weekly.mark_publication(year, state)
-
-    def confirm_historical_weekly_provider_missing(
+    def confirm_historical_odds_provider_missing(
         self, race_key: RaceKey, specs: frozenset[str]
     ) -> int:
         """Confirm empty-response failures as provider-side gaps."""
         if self._weekly is None:
-            raise ValueError("[historical_odds.batch] is required for historical-weekly")
+            raise ValueError("[historical_odds.batch] is required for historical-odds")
         assert self._odds_batch is not None
-        validate_batch_profiles(self._historical_profile, self._odds_profile, self._odds_batch)
+        validate_historical_odds_batch(self._odds_profile, self._odds_batch)
         return self._weekly.confirm_provider_missing(race_key, specs)
 
-    def publish_historical_weekly(
-        self,
-        year: int,
-        publisher: Callable[[], T],
-        *,
-        result: WeeklyBatchResult | None = None,
-    ) -> T:
-        """Publish one completed year and record its state under the raw DB lock."""
+    def publish_historical_odds(self, publisher: Callable[[], T]) -> T | None:
+        """Publish all raw-complete historical odds years in one snapshot."""
         if self._weekly is None:
-            raise ValueError("[historical_odds.batch] is required for historical-weekly")
-        ledger = self._weekly.ledger
-        with AcquisitionLock(self._raw_db, self._ledger_path) as lock:
-            lock.bind()
-            if result is not None and result.year != year:
-                raise ValueError("publication result year does not match requested year")
-            if result is not None:
-                self._weekly.verify_publication_locked(ledger, year)
-            try:
-                published = publisher()
-            except BaseException:
-                self._weekly.mark_publication_locked(ledger, year, "failed")
-                if result is not None:
-                    self._weekly.refresh_derived_after_publication_locked(ledger, result, "failed")
-                raise
-            self._weekly.mark_publication_locked(ledger, year, "published")
-            if result is not None:
-                try:
-                    self._weekly.refresh_derived_after_publication_locked(
-                        ledger, result, "published"
-                    )
-                except BaseException:
-                    self._weekly.mark_publication_locked(ledger, year, "failed")
-                    raise
-            return published
+            raise ValueError("[historical_odds.batch] is required for historical-odds")
+        assert self._odds_batch is not None
+        validate_historical_odds_batch(self._odds_profile, self._odds_batch)
+        return self._weekly.publish_complete(publisher)
 
     def retrieve_latest(self) -> None:
         """Retrieve the configured latest incremental race data."""
