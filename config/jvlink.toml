@@ -59,6 +59,12 @@ normal_data_specs = []
 setup_data_specs = []
 realtime_data_specs = ["0B41", "0B42"]
 race_start_date = 2003-10-04
+skip_existing = true
+
+[historical_odds.batch]
+first_year = 2003
+last_year = 2026
+years_per_run = 1
 
 [latest]
 normal_update = true

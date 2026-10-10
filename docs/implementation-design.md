@@ -577,7 +577,7 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 ### 11.2. コマンド案と既存との区別
 
-実装済みなのは`uv run python src/main.py --retrieve --mode=historical/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
+実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
 
 | コマンド案 | 入力 | 成果物 |
 | --- | --- | --- |

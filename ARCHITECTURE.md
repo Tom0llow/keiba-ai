@@ -98,8 +98,11 @@ src/
 │  │  ├─ jvlinktosqlite.py
 │  │  ├─ latest.py
 │  │  ├─ odds_archive.py
+│  │  ├─ acquisition_lock.py
+│  │  ├─ progress.py
 │  │  ├─ realtime.py
-│  │  └─ setting.py
+│  │  ├─ setting.py
+│  │  └─ weekly.py
 │  ├─ preprocesser/
 │  │  ├─ __init__.py
 │  │  ├─ read_sqlite.py
@@ -129,7 +132,8 @@ This boundary is recorded in ADR-008.
 
 ## Retrieval boundary
 
-`src/main.py` is the user-facing Typer entry point for historical, latest, and
+`src/main.py` is the user-facing Typer entry point for historical-basic,
+historical-odds, latest, and
 prediction-time realtime retrieval, standalone preprocessing, and the model
 commands `model audit`, `model features`, and `model walk-forward`. XML
 transformation, feature validation, and model evaluation remain below the CLI
@@ -150,14 +154,59 @@ section enablement plus DataSpec allow-lists are applied explicitly; configured
 DataSpecs missing from the seed fail at this boundary.
 
 `historical.py` generates base and per-race odds settings in a temporary
-directory. After the base database exists, it snapshots JRA-compatible race keys
+directory. It omits base execution when all historical update sections are
+disabled and then requires an existing raw database. After the base database
+exists, it snapshots JRA-compatible race keys
 from `NL_RA_RACE` and closes that SQLite reader before JVLinkToSQLite begins
 realtime odds writes. Non-JRA race records remain in the base database but are
 not sent to the JRA-specific historical-odds DataSpecs. The historical-odds
 profile then generates an exclusive realtime setting for each eligible race.
+The `historical_odds.skip_existing` flag must be true for the historical-odds
+workflow. The retriever snapshots distinct complete race keys from each
+configured O1/O2 archive table once, closes the read-only connection, and removes already-present
+DataSpecs from each race's request. Fully archived races are omitted; missing
+tables and unrecognized DataSpecs remain eligible for retrieval. Presence is a
+resume criterion, not a guarantee of a complete odds time series. Realtime
+prediction retrieval continues to request its configured history/current specs.
 Because JVLinkToSQLite recreates realtime O1/O2 staging tables on subsequent
 realtime executions, each race's result is archived before the next race is
-requested.
+requested. The `historical-basic` CLI uses only the base profile and publishes
+one complete Parquet snapshot after that base retrieval; it does not run the
+per-race odds loop.
+
+`historical-odds` is the manual, year-scoped batch boundary for long-running
+historical odds acquisition. It uses a runtime SQLite progress ledger keyed by
+complete `RaceKey` plus DataSpec, records observed archive rows as `acquired`
+and leaves initial archive gaps as `pending`,
+then processes only the oldest unfinished year up to a
+past-date cutoff. The generated execution TOML and JSON report are derived
+runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
+PowerShell entry point starts one process and does not register Task Scheduler
+jobs or inspect the weekday. Within that process, the CLI retrieves one year,
+retains raw progress, and continues with the next year. It publishes one
+complete Parquet snapshot only after every managed year is raw-complete; a
+retrieval or publication failure leaves the raw database and ledger available
+for the next manual run. It stops when the operator interrupts it, a retrieval
+or publication fails, or no target years remain. A successful
+JVLink/JVRTOpen request that leaves a valid empty realtime staging table is
+recorded as `provider_missing/jvopen_no_data` only when the captured API result
+is the documented `-1` no-data result; the current run continues with the next
+RaceKey. If the API result is unavailable, the row remains
+`failed/empty_response_unverified` and is eligible for explicit confirmation.
+Missing tables, invalid staging schemas, execution failures, save failures, and
+other JV-Link error results remain `failed` and stop the run.
+The process exit code remains in `returncode`; the API name and return code are
+stored separately in `api_name` and `api_returncode`, with the columns added
+automatically when an older v1 ledger is first updated. An older
+`provider_missing/jvopen_no_data` row without API evidence is migrated to
+`provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data`
+rows require the captured `JVOpen`/`JVRTOpen = -1` result.
+Historical-basic, historical-odds, latest, and realtime writes share the raw DB OS lock and
+reject unresolved historical-odds requests. The API return-code mapping is defined by
+the [JRA-VAN JV-Link API error-code list](https://developer.jra-van.jp/t/topic/822).
+After an operator verifies a provider-side gap with JV-Link, the historical-odds CLI can
+still explicitly promote the exact legacy failed RaceKey/DataSpec from
+`empty_response_unverified` to `provider_missing` without starting JV-Link.
 
 `latest.py` uses a persistent runtime XML under the configured Git-ignored data
 runtime directory. The first run creates it from the seed. Later runs use the
@@ -216,7 +265,9 @@ new version and atomically switches the race-local `CURRENT` pointer only after
 both files validate. Realtime preprocessing therefore stays race-scoped rather
 than rebuilding the complete historical dataset for each prediction refresh.
 
-Historical retrieval automatically calls a complete `rebuild`. Latest retrieval
+Historical-basic retrieval automatically calls a complete `rebuild` after base
+data retrieval. Historical-odds retrieval defers that complete `rebuild` until
+all raw odds years are complete and then calls it once. Latest retrieval
 automatically calls a complete `update` (currently implemented as a complete
 snapshot refresh). Realtime retrieval automatically calls `update_race` for the
 target race. A standalone `preprocess rebuild` command is also available when
@@ -251,6 +302,11 @@ XML tag details remain inside the adapter.
 snapshots, and realtime Parquet versions are local artifacts rather than Git
 contents. Git versions the code and declarative retrieval/preprocessing policy,
 not the acquired datasets.
+
+The historical-odds progress ledger, derived execution TOML, reports, and recovery
+artifacts live under the configured JVLink runtime directory and are not model
+inputs. The ledger is the source of truth for historical-odds state; generated artifacts
+are atomically regenerated from it after a raw archive commit.
 
 ADR-009 selects LightGBM LambdaRank for the ranking MVP and a later top-3
 Plackett–Luce custom objective for finishing-order probabilities. The current

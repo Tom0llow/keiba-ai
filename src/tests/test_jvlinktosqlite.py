@@ -1,12 +1,18 @@
 """Tests for the local JVLinkToSQLite subprocess boundary."""
 
+import io
 import subprocess
+import sys
 from pathlib import Path
 from unittest.mock import patch
 
 import pytest
 
-from data.retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
+from data.retriever.jvlinktosqlite import (
+    JVLinkExecutionResult,
+    JVLinkToSQLiteError,
+    JVLinkToSQLiteRunner,
+)
 
 
 def _create_runner_files(tmp_path: Path) -> tuple[Path, Path, Path]:
@@ -34,6 +40,7 @@ def test_execute_invokes_exec_mode_without_shell(
     runner = JVLinkToSQLiteRunner(executable, database)
 
     with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess([str(executable)], 0, "", "")
         runner.execute(setting, skip_last_modified_update=skip_last_modified_update)
 
     run.assert_called_once_with(
@@ -50,9 +57,105 @@ def test_execute_invokes_exec_mode_without_shell(
         ],
         cwd=executable.resolve().parent,
         check=True,
+        encoding="cp932",
+        errors="replace",
+        stdout=subprocess.PIPE,
+        stderr=subprocess.STDOUT,
         timeout=None,
         shell=False,
+        text=True,
     )
+
+
+def test_execute_parses_data_spec_api_returncodes(tmp_path: Path) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = "[INFO] [JVOpen] RC=-1 (0B41, 2008012701010801)\n"
+
+    with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
+        result = runner.execute(setting)
+
+    assert result == JVLinkExecutionResult(
+        {"0B41": -1},
+        frozenset({"0B41"}),
+        api_results={"0B41": ("JVOpen", -1)},
+        open_returncodes={"0B41": -1},
+        process_returncode=0,
+    )
+
+
+def test_execute_streams_provider_output_on_interactive_console(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = "[INFO] [JVOpen] RC=-1 (0B41, 2008012701010801)\n"
+
+    class Process:
+        stdout = io.StringIO(output)
+
+        def wait(self) -> int:
+            return 0
+
+    with (
+        patch("data.retriever.jvlinktosqlite.subprocess.Popen", return_value=Process()),
+        patch.object(sys.stdout, "isatty", return_value=True),
+    ):
+        result = runner.execute(setting)
+
+    assert result.no_data_specs == frozenset({"0B41"})
+    assert "JVOpen" in capsys.readouterr().out
+
+
+def test_execute_does_not_treat_jvread_minus_one_as_no_data(tmp_path: Path) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = "[INFO] [JVRead] RC=-1 (0B41, 2008012701010801)\n"
+
+    with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
+        result = runner.execute(setting)
+
+    assert result == JVLinkExecutionResult(
+        {"0B41": -1}, api_results={"0B41": ("JVRead", -1)}, process_returncode=0
+    )
+
+
+def test_execute_marks_jvopen_error_as_fatal(tmp_path: Path) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = "[INFO] [JVOpen] RC=-504 (0B41, 2008012701010801)\n"
+
+    with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
+        result = runner.execute(setting)
+
+    assert result == JVLinkExecutionResult(
+        {"0B41": -504},
+        fatal_specs=frozenset({"0B41"}),
+        api_results={"0B41": ("JVOpen", -504)},
+        open_returncodes={"0B41": -504},
+        fatal_returncodes={"0B41": -504},
+        process_returncode=0,
+    )
+
+
+def test_execute_uses_last_api_result_for_classification(tmp_path: Path) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = (
+        "[INFO] [JVOpen] RC=-1 (0B41, 2008012701010801)\n"
+        "[INFO] [JVOpen] RC=0 (0B41, 2008012701010801)\n"
+    )
+
+    with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
+        run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
+        result = runner.execute(setting)
+
+    assert result.no_data_specs == frozenset()
+    assert result.fatal_specs == frozenset()
+    assert result.open_returncodes == {"0B41": 0}
 
 
 def test_execute_translates_nonzero_exit_status(tmp_path: Path) -> None:
@@ -60,11 +163,17 @@ def test_execute_translates_nonzero_exit_status(tmp_path: Path) -> None:
     runner = JVLinkToSQLiteRunner(executable, database)
 
     with patch("data.retriever.jvlinktosqlite.subprocess.run") as run:
-        run.side_effect = subprocess.CalledProcessError(7, [str(executable)])
+        run.side_effect = subprocess.CalledProcessError(
+            7,
+            [str(executable)],
+            output="[JVOpen] RC=-504 (0B41, 2008012701010801)",
+            stderr="",
+        )
         with pytest.raises(JVLinkToSQLiteError, match="status 7") as exc_info:
             runner.execute(setting)
 
     assert exc_info.value.returncode == 7
+    assert exc_info.value.api_returncodes == {"0B41": -504}
 
 
 def test_execute_translates_timeout(tmp_path: Path) -> None:
@@ -112,3 +221,40 @@ def test_timeout_must_be_positive(tmp_path: Path, timeout_seconds: float) -> Non
 
     with pytest.raises(ValueError, match="timeout_seconds must be positive"):
         JVLinkToSQLiteRunner(executable, database, timeout_seconds=timeout_seconds)
+
+
+def test_assert_not_running_uses_tasklist_csv(tmp_path: Path) -> None:
+    executable, _, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+
+    with (
+        patch("data.retriever.jvlinktosqlite.os.name", "nt"),
+        patch("data.retriever.jvlinktosqlite.subprocess.run") as run,
+    ):
+        run.return_value = subprocess.CompletedProcess(
+            ["tasklist"], 0, '"other.exe","1","Console","1","1 K"\n', ""
+        )
+        runner.assert_not_running()
+
+    run.assert_called_once_with(
+        ["tasklist", "/FI", "IMAGENAME eq JVLinkToSQLite.exe", "/FO", "CSV", "/NH"],
+        capture_output=True,
+        text=True,
+        check=False,
+        shell=False,
+    )
+
+
+def test_assert_not_running_rejects_matching_process(tmp_path: Path) -> None:
+    executable, _, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+
+    with (
+        patch("data.retriever.jvlinktosqlite.os.name", "nt"),
+        patch("data.retriever.jvlinktosqlite.subprocess.run") as run,
+    ):
+        run.return_value = subprocess.CompletedProcess(
+            ["tasklist"], 0, '"JVLinkToSQLite.exe","1","Console","1","1 K"\n', ""
+        )
+        with pytest.raises(JVLinkToSQLiteError, match="still running"):
+            runner.assert_not_running()

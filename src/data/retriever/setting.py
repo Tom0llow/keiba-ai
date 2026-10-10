@@ -44,6 +44,27 @@ class JVLinkProfile:
     start_datetime: datetime | None = None
     race_start_date: date | None = None
     start_datetimes: dict[str, datetime] | None = None
+    skip_existing: bool = False
+
+
+@dataclass(frozen=True)
+class HistoricalOddsBatch:
+    """Fixed year range for weekly historical odds retrieval."""
+
+    first_year: int
+    last_year: int
+    years_per_run: int
+
+    def __post_init__(self) -> None:
+        if any(
+            type(value) is not int
+            for value in (self.first_year, self.last_year, self.years_per_run)
+        ):
+            raise ValueError("historical_odds.batch years must be integers")
+        if not 1000 <= self.first_year <= self.last_year <= 9998:
+            raise ValueError("historical_odds.batch year range is invalid")
+        if self.years_per_run != 1:
+            raise ValueError("historical_odds.batch.years_per_run must be 1")
 
 
 @dataclass(frozen=True)
@@ -58,6 +79,7 @@ class JVLinkConfig:
     realtime_history: JVLinkProfile
     realtime_current: JVLinkProfile
     realtime_race: RaceKey | None = None
+    historical_odds_batch: HistoricalOddsBatch | None = None
 
     @classmethod
     def from_toml(cls, config_path: Path) -> JVLinkConfig:
@@ -76,7 +98,37 @@ class JVLinkConfig:
             realtime_history=_load_profile(config, "realtime_history"),
             realtime_current=_load_profile(config, "realtime_current"),
             realtime_race=_optional_race_key(config, "realtime"),
+            historical_odds_batch=_load_batch(config),
         )
+
+
+def validate_historical_odds_batch(odds: JVLinkProfile, batch: HistoricalOddsBatch) -> None:
+    """Validate the profile used by the historical-odds workflow."""
+    if odds.normal_update or odds.setup_update or not odds.realtime_update:
+        raise ValueError("historical-odds requires only realtime odds updates")
+    if not odds.skip_existing:
+        raise ValueError("historical-odds requires skip_existing=true")
+    if not odds.realtime_data_specs or not odds.realtime_data_specs <= {"0B41", "0B42"}:
+        raise ValueError("historical-odds supports only 0B41 and 0B42")
+    if odds.race_start_date is None or odds.race_start_date.year != batch.first_year:
+        raise ValueError("historical_odds.race_start_date must lie in batch.first_year")
+
+
+def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
+    odds = _require_table(config, "historical_odds")
+    if "batch" not in odds:
+        return None
+    section = _require_table(odds, "batch")
+    allowed = {"first_year", "last_year", "years_per_run"}
+    if section.keys() - allowed:
+        raise ValueError("historical_odds.batch contains unsupported settings")
+    years: list[int] = []
+    for key in ("first_year", "last_year", "years_per_run"):
+        value = section.get(key)
+        if type(value) is not int:
+            raise ValueError(f"historical_odds.batch.{key} must be an integer")
+        years.append(value)
+    return HistoricalOddsBatch(years[0], years[1], years[2])
 
 
 class JVLinkSettingBuilder:
@@ -147,6 +199,9 @@ def _load_profile(config: dict[str, Any], name: str) -> JVLinkProfile:
         start_datetime=start_datetime,
         start_datetimes=start_datetimes or None,
         race_start_date=_optional_date(section, "race_start_date", name),
+        skip_existing=(
+            _require_bool(section, "skip_existing", name) if "skip_existing" in section else False
+        ),
     )
 
 

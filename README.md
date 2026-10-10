@@ -72,7 +72,7 @@ JRA-VAN service key.
 
 The user-owned `C:\JVLinkToSQLite\setting.xml` is treated as a seed. Retrieval
 behavior is declared in `config/jvlink.toml`, and Python generates execution XML
-for historical, latest, and realtime modes.
+for historical-basic, historical-odds, latest, and realtime modes.
 
 Important profiles include:
 
@@ -80,6 +80,7 @@ Important profiles include:
 [historical_odds]
 realtime_data_specs = ["0B41", "0B42"]
 race_start_date = 2003-10-04
+skip_existing = true
 
 [realtime_history]
 realtime_data_specs = ["0B41", "0B42"]
@@ -87,6 +88,21 @@ realtime_data_specs = ["0B41", "0B42"]
 [realtime_current]
 realtime_data_specs = ["0B31", "0B32"]
 ```
+
+`historical-odds` requires `[historical_odds].skip_existing = true` and requests
+only the missing O1/O2 DataSpecs for each complete race key in `NL_RA_RACE`.
+`0B41` is skipped when that race has rows in `ARCHIVE_O1_ODDS_TANFUKUWAKU`;
+`0B42` is skipped when it has rows in `ARCHIVE_O2_ODDS_UMAREN`. Missing or empty
+archive tables are retrieved. Row presence does not prove that every time-series
+observation was acquired, so this workflow intentionally does not support
+refetching already archived race/spec pairs. This option does not change realtime
+retrieval.
+
+The checked-in `[historical]` profile enables `setup_update`, so the
+`historical-basic` command retrieves the configured base-data DataSpecs before
+publishing the complete Parquet snapshot. Set the update flags to `false` only
+when the corresponding base-data retrieval is intentionally disabled. A missing
+database still fails before retrieval.
 
 The target race for realtime retrieval can also be configured in
 `config/jvlink.toml`:
@@ -121,15 +137,50 @@ Install dependencies and run commands from the repository root:
 ```powershell
 uv sync --locked
 
-uv run python src/main.py --retrieve --mode=historical
+uv run python src/main.py --retrieve --mode=historical-basic
+uv run python src/main.py --retrieve --mode=historical-odds
 uv run python src/main.py --retrieve --mode=latest
 uv run python src/main.py --retrieve --mode=realtime
 ```
 
-Retrieval and preprocessing are coupled at the CLI boundary:
+Retrieval and complete Parquet publication are separated by workflow:
 
-- `--retrieve --mode=historical`: build raw history, retrieve historical odds, then
-  publish a complete Parquet snapshot.
+- `--retrieve --mode=historical-basic`: run the enabled base-data updates, then publish one
+  complete Parquet snapshot. This mode does not retrieve historical O1/O2 odds.
+- `--retrieve --mode=historical-odds`: retrieve the oldest unfinished year of historical
+  O1/O2 odds, record per-race progress, and continue year by year. Complete Parquet
+  publication is deferred until every managed year is raw-complete, then performed once.
+  If retrieval or publication fails, the raw database and progress ledger remain available
+  for the next manual run. The command stops when the operator interrupts it or no target
+  years remain.
+  Use `--plan-only` to inspect the next year without writing or starting JVLinkToSQLite.
+  The command starts one continuous process; it does not register Task Scheduler
+  jobs or apply a weekday rule. A successful run with a valid empty realtime table is recorded
+  as `provider_missing/jvopen_no_data` only when the captured JVOpen/JVRTOpen return code is
+  `-1`; it is not retried. If the API code is unavailable, the result remains
+  `failed/empty_response_unverified`. Missing tables, invalid schemas, archive failures, and
+  process failures remain `failed` and stop the run. The official JV-Link API error-code list
+  is published by [JRA-VAN](https://developer.jra-van.jp/t/topic/822).
+  The progress ledger preserves the process exit code separately from the captured
+  DataSpec-specific API name and return code.
+  After all managed years are complete, the CLI prints an English message before the full
+  Parquet rebuild, then prints whether the rebuild completed or failed. The rebuild can take
+  a long time for a large raw database.
+  When an older v1 ledger has a previously classified `provider_missing/jvopen_no_data`
+  row without API columns, the first write migrates it to
+  `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data` rows always
+  require captured `JVOpen`/`JVRTOpen = -1` evidence.
+  After confirming a JRA-VAN-side gap, confirm that exact failed race without starting
+  JVLinkToSQLite:
+
+  ```powershell
+  uv run python src/main.py --retrieve --mode=historical-odds `
+    --confirm-provider-missing --date 2008-02-03 --jyo 05 --kaiji 01 --nichiji 02 --race 01
+  ```
+
+  Both O1/O2 (`0B41`/`0B42`) are confirmed by default. Use `--data-spec 0B41` or
+  `--data-spec 0B42` to confirm only one. The command accepts only failed
+  `empty_response_unverified` entries whose current archive count is still zero.
 - `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
   snapshot.
 - `--retrieve --mode=realtime`: retrieve and archive the target race's history/current
