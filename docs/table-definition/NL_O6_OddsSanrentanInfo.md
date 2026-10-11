@@ -9,7 +9,7 @@
 | 物理名 | `NL_O6_OddsSanrentanInfo` |
 | 論理名 | To confirm |
 | 層・形式 | `processed snapshot`、Parquet |
-| 保存先 | `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/NL_O6_OddsSanrentanInfo.parquet` |
+| 保存先 | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_O6_OddsSanrentanInfo.parquet` |
 | 直接の入力 | `data/raw/race.db` の `NL_O6_OddsSanrentanInfo` 表 |
 | 取得元 | To confirm |
 | 技術的な目的 | raw のユーザー表。入力表の各行・各列を同名のParquetへ保存する。 |
@@ -28,7 +28,7 @@
 
 ## 加工と対応関係
 
-`data/raw/race.db` の `NL_O6_OddsSanrentanInfo` 表 → `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/NL_O6_OddsSanrentanInfo.parquet`。
+`data/raw/race.db` の `NL_O6_OddsSanrentanInfo` 表 → `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_O6_OddsSanrentanInfo.parquet`。
 全列を同名・同順で保存し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として書き出す。
 空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
 
