@@ -3,18 +3,23 @@
 `ARCHITECTURE.md` is the authoritative description of the system that currently
 exists. This file defines how that architecture may evolve.
 
-## 1. Preserve the bootstrap boundary
+## 1. Preserve the implemented boundaries
 
-The repository currently has no product code or installable package. Its Python
-test boundary is intentionally small:
+The repository contains a CLI, data acquisition and preprocessing, processed
+data loading, feature generation, and ranking-model evaluation. Its current
+source boundary is:
 
 ```text
-src/tests/   # project-environment test
+src/main.py    # user-facing CLI
+src/data/      # retrieval, preprocessing, and processed-data loading
+src/features/  # feature generation
+src/models/    # ranking and evaluation
+src/tests/     # application and environment tests
 ```
 
-There is no product entry point, CLI, configuration layout, storage contract,
-external integration, or domain-module decomposition yet. Do not recover or
-infer one from an earlier prototype, ignored file, or stale document.
+`ARCHITECTURE.md` and Accepted ADRs describe implemented contracts. The project
+remains uninstalled as a Python distribution. Do not recover or infer additional
+contracts from an earlier prototype, ignored file, or stale document.
 
 New product behavior must trace to an explicit requirement. A durable design
 decision must also trace to an Accepted ADR when the decision warrants one.
@@ -46,9 +51,9 @@ coherent responsibility and have a name that describes that responsibility.
 - Do not create an undifferentiated `utils` module for unrelated behavior.
 - Keep public interfaces as small as the current callers require.
 
-When an entry point is introduced, keep it responsible for boundary concerns and
-delegation rather than product calculations. Its exact form must be selected by
-the requirement, not by this bootstrap rule.
+Keep entry points responsible for boundary concerns and delegation rather than
+product calculations. Changes to their contract must follow the requirement
+and relevant Accepted ADRs.
 
 ### Cookiecutter Data Science reference layout
 

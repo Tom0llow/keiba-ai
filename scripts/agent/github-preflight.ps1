@@ -65,6 +65,13 @@ Fix the baseline before starting an unrelated autonomous task.
 "@
 }
 
+$baselineChecks = @(Get-CommitChecks -HeadSha $remoteMainSha)
+Assert-BaselineChecksReady -Checks $baselineChecks
+$observedMainText = Invoke-Git @("ls-remote", "--heads", $fetchUrl, "refs/heads/$Branch")
+if (($observedMainText -split "\s+")[0] -ne $remoteMainSha) {
+    throw "origin/$Branch changed while collecting baseline checks. Retry preflight."
+}
+
 Write-GuardedResult @{
     operation                = "github-preflight"
     authenticatedUser        = $user

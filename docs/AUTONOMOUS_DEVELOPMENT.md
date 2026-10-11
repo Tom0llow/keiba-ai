@@ -276,6 +276,26 @@ normal discovery does not. The installer records those paths and the accepted
 Codex CLI version in the manifest and serializes installation with guarded
 workflow operations through the same `.git` lock.
 
+## Task and PR maintenance
+
+Installed `update-task-base.ps1 -ExpectedHeadSha <current-head>` prepares a
+conflict-free merge with verified main and writes pending state before advancing
+the branch. Retry the same pre-update SHA after interruption. Conflicts stop
+without changing the index or worktree. Task-state version 7 keeps the original
+start as `initialStartSha` and updates `startSha` to the verified main commit,
+so task diffs exclude unrelated upstream changes. Version 6 remains readable.
+Repeat validation, review, push, CI, and readiness for the new HEAD.
+
+Installed `update-pr.ps1` binds metadata edits and explicit `-Ready` to a PR
+number and expected HEAD. Metadata changes invalidate previous readiness.
+The prompt-gated `close-task.ps1` verifies a human-merged PR and archives
+task state with a write-ahead receipt; it never changes Git refs or merges.
+Guard reinstallation rejects an active task. Finish or explicitly close it
+before reinstalling. Store/MSIX PowerShell hosts are rejected; use an MSI
+installation or the system Windows PowerShell host.
+
+See [manual repair and runtime verification](GUARDED_WORKFLOW_REPAIR.md).
+
 ## Machine setup
 
 Required tools:

@@ -75,6 +75,9 @@ prefix_rule(
             ".git/codex-guard/scripts/agent/commit-task.ps1",
             ".git/codex-guard/scripts/agent/push-task.ps1",
             ".git/codex-guard/scripts/agent/create-pr.ps1",
+            ".git/codex-guard/scripts/agent/update-pr.ps1",
+            ".git/codex-guard/scripts/agent/update-task-base.ps1",
+            ".git/codex-guard/scripts/agent/close-task.ps1",
             ".git/codex-guard/scripts/agent/wait-ci.ps1",
             ".git/codex-guard/scripts/agent/inspect-pr.ps1",
             ".git/codex-guard/scripts/agent/inspect-ci.ps1",
@@ -85,6 +88,9 @@ prefix_rule(
             ".\\.git\\codex-guard\\scripts\\agent\\commit-task.ps1",
             ".\\.git\\codex-guard\\scripts\\agent\\push-task.ps1",
             ".\\.git\\codex-guard\\scripts\\agent\\create-pr.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\update-pr.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\update-task-base.ps1",
+            ".\\.git\\codex-guard\\scripts\\agent\\close-task.ps1",
             ".\\.git\\codex-guard\\scripts\\agent\\wait-ci.ps1",
             ".\\.git\\codex-guard\\scripts\\agent\\inspect-pr.ps1",
             ".\\.git\\codex-guard\\scripts\\agent\\inspect-ci.ps1",
@@ -120,9 +126,21 @@ prefix_rule(
             ".\\scripts\\agent\\push-task.ps1",
             "scripts\\agent\\push-task.ps1",
             "scripts/agent/create-pr.ps1",
+            "scripts/agent/update-pr.ps1",
+            "scripts/agent/update-task-base.ps1",
+            "scripts/agent/close-task.ps1",
             "./scripts/agent/create-pr.ps1",
+            "./scripts/agent/update-pr.ps1",
+            "./scripts/agent/update-task-base.ps1",
+            "./scripts/agent/close-task.ps1",
             ".\\scripts\\agent\\create-pr.ps1",
+            ".\\scripts\\agent\\update-pr.ps1",
+            ".\\scripts\\agent\\update-task-base.ps1",
+            ".\\scripts\\agent\\close-task.ps1",
             "scripts\\agent\\create-pr.ps1",
+            "scripts\\agent\\update-pr.ps1",
+            "scripts\\agent\\update-task-base.ps1",
+            "scripts\\agent\\close-task.ps1",
             "scripts/agent/wait-ci.ps1",
             "./scripts/agent/wait-ci.ps1",
             ".\\scripts\\agent\\wait-ci.ps1",
@@ -272,6 +290,9 @@ prefix_rule(
 )
 
 prefix_rule(pattern = [["gh", "gh.exe"], "pr", "create"], decision = "forbidden", justification = "Use guarded create-pr.ps1.")
+prefix_rule(pattern = [["gh", "gh.exe"], "pr", "edit"], decision = "forbidden", justification = "Use guarded update-pr.ps1.")
+prefix_rule(pattern = [["gh", "gh.exe"], "pr", "ready"], decision = "forbidden", justification = "Use guarded update-pr.ps1 with explicit Ready.")
+prefix_rule(pattern = [["gh", "gh.exe"], "pr", "update-branch"], decision = "forbidden", justification = "Use guarded update-task-base.ps1.")
 prefix_rule(pattern = [["gh", "gh.exe"], "pr", "merge"], decision = "forbidden", justification = "Use human-approved guarded merge-task.ps1.")
 prefix_rule(pattern = [["gh", "gh.exe"], "pr", "close"], decision = "forbidden", justification = "Remote mutation outside the autonomous contract.")
 prefix_rule(pattern = [["gh", "gh.exe"], "repo", "delete"], decision = "forbidden", justification = "Repository deletion is destructive.")

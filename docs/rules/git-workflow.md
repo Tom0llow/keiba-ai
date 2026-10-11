@@ -339,3 +339,19 @@ git diff
 
 Do not claim validation or review passed unless it actually ran on the current
 HEAD.
+
+## Guarded task and PR maintenance
+
+Use the installed `update-task-base.ps1` with the current expected HEAD when
+strict protection requires a base update. It prepares a merge without rewriting
+published history and records recoverable state before changing the task branch.
+Retry the same pre-update SHA if interrupted. Conflicts leave the index and
+worktree intact and require human intervention. After success, validate, review,
+push, and collect CI/readiness again for the new SHA.
+
+Use installed `update-pr.ps1` for title/body edits and explicit draft release.
+Repeating create-pr only reuses matching metadata. Changes invalidate readiness.
+A human-merged task may be archived by prompt-gated `close-task.ps1` after exact
+PR/SHA approval. This closes metadata only and is separate from merge recovery.
+Reinstallation requires no active task. See `docs/GUARDED_WORKFLOW_REPAIR.md`
+and ADR-016 for the full installation and state contracts.
