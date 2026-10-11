@@ -224,6 +224,34 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
 
 @pytest.mark.parametrize(
     "field_name",
+    [
+        "ticket_total_tansyo",
+        "ticket_total_fukusyo",
+        "ticket_total_wakuren",
+        "ticket_total_umaren",
+        "ticket_total_growth_tansyo",
+        "ticket_total_growth_fukusyo",
+        "ticket_total_growth_wakuren",
+        "ticket_total_growth_umaren",
+        "ticket_total_growth_rate_tansyo",
+        "ticket_total_growth_rate_fukusyo",
+        "ticket_total_growth_rate_wakuren",
+        "ticket_total_growth_rate_umaren",
+        "market_pair_support_i",
+    ],
+)
+def test_f19_documented_market_fields_are_allowed(field_name: str) -> None:
+    record = _record()
+    market_group = replace(record.groups["F19"], values={field_name: 1})
+    record = replace(record, groups={**record.groups, "F19": market_group})
+
+    result = build_explanatory_variable_candidates([record])
+
+    assert result.audit.valid
+
+
+@pytest.mark.parametrize(
+    "field_name",
     ["market_unknown", "market_pair_support", "ticket_total_final_odds"],
 )
 def test_f19_rejects_undocumented_market_fields(field_name: str) -> None:
