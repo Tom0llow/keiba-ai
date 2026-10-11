@@ -268,7 +268,11 @@ def _candidate_payload(*, target_result: bool = False) -> dict[str, object]:
                 "freeze_at": "2026-01-01T12:00:00+00:00",
                 "groups": {
                     group_id: {
-                        "values": {"candidate_value": 1.0},
+                        "values": (
+                            {"market_win_odds": 1.0}
+                            if group_id == "F19"
+                            else {"candidate_value": 1.0}
+                        ),
                         "available_at": "2025-12-31T12:00:00+00:00",
                         "source_event_at": "2025-12-31T00:00:00+00:00",
                         "source_scope": "historical",

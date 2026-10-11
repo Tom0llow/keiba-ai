@@ -32,7 +32,7 @@ def _record(
     groups = {
         group_id: CandidateGroupInput(
             group_id=group_id,
-            values={"candidate_value": 1.0},
+            values=({"market_win_odds": 1.0} if group_id == "F19" else {"candidate_value": 1.0}),
             available_at=AVAILABLE_AT,
             source_event_at=AVAILABLE_AT,
             source_scope="historical",
@@ -213,12 +213,28 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
     field_name: str,
 ) -> None:
     record = _record()
-    market_group = replace(record.groups["F19"], values={field_name: 1})
-    record = replace(record, groups={**record.groups, "F19": market_group})
+    group_id = "F19" if field_name.startswith("market") else "F01"
+    group = replace(record.groups[group_id], values={field_name: 1})
+    record = replace(record, groups={**record.groups, group_id: group})
 
     result = build_explanatory_variable_candidates([record])
 
     assert result.audit.valid
+
+
+@pytest.mark.parametrize("field_name", ["market_unknown", "ticket_total_final_odds"])
+def test_f19_rejects_undocumented_market_fields(field_name: str) -> None:
+    record = _record()
+    market_group = replace(record.groups["F19"], values={field_name: 1})
+    record = replace(record, groups={**record.groups, "F19": market_group})
+
+    with pytest.raises(CandidateGenerationError) as error:
+        build_explanatory_variable_candidates([record])
+
+    assert any(
+        violation.field_name == field_name and violation.reason == "F19 market field is not allowed"
+        for violation in error.value.audit.violations
+    )
 
 
 def test_non_candidate_group_value_is_reported_as_generation_error() -> None:

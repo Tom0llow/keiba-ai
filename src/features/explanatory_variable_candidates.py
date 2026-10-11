@@ -90,6 +90,7 @@ _ALLOWED_MARKET_FIELD_NAMES = frozenset(
         "marketlogoddschange",
         "marketoddsratio",
         "marketpairsupport",
+        "marketpairsupporti",
         "marketrankchange",
         "marketplacelow",
         "marketplacehigh",
@@ -99,7 +100,7 @@ _ALLOWED_MARKET_FIELD_NAMES = frozenset(
         "marketwinrank",
     }
 )
-_ALLOWED_MARKET_FIELD_PREFIXES = ("tickettotal",)
+_MARKET_TICKET_TYPES = frozenset({"fukusyo", "tansyo", "umaren", "wakuren"})
 _HISTORICAL_FIELD_PREFIXES = (
     "history",
     "historical",
@@ -636,6 +637,17 @@ def _audit_group(
                     "result-derived field is not allowed",
                 )
             )
+        if group_id == "F19" and not _is_allowed_market_field(field_name):
+            violations.append(
+                _violation(
+                    row_index,
+                    race_id,
+                    horse_id,
+                    group_id,
+                    field_name,
+                    "F19 market field is not allowed",
+                )
+            )
         if not _is_candidate_value(value):
             violations.append(
                 _violation(
@@ -814,9 +826,7 @@ def _is_result_field(field_name: str) -> bool:
     normalized = "".join(character for character in field_name.casefold() if character.isalnum())
     if normalized.startswith(_HISTORICAL_FIELD_PREFIXES):
         return False
-    if normalized in _ALLOWED_MARKET_FIELD_NAMES or normalized.startswith(
-        _ALLOWED_MARKET_FIELD_PREFIXES
-    ):
+    if _is_allowed_market_field(field_name):
         return False
     if normalized in _RESULT_FIELD_NAMES or normalized.startswith(_RESULT_FIELD_PREFIXES):
         return True
@@ -833,6 +843,21 @@ def _is_result_field(field_name: str) -> bool:
     if target_field.startswith("race"):
         target_field = target_field[len("race") :]
     return target_field.startswith(_TARGET_RESULT_FIELD_MARKERS)
+
+
+def _is_allowed_market_field(field_name: str) -> bool:
+    normalized = "".join(character for character in field_name.casefold() if character.isalnum())
+    if normalized in _ALLOWED_MARKET_FIELD_NAMES:
+        return True
+    return any(
+        normalized
+        in {
+            f"tickettotal{ticket_type}",
+            f"tickettotalgrowth{ticket_type}",
+            f"tickettotalgrowthrate{ticket_type}",
+        }
+        for ticket_type in _MARKET_TICKET_TYPES
+    )
 
 
 def _violation(
