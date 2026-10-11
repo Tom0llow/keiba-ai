@@ -1,4 +1,4 @@
-"""F07 jockey performance candidate specification."""
+"""Jockey performance candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

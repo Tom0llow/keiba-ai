@@ -1,4 +1,4 @@
-"""F09 within-race relative candidate specification."""
+"""Within-race relative candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

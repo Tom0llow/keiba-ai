@@ -1,4 +1,4 @@
-"""F01 recent performance candidate specification."""
+"""Recent performance candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

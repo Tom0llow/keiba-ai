@@ -1,4 +1,4 @@
-"""F05 condition suitability candidate specification."""
+"""Condition suitability candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

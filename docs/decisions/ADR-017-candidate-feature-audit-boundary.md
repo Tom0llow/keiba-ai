@@ -16,7 +16,8 @@ F01〜F21は、履歴窓、閾値、集計式、JRA-VAN業務コードの解釈�
 
 ## Decision
 
-1. `src/features/f01_*.py`〜`src/features/f21_*.py`がそれぞれ1候補群の仕様を所有し、
+1. `src/features/recent_performance.py`〜`src/features/opponent_pagerank.py`がそれぞれ
+   1候補群の仕様を所有し、
    `src/features/explanatory_variable_candidates.py`は共有の入力・時点監査・出力境界を
    担当する。raw SQLite、JV-Link、外部通信、JRA-VAN業務コード解釈は行わず、上流で
    作成済みの明示的な`CandidateRecord`だけを受け取る。各候補モジュールと共有境界は

@@ -1,4 +1,4 @@
-"""F20 same-gate and trainer-relative candidate specification."""
+"""Same-gate and trainer-relative candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

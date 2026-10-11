@@ -1,4 +1,4 @@
-"""F16 past body weight candidate specification."""
+"""Past body weight candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

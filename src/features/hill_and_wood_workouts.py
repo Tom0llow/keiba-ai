@@ -1,4 +1,4 @@
-"""F17 hill and wood workouts candidate specification."""
+"""Hill and wood workouts candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

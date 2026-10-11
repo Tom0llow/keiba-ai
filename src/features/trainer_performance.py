@@ -1,4 +1,4 @@
-"""F08 trainer performance candidate specification."""
+"""Trainer performance candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

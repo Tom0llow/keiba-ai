@@ -1,4 +1,4 @@
-"""F21 opponent PageRank candidate specification."""
+"""Opponent PageRank candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

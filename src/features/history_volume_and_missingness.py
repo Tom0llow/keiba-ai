@@ -1,4 +1,4 @@
-"""F15 history volume and missingness candidate specification."""
+"""History volume and missingness candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

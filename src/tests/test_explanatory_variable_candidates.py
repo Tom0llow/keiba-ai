@@ -9,6 +9,10 @@ from typing import cast
 
 import pytest
 
+from features.basic_conditions_and_weight import SPEC as F10_SPEC
+from features.condition_adjusted_ability import SPEC as F03_SPEC
+from features.condition_suitability import SPEC as F05_SPEC
+from features.expected_race_development import SPEC as F13_SPEC
 from features.explanatory_variable_candidates import (
     CANDIDATE_GROUP_IDS,
     CANDIDATE_GROUP_SPECS,
@@ -17,27 +21,23 @@ from features.explanatory_variable_candidates import (
     CandidateRecord,
     build_explanatory_variable_candidates,
 )
-from features.f01_recent_performance import SPEC as F01_SPEC
-from features.f02_past_racing_ability import SPEC as F02_SPEC
-from features.f03_condition_adjusted_ability import SPEC as F03_SPEC
-from features.f04_recent_stability import SPEC as F04_SPEC
-from features.f05_condition_suitability import SPEC as F05_SPEC
-from features.f06_rest_and_condition_change import SPEC as F06_SPEC
-from features.f07_jockey_performance import SPEC as F07_SPEC
-from features.f08_trainer_performance import SPEC as F08_SPEC
-from features.f09_within_race_relative import SPEC as F09_SPEC
-from features.f10_basic_conditions_and_weight import SPEC as F10_SPEC
-from features.f11_jockey_combination import SPEC as F11_SPEC
-from features.f12_running_style_and_position import SPEC as F12_SPEC
-from features.f13_expected_race_development import SPEC as F13_SPEC
-from features.f14_pedigree_suitability import SPEC as F14_SPEC
-from features.f15_history_volume_and_missingness import SPEC as F15_SPEC
-from features.f16_past_body_weight import SPEC as F16_SPEC
-from features.f17_hill_and_wood_workouts import SPEC as F17_SPEC
-from features.f18_past_lap_and_running_style import SPEC as F18_SPEC
-from features.f19_market_characteristics import SPEC as F19_SPEC
-from features.f20_same_gate_and_trainer_relative import SPEC as F20_SPEC
-from features.f21_opponent_pagerank import SPEC as F21_SPEC
+from features.hill_and_wood_workouts import SPEC as F17_SPEC
+from features.history_volume_and_missingness import SPEC as F15_SPEC
+from features.jockey_combination import SPEC as F11_SPEC
+from features.jockey_performance import SPEC as F07_SPEC
+from features.market_characteristics import SPEC as F19_SPEC
+from features.opponent_pagerank import SPEC as F21_SPEC
+from features.past_body_weight import SPEC as F16_SPEC
+from features.past_lap_and_running_style import SPEC as F18_SPEC
+from features.past_racing_ability import SPEC as F02_SPEC
+from features.pedigree_suitability import SPEC as F14_SPEC
+from features.recent_performance import SPEC as F01_SPEC
+from features.recent_stability import SPEC as F04_SPEC
+from features.rest_and_condition_change import SPEC as F06_SPEC
+from features.running_style_and_position import SPEC as F12_SPEC
+from features.same_gate_and_trainer_relative import SPEC as F20_SPEC
+from features.trainer_performance import SPEC as F08_SPEC
+from features.within_race_relative import SPEC as F09_SPEC
 from models.ranking_dataset import FeatureSchema
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)

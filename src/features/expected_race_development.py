@@ -1,4 +1,4 @@
-"""F13 expected race development candidate specification."""
+"""Expected race development candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

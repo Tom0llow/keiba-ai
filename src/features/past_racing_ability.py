@@ -1,4 +1,4 @@
-"""F02 past racing ability candidate specification."""
+"""Past racing ability candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

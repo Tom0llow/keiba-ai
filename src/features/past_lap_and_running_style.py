@@ -1,4 +1,4 @@
-"""F18 past lap and running style candidate specification."""
+"""Past lap and running style candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

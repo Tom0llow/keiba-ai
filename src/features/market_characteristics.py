@@ -1,4 +1,4 @@
-"""F19 market characteristics candidate specification."""
+"""Market characteristics candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

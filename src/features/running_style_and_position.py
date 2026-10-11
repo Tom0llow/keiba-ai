@@ -1,4 +1,4 @@
-"""F12 running style and position candidate specification."""
+"""Running style and position candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

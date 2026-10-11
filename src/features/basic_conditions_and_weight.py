@@ -1,4 +1,4 @@
-"""F10 basic conditions and weight candidate specification."""
+"""Basic conditions and weight candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

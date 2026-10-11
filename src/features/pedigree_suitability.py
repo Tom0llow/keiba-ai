@@ -1,4 +1,4 @@
-"""F14 pedigree suitability candidate specification."""
+"""Pedigree suitability candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

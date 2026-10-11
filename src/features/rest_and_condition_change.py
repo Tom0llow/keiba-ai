@@ -1,4 +1,4 @@
-"""F06 rest and condition change candidate specification."""
+"""Rest and condition change candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

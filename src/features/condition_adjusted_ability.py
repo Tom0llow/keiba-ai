@@ -1,4 +1,4 @@
-"""F03 condition-adjusted ability candidate specification."""
+"""Condition-adjusted ability candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 

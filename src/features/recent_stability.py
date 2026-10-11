@@ -1,4 +1,4 @@
-"""F04 recent stability candidate specification."""
+"""Recent stability candidate specification."""
 
 from features.candidate_spec import CandidateGroupSpec
 
