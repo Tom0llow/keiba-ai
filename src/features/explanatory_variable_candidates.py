@@ -15,36 +15,58 @@ from math import isfinite, isnan
 from types import MappingProxyType
 from typing import Literal, cast
 
+from features.candidate_spec import CandidateGroupSpec
+from features.f01_recent_performance import SPEC as F01_SPEC
+from features.f02_past_racing_ability import SPEC as F02_SPEC
+from features.f03_condition_adjusted_ability import SPEC as F03_SPEC
+from features.f04_recent_stability import SPEC as F04_SPEC
+from features.f05_condition_suitability import SPEC as F05_SPEC
+from features.f06_rest_and_condition_change import SPEC as F06_SPEC
+from features.f07_jockey_performance import SPEC as F07_SPEC
+from features.f08_trainer_performance import SPEC as F08_SPEC
+from features.f09_within_race_relative import SPEC as F09_SPEC
+from features.f10_basic_conditions_and_weight import SPEC as F10_SPEC
+from features.f11_jockey_combination import SPEC as F11_SPEC
+from features.f12_running_style_and_position import SPEC as F12_SPEC
+from features.f13_expected_race_development import SPEC as F13_SPEC
+from features.f14_pedigree_suitability import SPEC as F14_SPEC
+from features.f15_history_volume_and_missingness import SPEC as F15_SPEC
+from features.f16_past_body_weight import SPEC as F16_SPEC
+from features.f17_hill_and_wood_workouts import SPEC as F17_SPEC
+from features.f18_past_lap_and_running_style import SPEC as F18_SPEC
+from features.f19_market_characteristics import SPEC as F19_SPEC
+from features.f20_same_gate_and_trainer_relative import SPEC as F20_SPEC
+from features.f21_opponent_pagerank import SPEC as F21_SPEC
+
 type CandidateTimestamp = datetime | str
 type CandidateValue = str | int | float | bool | None
 type CandidateStatus = Literal["confirmed", "missing", "unconfirmed"]
 type CandidateSourceScope = Literal["pre_race", "historical"]
 
-CANDIDATE_GROUP_IDS = tuple(f"F{index:02d}" for index in range(1, 22))
-
-_CANDIDATE_GROUP_LABELS = {
-    "F01": "recent_performance",
-    "F02": "past_racing_ability",
-    "F03": "condition_adjusted_ability",
-    "F04": "recent_stability",
-    "F05": "condition_suitability",
-    "F06": "rest_and_condition_change",
-    "F07": "jockey_performance",
-    "F08": "trainer_performance",
-    "F09": "within_race_relative",
-    "F10": "basic_conditions_and_weight",
-    "F11": "jockey_combination",
-    "F12": "running_style_and_position",
-    "F13": "expected_race_development",
-    "F14": "pedigree_suitability",
-    "F15": "history_volume_and_missingness",
-    "F16": "past_body_weight",
-    "F17": "hill_and_wood_workouts",
-    "F18": "past_lap_and_running_style",
-    "F19": "market_characteristics",
-    "F20": "same_gate_and_trainer_relative",
-    "F21": "opponent_pagerank",
-}
+CANDIDATE_GROUP_SPECS = (
+    F01_SPEC,
+    F02_SPEC,
+    F03_SPEC,
+    F04_SPEC,
+    F05_SPEC,
+    F06_SPEC,
+    F07_SPEC,
+    F08_SPEC,
+    F09_SPEC,
+    F10_SPEC,
+    F11_SPEC,
+    F12_SPEC,
+    F13_SPEC,
+    F14_SPEC,
+    F15_SPEC,
+    F16_SPEC,
+    F17_SPEC,
+    F18_SPEC,
+    F19_SPEC,
+    F20_SPEC,
+    F21_SPEC,
+)
+CANDIDATE_GROUP_IDS = tuple(spec.group_id for spec in CANDIDATE_GROUP_SPECS)
 
 _ALLOWED_SOURCE_SCOPES = frozenset({"pre_race", "historical"})
 _ALLOWED_STATUSES = frozenset({"confirmed", "missing", "unconfirmed"})
@@ -127,6 +149,8 @@ _RESULT_FIELD_NAME_MARKERS = (
     "finish",
     "finalodds",
     "outcome",
+    "kakuteijyuni",
+    "nyusenjyuni",
     "payout",
     "placing",
     "position",
@@ -137,20 +161,6 @@ _RESULT_FIELD_NAME_MARKERS = (
     "speed",
     "time",
     "winner",
-)
-
-
-@dataclass(frozen=True, slots=True)
-class CandidateGroupSpec:
-    """Describe one design-level candidate group."""
-
-    group_id: str
-    label: str
-
-
-CANDIDATE_GROUP_SPECS = tuple(
-    CandidateGroupSpec(group_id, _CANDIDATE_GROUP_LABELS[group_id])
-    for group_id in CANDIDATE_GROUP_IDS
 )
 
 

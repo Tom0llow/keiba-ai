@@ -16,10 +16,11 @@ F01〜F21は、履歴窓、閾値、集計式、JRA-VAN業務コードの解釈�
 
 ## Decision
 
-1. `src/features/explanatory_variable_candidates.py`は、raw SQLite、JV-Link、外部
-   通信、JRA-VAN業務コード解釈を行わず、上流で作成済みの明示的な
-   `CandidateRecord`だけを受け取る。`build_explanatory_variable_candidates`は
-   F01〜F21の候補行を作成・正規化し、業務式そのものは計算しない。
+1. `src/features/f01_*.py`〜`src/features/f21_*.py`がそれぞれ1候補群の仕様を所有し、
+   `src/features/explanatory_variable_candidates.py`は共有の入力・時点監査・出力境界を
+   担当する。raw SQLite、JV-Link、外部通信、JRA-VAN業務コード解釈は行わず、上流で
+   作成済みの明示的な`CandidateRecord`だけを受け取る。各候補モジュールと共有境界は
+   F01〜F21の候補行を作成・正規化するが、業務式そのものは計算しない。
 2. `model candidate-features`をJSON入力のCLI境界とする。各群は値、
    `available_at`、`source_event_at`、`source_scope`、`status`、対象結果・未来データ
    の明示フラグを持ち、未指定の漏洩確認フラグは拒否する。

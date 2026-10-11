@@ -132,6 +132,8 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 | `src/features/previous_race_result.py` | 前レース結果の中間テーブル生成。 | 正規化済み入力のみを受け、Parquet保存は共通のテーブル契約へ委譲する。 |
 | `src/features/odds_ratio.py` | オッズ比率の中間テーブル生成。 | オッズ履歴不足はNULLで保持し、補完や最終オッズへの暗黙 fallback を行わない。 |
 | `src/features/pedigree.py` | 血統識別子の中間テーブル生成。 | 文字列を保持し、未承認のカテゴリ符号化を行わない。 |
+| `src/features/f01_*.py`〜`src/features/f21_*.py` | F01〜F21を1特徴量群1ファイルで定義する個別仕様。現段階では候補ID・ラベルを所有し、業務式の計算は行わない。 | 共有境界の`CandidateGroupInput`へ正規化済み値を渡す。業務式、履歴窓、閾値、JRA-VANコード解釈は承認後に個別実装する。 |
+| `src/features/explanatory_variable_candidates.py` | 候補群の共通スキーマ、時点・欠損・漏洩監査、JSON境界。 | 各個別仕様を束ねるが、raw SQLite/JV-Linkを読まず、未承認の業務式を計算しない。 |
 | `src/features/feature_table.py` | 特徴量中間テーブルの共通スキーマ、時点監査、Parquet入出力。 | feature名・列・キー重複・`available_at <= freeze_at`を検証する。 |
 | `src/make_datamart/builder.py` | 保存済み特徴量中間テーブルの読み込み、順序を保つleft join、datamart保存。 | 余分なキー、`freeze_at`不一致、列衝突を拒否し、特徴量ごとのavailable時刻を残す。 |
 | `src/models/ranking_dataset.py` | 行キー、ラベル、連続レース行、group、型・順序の検証。 | 既に生成された特徴量と別経路の結果を結合する。 |

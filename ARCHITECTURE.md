@@ -341,7 +341,10 @@ scores are ordered by horse ID, independently of input row order.
 `src/features/builder.py` validates explicit feature values and their
 timezone-aware availability against `freeze_at`. The feature-specific modules
 under `src/features/` build independently validated intermediate Parquet tables
-for previous-race results, odds ratios, and pedigree values. `src/make_datamart/`
+for previous-race results, odds ratios, and pedigree values. The F01-F21
+candidate specifications are kept one per module, while their shared temporal
+and leakage audit remains in `explanatory_variable_candidates.py`.
+`src/make_datamart/`
 reads those saved tables and performs an ordered, validated left join while
 retaining each feature's availability timestamp. `src/models/walk_forward.py`
 performs expanding race-level train/validation/test splits. The model CLI uses

@@ -17,6 +17,27 @@ from features.explanatory_variable_candidates import (
     CandidateRecord,
     build_explanatory_variable_candidates,
 )
+from features.f01_recent_performance import SPEC as F01_SPEC
+from features.f02_past_racing_ability import SPEC as F02_SPEC
+from features.f03_condition_adjusted_ability import SPEC as F03_SPEC
+from features.f04_recent_stability import SPEC as F04_SPEC
+from features.f05_condition_suitability import SPEC as F05_SPEC
+from features.f06_rest_and_condition_change import SPEC as F06_SPEC
+from features.f07_jockey_performance import SPEC as F07_SPEC
+from features.f08_trainer_performance import SPEC as F08_SPEC
+from features.f09_within_race_relative import SPEC as F09_SPEC
+from features.f10_basic_conditions_and_weight import SPEC as F10_SPEC
+from features.f11_jockey_combination import SPEC as F11_SPEC
+from features.f12_running_style_and_position import SPEC as F12_SPEC
+from features.f13_expected_race_development import SPEC as F13_SPEC
+from features.f14_pedigree_suitability import SPEC as F14_SPEC
+from features.f15_history_volume_and_missingness import SPEC as F15_SPEC
+from features.f16_past_body_weight import SPEC as F16_SPEC
+from features.f17_hill_and_wood_workouts import SPEC as F17_SPEC
+from features.f18_past_lap_and_running_style import SPEC as F18_SPEC
+from features.f19_market_characteristics import SPEC as F19_SPEC
+from features.f20_same_gate_and_trainer_relative import SPEC as F20_SPEC
+from features.f21_opponent_pagerank import SPEC as F21_SPEC
 from models.ranking_dataset import FeatureSchema
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
@@ -54,6 +75,35 @@ def test_build_candidates_keeps_all_21_groups_outside_model_schema() -> None:
     assert result.records[0].groups["F01"].available_at == AVAILABLE_AT
     assert result.records[0].groups["F21"].values["candidate_value"] == 1.0
     assert result.audit.valid
+
+
+def test_each_candidate_group_has_its_own_spec_module() -> None:
+    specs = (
+        F01_SPEC,
+        F02_SPEC,
+        F03_SPEC,
+        F04_SPEC,
+        F05_SPEC,
+        F06_SPEC,
+        F07_SPEC,
+        F08_SPEC,
+        F09_SPEC,
+        F10_SPEC,
+        F11_SPEC,
+        F12_SPEC,
+        F13_SPEC,
+        F14_SPEC,
+        F15_SPEC,
+        F16_SPEC,
+        F17_SPEC,
+        F18_SPEC,
+        F19_SPEC,
+        F20_SPEC,
+        F21_SPEC,
+    )
+
+    assert tuple(spec.group_id for spec in specs) == CANDIDATE_GROUP_IDS
+    assert specs == CANDIDATE_GROUP_SPECS
 
 
 def test_candidate_groups_are_not_added_to_feature_schema_allow_list() -> None:
@@ -161,6 +211,8 @@ def test_freeze_at_is_required_by_python_api() -> None:
         "target_arrival",
         "market_final_odds",
         "target_race_speed",
+        "target_kakutei_jyuni",
+        "target_nyusen_jyuni",
         "target_race_payout",
         "target_race_final_odds",
         "target_win_flag",
