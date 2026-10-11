@@ -1347,14 +1347,38 @@ try {
         }
     }
 
-    foreach ($focusedTest in @(
-        "native-process-regression.ps1",
-        "pr-lifecycle-regression.ps1",
-        "base-update-regression.ps1",
-        "workflow-repair-regression.ps1"
-    )) {
-        & ([string](Get-Process -Id $PID).Path) -NoProfile -File (Join-Path $PSScriptRoot $focusedTest)
-        if ($LASTEXITCODE -ne 0) { throw "Focused guard regression failed: $focusedTest" }
+    $gitDiscoveryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("guard-git-discovery-" + [guid]::NewGuid().ToString("N"))
+    $previousSearchPath = $env:PATH
+    try {
+        $realGit = Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $otherGitDirectories = @("second", "third") | ForEach-Object { Join-Path $gitDiscoveryRoot $_ }
+        foreach ($directory in $otherGitDirectories) {
+            $null = New-Item -ItemType Directory -Path $directory -Force
+            # These candidates must be discovered but never selected or executed.
+            [System.IO.File]::WriteAllBytes((Join-Path $directory "git.exe"), [byte[]]@(0))
+        }
+        $env:PATH = (@((Split-Path -Parent $realGit.Source)) + $otherGitDirectories + @($previousSearchPath)) -join [System.IO.Path]::PathSeparator
+        if (@(Get-Command git.exe -CommandType Application -All -ErrorAction Stop).Count -lt 3) {
+            throw "Multiple-Git regression did not expose all three command candidates."
+        }
+        foreach ($focusedTest in @(
+            "native-process-regression.ps1",
+            "pr-lifecycle-regression.ps1",
+            "base-update-regression.ps1",
+            "workflow-repair-regression.ps1"
+        )) {
+            & ([string](Get-Process -Id $PID).Path) -NoProfile -File (Join-Path $PSScriptRoot $focusedTest)
+            if ($LASTEXITCODE -ne 0) { throw "Focused guard regression failed: $focusedTest" }
+        }
+    }
+    finally {
+        $env:PATH = $previousSearchPath
+        $resolvedDiscoveryRoot = [System.IO.Path]::GetFullPath($gitDiscoveryRoot)
+        $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        if (-not $resolvedDiscoveryRoot.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove a Git fixture outside the temporary directory."
+        }
+        Remove-Item -LiteralPath $resolvedDiscoveryRoot -Recurse -Force -ErrorAction SilentlyContinue
     }
     Write-Output "Guard trust-boundary regression validation passed."
 }

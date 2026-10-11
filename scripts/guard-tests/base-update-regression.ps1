@@ -244,7 +244,7 @@ function Assert-RealMergeTreeConflictPreservesWorktree {
     $null = New-Item -ItemType Directory -Path $script:ConflictFixtureHooks
     $script:ConflictFixtureEmptyConfig = Join-Path $testRoot "empty-git-config"
     [System.IO.File]::WriteAllText($script:ConflictFixtureEmptyConfig, "")
-    $script:FixtureGitPath = [string](Get-Command git -CommandType Application).Source
+    $script:FixtureGitPath = [string](Get-Command git -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $savedGlobalConfig = [Environment]::GetEnvironmentVariable("GIT_CONFIG_GLOBAL", "Process")
     $savedNoSystem = [Environment]::GetEnvironmentVariable("GIT_CONFIG_NOSYSTEM", "Process")
     try {

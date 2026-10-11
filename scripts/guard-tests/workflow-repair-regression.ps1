@@ -44,7 +44,7 @@ try {
     $script:TrustedCommandOutputRoot = $testRoot
     $script:DisabledHooksPath = Join-Path $testRoot "empty-hooks"
     $null = New-Item -ItemType Directory -Path $script:DisabledHooksPath
-    $script:GitPath = [string](Get-Command git.exe -ErrorAction Stop).Source
+    $script:GitPath = [string](Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1).Source
     $gitRoot = Join-Path $testRoot "repository"
     $null = New-Item -ItemType Directory -Path $gitRoot
     Push-Location -LiteralPath $gitRoot
