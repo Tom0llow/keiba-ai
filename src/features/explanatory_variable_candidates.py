@@ -85,6 +85,21 @@ _RESULT_FIELD_PREFIXES = (
     "targetfinish",
     "targetresult",
 )
+_ALLOWED_MARKET_FIELD_NAMES = frozenset(
+    {
+        "marketlogoddschange",
+        "marketoddsratio",
+        "marketpairsupport",
+        "marketrankchange",
+        "marketplacelow",
+        "marketplacehigh",
+        "marketplacewidth",
+        "marketwinodds",
+        "marketwinsupport",
+        "marketwinrank",
+    }
+)
+_ALLOWED_MARKET_FIELD_PREFIXES = ("tickettotal",)
 _HISTORICAL_FIELD_PREFIXES = (
     "history",
     "historical",
@@ -110,6 +125,7 @@ _TARGET_RESULT_FIELD_MARKERS = (
 _RESULT_FIELD_NAME_MARKERS = (
     "arrival",
     "finish",
+    "finalodds",
     "outcome",
     "payout",
     "placing",
@@ -118,6 +134,7 @@ _RESULT_FIELD_NAME_MARKERS = (
     "rank",
     "result",
     "refund",
+    "speed",
     "time",
     "winner",
 )
@@ -264,6 +281,17 @@ def audit_candidate_inputs(records: Sequence[CandidateRecord]) -> CandidateAudit
         freeze_at, freeze_error = _parse_timestamp(record.freeze_at)
         if freeze_error is not None:
             violations.append(_violation(row_index, race_id, horse_id, None, None, freeze_error))
+        elif freeze_at is None:
+            violations.append(
+                _violation(
+                    row_index,
+                    race_id,
+                    horse_id,
+                    None,
+                    None,
+                    "freeze_at is required",
+                )
+            )
 
         if current_race != race_id:
             if race_id in seen_races:
@@ -786,7 +814,9 @@ def _is_result_field(field_name: str) -> bool:
     normalized = "".join(character for character in field_name.casefold() if character.isalnum())
     if normalized.startswith(_HISTORICAL_FIELD_PREFIXES):
         return False
-    if normalized.startswith("market"):
+    if normalized in _ALLOWED_MARKET_FIELD_NAMES or normalized.startswith(
+        _ALLOWED_MARKET_FIELD_PREFIXES
+    ):
         return False
     if normalized in _RESULT_FIELD_NAMES or normalized.startswith(_RESULT_FIELD_PREFIXES):
         return True

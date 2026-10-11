@@ -143,11 +143,24 @@ def test_candidate_boundary_flags_are_required_in_dataclass_api() -> None:
         )
 
 
+def test_freeze_at_is_required_by_python_api() -> None:
+    record = replace(_record(), freeze_at=cast(datetime, None))
+
+    with pytest.raises(CandidateGenerationError) as error:
+        build_explanatory_variable_candidates([record])
+
+    assert any(
+        violation.reason == "freeze_at is required" for violation in error.value.audit.violations
+    )
+
+
 @pytest.mark.parametrize(
     "field_name",
     [
         "target_race_result",
         "target_arrival",
+        "market_final_odds",
+        "target_race_speed",
         "target_race_payout",
         "target_race_final_odds",
         "target_win_flag",
@@ -188,7 +201,13 @@ def test_result_derived_candidate_field_names_are_rejected(field_name: str) -> N
 
 @pytest.mark.parametrize(
     "field_name",
-    ["market_win_rank", "previous_race_result", "previous_race_finish_position"],
+    [
+        "market_win_odds",
+        "market_win_rank",
+        "market_rank_change",
+        "previous_race_result",
+        "previous_race_finish_position",
+    ],
 )
 def test_market_and_historical_fields_are_not_treated_as_result_fields(
     field_name: str,
