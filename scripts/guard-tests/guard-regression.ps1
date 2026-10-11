@@ -137,9 +137,20 @@ try {
         $currentShellPath = [System.IO.Path]::GetFullPath(
             [string](Get-Process -Id $PID).Path
         )
-        Assert-TrustedPowerShellHostPath `
-            -ShellPath $currentShellPath `
-            -RepoRoot $repoRoot
+        if ($currentShellPath -match '[\\/]WindowsApps[\\/]') {
+            $storeRejected = $false
+            try {
+                Assert-TrustedPowerShellHostPath -ShellPath $currentShellPath -RepoRoot $repoRoot
+            }
+            catch {
+                if ($_.Exception.Message -notmatch 'Store/MSIX') { throw }
+                $storeRejected = $true
+            }
+            if (-not $storeRejected) { throw "Store PowerShell was accepted as a guarded host." }
+        }
+        else {
+            Assert-TrustedPowerShellHostPath -ShellPath $currentShellPath -RepoRoot $repoRoot
+        }
 
         $workspaceShellRoot = Join-Path (
             [System.IO.Path]::GetTempPath()
@@ -311,6 +322,9 @@ try {
     $testStart = Join-Path $policyTestRoot "guard/scripts/agent/start-task.ps1"
     $testCommit = Join-Path $policyTestRoot "guard/scripts/agent/commit-task.ps1"
     $testMerge = Join-Path $policyTestRoot "guard/scripts/agent/merge-task.ps1"
+    $testClose = Join-Path $policyTestRoot "guard/scripts/agent/close-task.ps1"
+    $testUpdatePr = Join-Path $policyTestRoot "guard/scripts/agent/update-pr.ps1"
+    $testUpdateBase = Join-Path $policyTestRoot "guard/scripts/agent/update-task-base.ps1"
     $testWorkspaceStart = Join-Path $policyTestRoot "workspace/scripts/agent/start-task.ps1"
     $testWorkspaceInstall = Join-Path $policyTestRoot "workspace/scripts/setup/install-guarded-wrappers.ps1"
     $policyText = New-GuardExecPolicyText `
@@ -320,8 +334,9 @@ try {
         -GitPath $testGit `
         -GhPath $testGh `
         -CodexPath $testCodex `
-        -AutonomousPaths @($testStart, $testCommit) `
+        -AutonomousPaths @($testStart, $testCommit, $testUpdatePr, $testUpdateBase) `
         -MergePath $testMerge `
+        -ClosePath $testClose `
         -ForbiddenWorkspacePaths @($testWorkspaceStart, $testWorkspaceInstall)
 
     foreach ($expectedText in @(
@@ -340,6 +355,14 @@ try {
         }
     }
 
+    $invocationPath = Join-Path $repoRoot ".git/codex-guard/guard-invocation.json"
+    if ([string]::IsNullOrWhiteSpace($CodexExecutablePath) -and (Test-Path -LiteralPath $invocationPath -PathType Leaf)) {
+        $invocation = Get-Content -LiteralPath $invocationPath -Raw -Encoding UTF8 | ConvertFrom-Json
+        $CodexExecutablePath = [string]$invocation.codexPath
+        if ([string]::IsNullOrWhiteSpace($CodexExecutablePath)) {
+            throw "Invocation metadata has no pinned native Codex executable."
+        }
+    }
     $codexPath = if ([string]::IsNullOrWhiteSpace($CodexExecutablePath)) {
         Resolve-TrustedCommandPath `
             -Name "codex.exe" `
@@ -394,6 +417,18 @@ try {
             [System.Text.UTF8Encoding]::new($false)
         )
         $policyCases = @(
+            [pscustomobject]@{
+                expected = "prompt"
+                command = @($testShell, "-NoProfile", "-File", $testClose, "-PrNumber", "17", "-ExpectedHeadSha", ("0" * 40))
+            },
+            [pscustomobject]@{
+                expected = "allow"
+                command = @($testShell, "-NoProfile", "-File", $testUpdatePr, "-PrNumber", "17", "-ExpectedHeadSha", ("0" * 40), "-Ready")
+            },
+            [pscustomobject]@{
+                expected = "allow"
+                command = @($testShell, "-NoProfile", "-File", $testUpdateBase, "-ExpectedHeadSha", ("0" * 40))
+            },
             [pscustomobject]@{
                 expected = "allow"
                 command  = @(
@@ -452,6 +487,11 @@ try {
 
         $projectPolicyPath = Join-Path $repoRoot ".codex/rules/default.rules"
         $projectPolicyCases = @(
+            [pscustomobject]@{ expected = "forbidden"; command = @("gh", "pr", "edit", "17") },
+            [pscustomobject]@{ expected = "forbidden"; command = @("gh", "pr", "ready", "17") },
+            [pscustomobject]@{ expected = "forbidden"; command = @("gh", "pr", "update-branch", "17") },
+            [pscustomobject]@{ expected = "forbidden"; command = @("pwsh", "-NoProfile", "-File", "scripts/agent/update-pr.ps1") },
+            [pscustomobject]@{ expected = "forbidden"; command = @("pwsh", "-NoProfile", "-File", ".git/codex-guard/scripts/agent/close-task.ps1") },
             [pscustomobject]@{
                 expected = "forbidden"
                 command  = @("git", "clean", "-f")
@@ -843,7 +883,7 @@ try {
     }
     $script:MockImmutableDiffCalls = New-Object System.Collections.Generic.List[string]
     function Invoke-Git {
-        param([Parameter()][string[]]$Arguments = @())
+        param([Parameter()][string[]]$Arguments = @(), [Parameter()][switch]$RawOutput)
         if ($Arguments[0] -eq "rev-parse") { return $script:MockHeadSha }
         if ($Arguments[0] -eq "ls-remote") {
             if ($Arguments[-1] -eq "refs/heads/main") {
@@ -855,7 +895,8 @@ try {
         if ($Arguments[0] -eq "merge-base") { return [string]$Arguments[1] }
         if ($Arguments[0] -eq "diff") {
             $script:MockImmutableDiffCalls.Add(($Arguments -join " "))
-            return "immutable diff"
+            if (-not $RawOutput) { throw "Immutable diff must preserve raw stdout." }
+            return "immutable diff  `n"
         }
         throw "Unexpected mocked Git call: $($Arguments -join ' ')"
     }
@@ -916,7 +957,7 @@ try {
         -BaseSha $script:MockBaseSha `
         -HeadSha $script:MockHeadSha
     if (
-        $mockDiff -ne "immutable diff" -or
+        $mockDiff -cne "immutable diff  `n" -or
         $script:MockImmutableDiffCalls.Count -ne 1 -or
         -not $script:MockImmutableDiffCalls[0].Contains("--no-ext-diff") -or
         -not $script:MockImmutableDiffCalls[0].Contains("--no-textconv") -or
@@ -1306,6 +1347,39 @@ try {
         }
     }
 
+    $gitDiscoveryRoot = Join-Path ([System.IO.Path]::GetTempPath()) ("guard-git-discovery-" + [guid]::NewGuid().ToString("N"))
+    $previousSearchPath = $env:PATH
+    try {
+        $realGit = Get-Command git.exe -CommandType Application -ErrorAction Stop | Select-Object -First 1
+        $otherGitDirectories = @("second", "third") | ForEach-Object { Join-Path $gitDiscoveryRoot $_ }
+        foreach ($directory in $otherGitDirectories) {
+            $null = New-Item -ItemType Directory -Path $directory -Force
+            # These candidates must be discovered but never selected or executed.
+            [System.IO.File]::WriteAllBytes((Join-Path $directory "git.exe"), [byte[]]@(0))
+        }
+        $env:PATH = (@((Split-Path -Parent $realGit.Source)) + $otherGitDirectories + @($previousSearchPath)) -join [System.IO.Path]::PathSeparator
+        if (@(Get-Command git.exe -CommandType Application -All -ErrorAction Stop).Count -lt 3) {
+            throw "Multiple-Git regression did not expose all three command candidates."
+        }
+        foreach ($focusedTest in @(
+            "native-process-regression.ps1",
+            "pr-lifecycle-regression.ps1",
+            "base-update-regression.ps1",
+            "workflow-repair-regression.ps1"
+        )) {
+            & ([string](Get-Process -Id $PID).Path) -NoProfile -File (Join-Path $PSScriptRoot $focusedTest)
+            if ($LASTEXITCODE -ne 0) { throw "Focused guard regression failed: $focusedTest" }
+        }
+    }
+    finally {
+        $env:PATH = $previousSearchPath
+        $resolvedDiscoveryRoot = [System.IO.Path]::GetFullPath($gitDiscoveryRoot)
+        $tempPrefix = [System.IO.Path]::GetFullPath([System.IO.Path]::GetTempPath()).TrimEnd('\', '/') + [System.IO.Path]::DirectorySeparatorChar
+        if (-not $resolvedDiscoveryRoot.StartsWith($tempPrefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+            throw "Refusing to remove a Git fixture outside the temporary directory."
+        }
+        Remove-Item -LiteralPath $resolvedDiscoveryRoot -Recurse -Force -ErrorAction SilentlyContinue
+    }
     Write-Output "Guard trust-boundary regression validation passed."
 }
 finally {

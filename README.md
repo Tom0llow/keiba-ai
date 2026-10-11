@@ -286,8 +286,12 @@ Guard trust-boundary validation is run separately by the Quality workflow and ca
 also be invoked with:
 
 ```powershell
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
+$guardInvocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
+pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 -CodexExecutablePath $guardInvocation.codexPath
 ```
+
+Without installed invocation metadata, supply a verified native `codex.exe`
+whose version is listed in `scripts/guard-tests/codex-cli-version.txt`.
 
 ## Development workflow
 
@@ -297,6 +301,11 @@ hash-verified wrappers; mutable repository copies under `scripts/agent/` are
 reviewable sources rather than trust anchors. The workflow stops at
 `MERGE_READY`; merging requires explicit human approval of the exact PR and HEAD
 SHA.
+
+Guard source repairs require review and reinstallation from protected `main`.
+See [guarded workflow repair and manual setup](docs/GUARDED_WORKFLOW_REPAIR.md)
+for the PowerShell MSI migration, pinned CLI regression, guard reinstallation,
+and execution-tool integration checks.
 
 Repository instructions are in `AGENTS.md`. Current architectural facts are in
 `ARCHITECTURE.md`.

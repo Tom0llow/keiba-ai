@@ -6,10 +6,11 @@ Tests provide deterministic evidence about observable behavior. Prefer focused
 unit tests, use integration tests at real boundaries, and add end-to-end tests
 only when lower-level coverage cannot demonstrate a critical user flow.
 
-The repository currently has no product package. The test in
+The repository has application code and tests under `src/` but is not installed
+as a Python distribution. The test in
 `src/tests/test_project_environment.py` verifies that the synced environment
-does not install this repository as a distribution. It does not imply product
-behavior.
+preserves that contract. Product behavior is covered by the related tests under
+`src/tests/`.
 
 ## 2. Framework and commands
 
@@ -37,8 +38,12 @@ uv run pytest
 Trust-boundary PowerShell validation is also required:
 
 ```powershell
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
+$guardInvocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
+pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 -CodexExecutablePath $guardInvocation.codexPath
 ```
+
+Without installed invocation metadata, pass a separately verified allow-listed
+native Codex executable explicitly; do not rely on an auto-updated PATH entry.
 
 This command requires the self-contained native `codex.exe` for a Codex CLI
 version explicitly listed in `scripts/guard-tests/codex-cli-version.txt` and

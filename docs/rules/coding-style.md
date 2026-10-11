@@ -316,8 +316,10 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 ## 17. Architecture
 
-The current repository has tests under `src/tests/` and no product source
-package, entry point, or domain module layout.
+The current repository has a CLI in `src/main.py`, application modules under
+`src/data/`, `src/features/`, and `src/models/`, and tests under `src/tests/`.
+It is not installed as a Python distribution. `ARCHITECTURE.md` describes the
+implemented module boundaries.
 
 - Add modules only for responsibilities required by the current task.
 - Keep imports free of runtime side effects and avoid circular dependencies.

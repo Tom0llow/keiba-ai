@@ -165,10 +165,12 @@ function New-GuardExecPolicyText {
         [Parameter(Mandatory = $true)][string]$CodexPath,
         [Parameter(Mandatory = $true)][string[]]$AutonomousPaths,
         [Parameter(Mandatory = $true)][string]$MergePath,
+        [Parameter()][string]$ClosePath,
         [Parameter(Mandatory = $true)][string[]]$ForbiddenWorkspacePaths
     )
 
     $allPaths = @($ShellPath, $GitPath, $GhPath, $CodexPath) + $AutonomousPaths + @($MergePath) + $ForbiddenWorkspacePaths
+    if (-not [string]::IsNullOrWhiteSpace($ClosePath)) { $allPaths += $ClosePath }
     foreach ($path in $allPaths) {
         if (-not [System.IO.Path]::IsPathRooted($path)) {
             throw "Generated execpolicy accepts only absolute paths: $path"
@@ -198,12 +200,24 @@ function New-GuardExecPolicyText {
     $mergePathLiteral = ConvertTo-StarlarkString -Value $MergePath
     $startPathLiteral = ConvertTo-StarlarkString -Value ([string]$startPath[0])
     $workspaceStartLiteral = ConvertTo-StarlarkString -Value ([string]$workspaceStartPath[0])
+    $closeRule = if ([string]::IsNullOrWhiteSpace($ClosePath)) { "" } else {
+        $closeLiteral = ConvertTo-StarlarkString -Value $ClosePath
+        @"
+prefix_rule(
+    pattern = [$shellLiteral, "-NoProfile", "-File", $closeLiteral],
+    decision = "prompt",
+    justification = "Closing a merged task requires explicit approval of its PR number and HEAD SHA.",
+)
+"@
+    }
 
     return @"
 # Managed by scripts/setup/install-guarded-wrappers.ps1.
 # Repository: $Repository
 # Guard source: $SourceSha
 # Do not edit manually; reinstall from reviewed protected main.
+
+$closeRule
 
 prefix_rule(
     pattern = [
@@ -308,6 +322,10 @@ $script:InstallerCommandOutputRoot = $dotGit
 
 $installationLock = Enter-GuardInstallationLock -DotGit $dotGit
 try {
+
+if (Test-Path -LiteralPath (Join-Path $dotGit "codex-task.json")) {
+    throw "Finish or close the active guarded task before reinstalling the guard."
+}
 
 $currentProcess = Get-Process -Id $PID
 $shellPath = [System.IO.Path]::GetFullPath([string]$currentProcess.Path)
@@ -455,6 +473,7 @@ $sourcePaths = @(
     "scripts/agent/_common.ps1",
     "scripts/agent/_path-security.ps1",
     "scripts/agent/commit-task.ps1",
+    "scripts/agent/close-task.ps1",
     "scripts/agent/create-pr.ps1",
     "scripts/agent/github-preflight.ps1",
     "scripts/agent/inspect-ci.ps1",
@@ -463,6 +482,8 @@ $sourcePaths = @(
     "scripts/agent/merge-task.ps1",
     "scripts/agent/push-task.ps1",
     "scripts/agent/start-task.ps1",
+    "scripts/agent/update-pr.ps1",
+    "scripts/agent/update-task-base.ps1",
     "scripts/agent/wait-ci.ps1",
     "scripts/guard-tests/codex-cli-version.txt",
     "scripts/github/verify-main-protection.ps1"
@@ -528,13 +549,16 @@ $autonomousEntrypoints = @(
     "scripts/agent/commit-task.ps1",
     "scripts/agent/push-task.ps1",
     "scripts/agent/create-pr.ps1",
+    "scripts/agent/update-pr.ps1",
+    "scripts/agent/update-task-base.ps1",
     "scripts/agent/wait-ci.ps1",
     "scripts/agent/inspect-pr.ps1",
     "scripts/agent/inspect-ci.ps1",
     "scripts/agent/merge-ready.ps1"
 )
 $mergeEntrypoint = "scripts/agent/merge-task.ps1"
-$allEntrypoints = @($autonomousEntrypoints + $mergeEntrypoint)
+$closeEntrypoint = "scripts/agent/close-task.ps1"
+$allEntrypoints = @($autonomousEntrypoints + $mergeEntrypoint + $closeEntrypoint)
 $installedEntrypointPaths = @($allEntrypoints | ForEach-Object {
     [System.IO.Path]::GetFullPath((Join-Path $guardRoot $_))
 })
@@ -547,7 +571,8 @@ $workspaceForbiddenPaths = @($workspaceForbiddenSources | ForEach-Object {
     [System.IO.Path]::GetFullPath((Join-Path $repoRoot $_))
 })
 $installedAutonomousPaths = $installedEntrypointPaths[0..($autonomousEntrypoints.Count - 1)]
-$installedMergePath = $installedEntrypointPaths[-1]
+$installedMergePath = $installedEntrypointPaths[-2]
+$installedClosePath = $installedEntrypointPaths[-1]
 
 $policyFileName = "guarded-repository-$repositoryPolicyId.rules"
 $policyPath = Join-Path $rulesRoot $policyFileName
@@ -628,6 +653,7 @@ try {
         -CodexPath $codexPath `
         -AutonomousPaths $installedAutonomousPaths `
         -MergePath $installedMergePath `
+        -ClosePath $installedClosePath `
         -ForbiddenWorkspacePaths $workspaceForbiddenPaths
     [System.IO.File]::WriteAllText(
         $generatedPolicyPath,

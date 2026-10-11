@@ -137,7 +137,9 @@ Run the trust-boundary regression with PowerShell 7 (`pwsh`) or Windows
 PowerShell (`powershell.exe`):
 
 ```powershell
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
+$invocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
+pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 `
+  -CodexExecutablePath $invocation.codexPath
 ```
 
 The regression requires an allow-listed self-contained native `codex.exe`;
@@ -208,6 +210,31 @@ Validated P0/P1/P2 findings require fix -> validation -> guarded commit/push ->
 CI -> fresh full-PR review.
 
 Never reuse a review from an older HEAD.
+
+## Updating a task or PR
+
+If strict protection reports BEHIND, invoke the installed `update-task-base.ps1`
+with the current `-ExpectedHeadSha`. On interruption, retry with that same
+pre-update SHA. The wrapper prepares a conflict-free merge outside the worktree,
+records a pending update, and advances the branch without rewriting history.
+Conflicts and changed guard sources require human intervention; do not bypass
+the wrapper. After success, repeat validation, review, guarded push, and CI for
+the new HEAD. The original start is kept as `initialStartSha`; `startSha` becomes
+the verified updated main used for the complete task diff.
+
+Use the installed `update-pr.ps1 -PrNumber ... -ExpectedHeadSha ...` to change
+`-Title` or `-Body`, or explicitly use `-Ready` to leave draft state. Repeating
+`create-pr.ps1` only reuses matching metadata. PR updates invalidate readiness
+and require review and MERGE_READY again even when the HEAD is unchanged.
+
+If a human merged the task outside `merge-task.ps1`, obtain explicit approval
+for its PR and SHA and use the installed prompt-gated `close-task.ps1`. This
+archives only task metadata; it does not merge or remove branches. Do not
+fabricate merge-attempt records or transfer an old approval.
+
+Pass all installed operations through the literal absolute argv contract in
+Phase 0. See `docs/GUARDED_WORKFLOW_REPAIR.md` for manual installation and
+runtime verification.
 
 ## Phase 7 — MERGE_READY
 

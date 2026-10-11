@@ -22,6 +22,7 @@ $script:GuardedSourcePaths = @(
     "scripts/agent/_common.ps1",
     "scripts/agent/_path-security.ps1",
     "scripts/agent/commit-task.ps1",
+    "scripts/agent/close-task.ps1",
     "scripts/agent/create-pr.ps1",
     "scripts/agent/github-preflight.ps1",
     "scripts/agent/inspect-ci.ps1",
@@ -30,6 +31,8 @@ $script:GuardedSourcePaths = @(
     "scripts/agent/merge-task.ps1",
     "scripts/agent/push-task.ps1",
     "scripts/agent/start-task.ps1",
+    "scripts/agent/update-pr.ps1",
+    "scripts/agent/update-task-base.ps1",
     "scripts/agent/wait-ci.ps1",
     "scripts/guard-tests/codex-cli-version.txt",
     "scripts/github/verify-main-protection.ps1"
@@ -47,11 +50,35 @@ function Assert-CommandExists {
     }
 }
 
-function Invoke-ExternalText {
+function ConvertTo-NativeArgument {
+    param([Parameter(Mandatory = $true)][AllowEmptyString()][string]$Value)
+
+    $result = [System.Text.StringBuilder]::new()
+    [void]$result.Append('"')
+    $backslashes = 0
+    foreach ($character in $Value.ToCharArray()) {
+        if ($character -eq [char]92) {
+            $backslashes++
+            continue
+        }
+        if ($character -eq [char]34) {
+            [void]$result.Append(('\' * (2 * $backslashes + 1)))
+        }
+        else {
+            [void]$result.Append(('\' * $backslashes))
+        }
+        [void]$result.Append($character)
+        $backslashes = 0
+    }
+    [void]$result.Append(('\' * (2 * $backslashes)))
+    [void]$result.Append('"')
+    return $result.ToString()
+}
+
+function Invoke-NativeProcess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter()][string[]]$ArgumentList = @(),
-        [Parameter()][switch]$RawOutput
+        [Parameter()][AllowEmptyCollection()][AllowEmptyString()][string[]]$ArgumentList = @()
     )
 
     if ([string]::IsNullOrWhiteSpace([string]$script:TrustedCommandOutputRoot)) {
@@ -60,41 +87,67 @@ function Invoke-ExternalText {
     $outputId = [guid]::NewGuid().ToString("N")
     $stdoutPath = Join-Path $script:TrustedCommandOutputRoot ".codex-command-$outputId.stdout"
     $stderrPath = Join-Path $script:TrustedCommandOutputRoot ".codex-command-$outputId.stderr"
-
+    $process = [System.Diagnostics.Process]::new()
+    $stdoutStream = $null
+    $stderrStream = $null
     try {
-        $previousErrorAction = $ErrorActionPreference
+        $process.StartInfo.FileName = $FilePath
+        $process.StartInfo.Arguments = ($ArgumentList | ForEach-Object {
+            ConvertTo-NativeArgument -Value $_
+        }) -join " "
+        $process.StartInfo.WorkingDirectory = (Get-Location).Path
+        $process.StartInfo.UseShellExecute = $false
+        $process.StartInfo.CreateNoWindow = $true
+        $process.StartInfo.RedirectStandardOutput = $true
+        $process.StartInfo.RedirectStandardError = $true
+        $stdoutStream = [System.IO.File]::Open($stdoutPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
+        $stderrStream = [System.IO.File]::Open($stderrPath, [System.IO.FileMode]::CreateNew, [System.IO.FileAccess]::Write, [System.IO.FileShare]::None)
         try {
-            $ErrorActionPreference = "Continue"
-            & $FilePath @ArgumentList 1> $stdoutPath 2> $stderrPath
-            $exitCode = $LASTEXITCODE
+            if (-not $process.Start()) { throw "Native process did not start: $FilePath" }
+            $stdoutCopy = $process.StandardOutput.BaseStream.CopyToAsync($stdoutStream)
+            $stderrCopy = $process.StandardError.BaseStream.CopyToAsync($stderrStream)
+            $process.WaitForExit()
+            [void]$stdoutCopy.GetAwaiter().GetResult()
+            [void]$stderrCopy.GetAwaiter().GetResult()
         }
         finally {
-            $ErrorActionPreference = $previousErrorAction
+            $stdoutStream.Dispose()
+            $stdoutStream = $null
+            $stderrStream.Dispose()
+            $stderrStream = $null
         }
-        $stdout = Get-Content -LiteralPath $stdoutPath -Raw -ErrorAction SilentlyContinue
-        $stderr = Get-Content -LiteralPath $stderrPath -Raw -ErrorAction SilentlyContinue
-
-        if ($exitCode -ne 0) {
-            $detail = @($stdout, $stderr) | Where-Object {
-                -not [string]::IsNullOrWhiteSpace([string]$_)
-            }
-            throw "Command failed ($exitCode): $FilePath $($ArgumentList -join ' ')`n$($detail -join "`n")"
+        $encoding = [System.Text.UTF8Encoding]::new($false, $true)
+        return [pscustomobject]@{
+            exitCode = $process.ExitCode
+            stdout = [System.IO.File]::ReadAllText($stdoutPath, $encoding)
+            stderr = [System.IO.File]::ReadAllText($stderrPath, $encoding)
         }
-
-        if (-not [string]::IsNullOrWhiteSpace($stderr)) {
-            Write-Verbose $stderr.Trim()
-        }
-        if ($null -eq $stdout) {
-            return ""
-        }
-        if ($RawOutput) {
-            return $stdout
-        }
-        return $stdout.Trim()
     }
     finally {
+        if ($null -ne $stdoutStream) { $stdoutStream.Dispose() }
+        if ($null -ne $stderrStream) { $stderrStream.Dispose() }
+        $process.Dispose()
         Remove-Item -LiteralPath $stdoutPath, $stderrPath -Force -ErrorAction SilentlyContinue
     }
+}
+
+function Invoke-ExternalText {
+    param(
+        [Parameter(Mandatory = $true)][string]$FilePath,
+        [Parameter()][AllowEmptyCollection()][AllowEmptyString()][string[]]$ArgumentList = @(),
+        [Parameter()][switch]$RawOutput
+    )
+
+    $result = Invoke-NativeProcess -FilePath $FilePath -ArgumentList $ArgumentList
+    if ($result.exitCode -ne 0) {
+        $detail = @($result.stdout, $result.stderr) | Where-Object {
+            -not [string]::IsNullOrWhiteSpace($_)
+        }
+        throw "Command failed ($($result.exitCode)): $FilePath $($ArgumentList -join ' ')`n$($detail -join "`n")"
+    }
+    if (-not [string]::IsNullOrWhiteSpace($result.stderr)) { Write-Verbose $result.stderr.Trim() }
+    if ($RawOutput) { return $result.stdout }
+    return $result.stdout.Trim()
 }
 
 function Get-CurrentPowerShellPath {
@@ -116,17 +169,10 @@ function Get-CurrentPowerShellPath {
 function Test-ExternalSuccess {
     param(
         [Parameter(Mandatory = $true)][string]$FilePath,
-        [Parameter()][string[]]$ArgumentList = @()
+        [Parameter()][AllowEmptyCollection()][AllowEmptyString()][string[]]$ArgumentList = @()
     )
-    $previousErrorAction = $ErrorActionPreference
-    try {
-        $ErrorActionPreference = "Continue"
-        & $FilePath @ArgumentList *> $null
-        return ($LASTEXITCODE -eq 0)
-    }
-    finally {
-        $ErrorActionPreference = $previousErrorAction
-    }
+    $result = Invoke-NativeProcess -FilePath $FilePath -ArgumentList $ArgumentList
+    return ($result.exitCode -eq 0)
 }
 
 function Invoke-Git {
@@ -160,22 +206,10 @@ function Get-GitPathList {
     if ($Arguments -notcontains "-z") {
         throw "Git path listings must use NUL separators."
     }
-    # PowerShell 5.1 decodes redirected native output using Console.OutputEncoding.
-    # Git's -z path output is UTF-8 even when the Windows console code page is not.
-    $previousOutputEncoding = [Console]::OutputEncoding
-    try {
-        [Console]::OutputEncoding = [System.Text.UTF8Encoding]::new($false)
-        $raw = Invoke-Git -Arguments $Arguments -RawOutput
-    }
-    finally {
-        [Console]::OutputEncoding = $previousOutputEncoding
-    }
+    $raw = Invoke-Git -Arguments $Arguments -RawOutput
     if ([string]::IsNullOrEmpty($raw)) {
         return @()
     }
-    # Windows PowerShell 5.1 can append a line ending while redirecting
-    # native stdout; it is outside Git's terminal NUL record separator.
-    $raw = $raw.TrimEnd([char[]]@([char]13, [char]10))
     if (-not $raw.EndsWith([string][char]0, [System.StringComparison]::Ordinal)) {
         $lastCodepoint = [int][char]$raw[$raw.Length - 1]
         throw "Git $($Arguments[0]) path listing was not NUL-terminated (last codepoint $lastCodepoint)."
@@ -199,6 +233,20 @@ function Test-GitSuccess {
         "-c", "core.pager="
     ) + $Arguments
     return Test-ExternalSuccess -FilePath $script:GitPath -ArgumentList $guardedArguments
+}
+
+function Assert-NoExternalMergeDrivers {
+    $result = Invoke-NativeProcess -FilePath $script:GitPath -ArgumentList @(
+        "-c", "core.hooksPath=$script:DisabledHooksPath",
+        "-c", "core.fsmonitor=false",
+        "config", "--name-only", "--get-regexp", '^merge\..*\.driver$'
+    )
+    if ($result.exitCode -eq 0) {
+        throw "External merge drivers are not supported by guarded base updates. Use a reviewed manual merge."
+    }
+    if ($result.exitCode -ne 1) {
+        throw "Unable to verify external merge-driver configuration."
+    }
 }
 
 function Invoke-Gh {
@@ -742,13 +790,14 @@ function Assert-CleanWorkingTree {
 function Assert-NoProtectedTaskChanges {
     param(
         [Parameter(Mandatory = $true)][ValidatePattern('^[0-9a-fA-F]{40,64}$')][string]$BaseSha,
+        [Parameter()][ValidatePattern('^(HEAD|[0-9a-fA-F]{40,64})$')][string]$HeadSha = "HEAD",
         [Parameter()][switch]$IncludeWorktree
     )
 
     $changedPaths = New-Object System.Collections.Generic.List[string]
     $committed = @(Get-GitPathList -Arguments @(
         "diff", "--name-only", "-z", "--no-ext-diff", "--no-textconv", "--no-renames",
-        "$BaseSha..HEAD", "--"
+        "$BaseSha..$HeadSha", "--"
     ))
     foreach ($path in $committed) {
         $changedPaths.Add($path)
@@ -1027,7 +1076,7 @@ function Read-TaskStateRaw {
     ) {
         throw "Guarded task state must be a regular file: $path"
     }
-    return Get-Content -LiteralPath $path -Raw | ConvertFrom-Json
+    return Get-Content -LiteralPath $path -Raw -Encoding UTF8 | ConvertFrom-Json
 }
 
 function Write-TaskStateObject {
@@ -1094,13 +1143,14 @@ function Save-TaskState {
     )
 
     $state = [ordered]@{
-        version       = 6
+        version       = 7
         repoRoot      = $RepoRoot
         repository    = $Repository
         repositoryOwner = $RepositoryOwner
         branch        = $Branch
         base          = $Base
         startSha      = $StartSha
+        initialStartSha = $StartSha
         headSha       = $StartSha
         taskName      = $TaskName
         createdAt     = (Get-Date).ToUniversalTime().ToString("o")
@@ -1118,6 +1168,9 @@ function Save-TaskState {
         pendingCommitParentSha = $null
         pendingCommitTreeSha   = $null
         pendingCommitMessage   = $null
+        pendingUpdateParentSha = $null
+        pendingUpdateBaseSha   = $null
+        pendingUpdateHeadSha   = $null
     }
 
     Write-TaskStateObject -State $state
@@ -1126,13 +1179,13 @@ function Save-TaskState {
 function Load-TaskState {
     param(
         [Parameter()][switch]$AllowDefaultBranch,
-        [Parameter()][ValidateSet("start", "commit")][string]$AllowPendingOperation
+        [Parameter()][ValidateSet("start", "commit", "update-base")][string]$AllowPendingOperation
     )
 
     $state = Read-TaskStateRaw
     $repoRoot = Get-RepoRoot
 
-    if ([int]$state.version -ne 6) {
+    if ([int]$state.version -notin @(6, 7)) {
         throw "Unsupported guarded task state version '$($state.version)'."
     }
 
@@ -1163,6 +1216,29 @@ function Load-TaskState {
     foreach ($field in $requiredStateFields) {
         if ($state.PSObject.Properties.Name -notcontains $field) {
             throw "Guarded task state is missing required field '$field'."
+        }
+    }
+
+    $pendingUpdateFields = @("pendingUpdateParentSha", "pendingUpdateBaseSha", "pendingUpdateHeadSha")
+    if ([int]$state.version -eq 7) {
+        foreach ($field in @("initialStartSha") + $pendingUpdateFields) {
+            if ($state.PSObject.Properties.Name -notcontains $field) {
+                throw "Guarded task state is missing required field '$field'."
+            }
+        }
+        if ([string]$state.initialStartSha -notmatch '^[0-9a-fA-F]{40,64}$') {
+            throw "Guarded task state contains an invalid initial starting SHA."
+        }
+        foreach ($field in $pendingUpdateFields) {
+            $value = [string]$state.$field
+            if ([string]$state.pendingOperation -eq "update-base") {
+                if ($value -notmatch '^[0-9a-fA-F]{40,64}$') {
+                    throw "Pending base update requires a valid '$field'."
+                }
+            }
+            elseif (-not [string]::IsNullOrWhiteSpace($value)) {
+                throw "Base-update recovery data exists without a pending base update."
+            }
         }
     }
 
@@ -1239,6 +1315,19 @@ function Load-TaskState {
             [string]$state.pendingCommitTreeSha -notmatch '^[0-9a-fA-F]{40,64}$'
         ) {
             throw "A committing operation requires a valid tree SHA."
+        }
+    }
+    elseif ($pendingOperation -eq "update-base") {
+        if ([int]$state.version -ne 7) {
+            throw "Pending base update requires task-state version 7."
+        }
+        foreach ($field in $pendingCommitFields) {
+            if (-not [string]::IsNullOrWhiteSpace([string]$state.$field)) {
+                throw "A pending base update contains unrelated commit recovery data."
+            }
+        }
+        if ([string]$state.pendingUpdateParentSha -ne [string]$state.headSha) {
+            throw "Pending base update is not bound to the recorded task HEAD."
         }
     }
     else {
@@ -1329,7 +1418,7 @@ function Set-TaskStateFields {
     param(
         [Parameter(Mandatory = $true)][hashtable]$Fields,
         [Parameter()][switch]$AllowDefaultBranch,
-        [Parameter()][ValidateSet("start", "commit")][string]$AllowPendingOperation
+        [Parameter()][ValidateSet("start", "commit", "update-base")][string]$AllowPendingOperation
     )
     $loadArguments = @{}
     if ($AllowDefaultBranch) {
@@ -1416,7 +1505,7 @@ function Get-PrObject {
     $json = Invoke-GhRepo @(
         "pr", "view", "$PrNumber",
         "--json",
-        "number,title,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,reviewDecision,mergedAt"
+        "number,title,body,url,state,isDraft,baseRefName,baseRefOid,headRefName,headRefOid,headRepository,headRepositoryOwner,mergeable,mergeStateStatus,reviewDecision,mergedAt"
     )
     return $json | ConvertFrom-Json
 }
@@ -1544,7 +1633,7 @@ function Get-ImmutableCommitDiff {
     # Exact object IDs make the evidence immutable. Disable external diff and
     # text-conversion drivers so repository-controlled configuration cannot
     # execute host commands while producing the complete local diff.
-    return Invoke-Git @(
+    return Invoke-Git -RawOutput -Arguments @(
         "diff",
         "--no-ext-diff",
         "--no-textconv",
@@ -1592,6 +1681,20 @@ function Assert-ChecksReady {
             "$($_.workflow) / $($_.name): $($_.state) [$($_.bucket)]"
         }
         throw "Non-passing checks remain:`n- $($summary -join "`n- ")"
+    }
+}
+
+function Assert-BaselineChecksReady {
+    param([Parameter(Mandatory = $true)]$Checks)
+
+    Assert-ChecksReady -Checks $Checks
+    foreach ($name in $script:RequiredCheckNames) {
+        $matching = @($Checks | Where-Object {
+            $_.name -eq $name -and $_.trustedForRequirement -and $_.state -eq "success"
+        })
+        if ($matching.Count -eq 0) {
+            throw "Baseline required check '$name' has not succeeded."
+        }
     }
 }
 

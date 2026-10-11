@@ -68,7 +68,9 @@ uv run pytest
 Guard trust-boundary validation runs separately:
 
 ```powershell
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
+$invocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
+pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 `
+  -CodexExecutablePath $invocation.codexPath
 ```
 
 The `Quality` CI job performs that real regression for every allow-listed Codex
@@ -77,6 +79,17 @@ CLI version with both PowerShell 7 and Windows PowerShell 5.1.
 Task start and commit use write-ahead state under `.git`: an interrupted
 operation can be resumed only by invoking the same wrapper with the same
 arguments, while unrelated task-state-dependent guarded operations fail closed.
+
+ADR-016 extends this boundary with byte-preserving UTF-8 native execution,
+baseline required-check verification, SHA-bound PR metadata updates, and
+prompt-gated archival of human-merged tasks. Base updates prepare a conflict-free
+merge without touching the index or worktree, reject external merge drivers,
+and record pending state before advancing the branch. State version 7 retains
+the original `initialStartSha` and advances `startSha` to the verified current
+main used as the task diff base. Version 6 remains readable. New HEADs and PR
+metadata edits invalidate readiness and require renewed review. Reinstallation
+rejects active task state and Store/MSIX PowerShell hosts. Runtime shell startup
+and literal argv integration remain separate manual installation checks.
 
 ## Current code boundary
 

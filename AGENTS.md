@@ -15,15 +15,21 @@ Instructions apply in this order when they conflict:
 
 ## 2. Current repository state
 
-This repository is a Python 3.12 project at the bootstrap stage. It has no
-product package or product behavior. The Python test verifies that the project
-is not installed as a package:
+This repository is a Python 3.12 project with a Typer CLI, local JRA-VAN data
+retrieval, raw-to-Parquet preprocessing, processed-data loading, feature
+generation, and ranking-model evaluation. It is not installed as a Python
+distribution; `src/tests/test_project_environment.py` verifies that environment
+contract. Current module responsibilities are documented in `ARCHITECTURE.md`.
 
 ```text
 .
 ├─ src/
+│  ├─ main.py
+│  ├─ data/
+│  ├─ features/
+│  ├─ models/
 │  └─ tests/
-│     └─ test_project_environment.py
+├─ config/
 ├─ docs/
 │  ├─ decisions/         # architecture decision records
 │  └─ rules/             # coding, architecture, Git, and testing rules
@@ -38,10 +44,9 @@ is not installed as a package:
 └─ uv.lock
 ```
 
-No product entry point, CLI contract, configuration layout, domain module,
-storage format, or external integration is implemented. Do not restore or infer
-one from an earlier prototype. Product behavior and durable architecture must be
-introduced by an explicit requirement or an Accepted ADR.
+Do not restore or infer additional product behavior from an earlier prototype.
+New behavior and durable architecture must be introduced by an explicit
+requirement or an Accepted ADR.
 
 Before making changes, read the rules relevant to the task:
 
@@ -94,8 +99,12 @@ supported. It evaluates the policy with that CLI and must not skip policy
 evaluation:
 
 ```powershell
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1
+$guardInvocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
+pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 -CodexExecutablePath $guardInvocation.codexPath
 ```
+
+When invocation metadata is not installed, supply an explicitly verified native
+Codex executable for an allow-listed version instead of relying on PATH.
 
 The `Quality` CI job runs that real regression for every allow-listed Codex
 version under both PowerShell 7 and Windows PowerShell 5.1.

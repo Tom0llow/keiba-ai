@@ -57,7 +57,7 @@ if ($remoteSha -ne $localSha) {
 }
 
 $headSelector = "$($state.repositoryOwner):$branch"
-$prFields = "number,url,title,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isDraft"
+$prFields = "number,url,title,body,state,baseRefName,headRefName,headRefOid,headRepository,headRepositoryOwner,isDraft"
 $existingJson = Invoke-GhRepo @(
     "pr", "list",
     "--head", $branch,
@@ -66,7 +66,8 @@ $existingJson = Invoke-GhRepo @(
     "--limit", "100",
     "--json", $prFields
 )
-$existing = @($existingJson | ConvertFrom-Json | Where-Object {
+$existingPrs = $existingJson | ConvertFrom-Json
+$existing = @($existingPrs | Where-Object {
     Test-PrHeadMatchesTask -Pr $_ -State $state
 })
 
@@ -79,6 +80,12 @@ if ($existing.Count -gt 0) {
     Assert-PrMatchesTask -Pr $pr -State $state -AllowPrRebinding
     if ([string]$pr.headRefOid -ne $localSha) {
         throw "Existing PR HEAD does not match local HEAD."
+    }
+    if (
+        -not [string]::Equals([string]$pr.title, $Title, [System.StringComparison]::Ordinal) -or
+        -not [string]::Equals([string]$pr.body, $Body, [System.StringComparison]::Ordinal)
+    ) {
+        throw "Existing PR title/body differs from the requested values. Bind it using its current title/body, then use update-pr.ps1 with the exact PR number and HEAD SHA."
     }
 
     Set-GuardedPrBinding -State $state -Pr $pr
@@ -97,16 +104,36 @@ if ($existing.Count -gt 0) {
     return
 }
 
-$args = @(
-    "pr", "create",
-    "--base", $base,
-    "--head", $headSelector,
-    "--title", $Title,
-    "--body", $Body
+$bodyPath = Join-Path (Split-Path -Parent (Get-TaskStatePath)) (
+    ".codex-pr-body-" + [guid]::NewGuid().ToString("N") + ".txt"
 )
-if ($Draft) { $args += "--draft" }
-
-Invoke-GhRepo $args | Out-Null
+$stream = $null
+try {
+    $bytes = [System.Text.UTF8Encoding]::new($false).GetBytes($Body)
+    $stream = [System.IO.FileStream]::new(
+        $bodyPath, [System.IO.FileMode]::CreateNew,
+        [System.IO.FileAccess]::Write, [System.IO.FileShare]::None
+    )
+    $stream.Write($bytes, 0, $bytes.Length)
+    $stream.Flush($true)
+    $stream.Dispose()
+    $stream = $null
+    $args = @(
+        "pr", "create",
+        "--base", $base,
+        "--head", $headSelector,
+        "--title", $Title,
+        "--body-file", $bodyPath
+    )
+    if ($Draft) { $args += "--draft" }
+    Invoke-GhRepo $args | Out-Null
+}
+finally {
+    if ($null -ne $stream) { $stream.Dispose() }
+    if (Test-Path -LiteralPath $bodyPath) {
+        Remove-Item -LiteralPath $bodyPath -Force
+    }
+}
 
 $prJson = Invoke-GhRepo @(
     "pr", "list",
@@ -116,7 +143,8 @@ $prJson = Invoke-GhRepo @(
     "--limit", "100",
     "--json", $prFields
 )
-$created = @($prJson | ConvertFrom-Json | Where-Object {
+$createdPrs = $prJson | ConvertFrom-Json
+$created = @($createdPrs | Where-Object {
     Test-PrHeadMatchesTask -Pr $_ -State $state
 })
 if ($created.Count -ne 1) {

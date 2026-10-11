@@ -350,6 +350,11 @@ function Assert-TrustedPowerShellHostPath {
     if (-not $trustedShell) {
         throw "PowerShell executable must be installed under the Windows or Program Files directory."
     }
+    foreach ($root in $trustedShellRoots) {
+        if (Test-GuardPathWithinRoot -Path $ShellPath -Root (Join-Path $root "WindowsApps")) {
+            throw "Store/MSIX PowerShell is not supported by the guarded workflow. Install the MSI build under Program Files/PowerShell and reinstall the guard."
+        }
+    }
 }
 
 function Assert-TrustedCommandPath {
