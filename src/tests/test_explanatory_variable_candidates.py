@@ -213,6 +213,8 @@ def test_freeze_at_is_required_by_python_api() -> None:
         "target_race_speed",
         "target_kakutei_jyuni",
         "target_nyusen_jyuni",
+        "KakuteiJyuni",
+        "NyusenJyuni",
         "Time",
         "TimeDiff",
         "target_race_payout",
