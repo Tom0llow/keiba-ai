@@ -9,7 +9,7 @@
 | 物理名 | `NL_HC_HANRO` |
 | 論理名 | To confirm |
 | 層・形式 | `processed snapshot`、Parquet |
-| 保存先 | `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/NL_HC_HANRO.parquet` |
+| 保存先 | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_HC_HANRO.parquet` |
 | 直接の入力 | `data/raw/race.db` の `NL_HC_HANRO` 表 |
 | 取得元 | To confirm |
 | 技術的な目的 | raw のユーザー表。入力表の各行・各列を同名のParquetへ保存する。 |
@@ -22,13 +22,13 @@
 | raw側の宣言主キー | `TresenKubun`, `ChokyoDate`, `ChokyoTime`, `KettoNum` |
 | その他のprocessed制約 | 列はすべてNULL許容の`string`。最大長、既定値、CHECK制約の宣言はない。 |
 | 機微区分・アクセス権 | To confirm |
-| 確認時の行数・列数 | 11,953,682 行・14 列 |
-| 確認時のファイルサイズ | 120,136,223 byte |
+| 確認時の行数・列数 | 11,957,829 行・14 列 |
+| 確認時のファイルサイズ | 120,177,292 byte |
 | 品質確認 | rawとの表名・列名・列順、変換時の行数、Parquetスキーマを照合済み。業務品質基準はTo confirm。 |
 
 ## 加工と対応関係
 
-`data/raw/race.db` の `NL_HC_HANRO` 表 → `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/NL_HC_HANRO.parquet`。
+`data/raw/race.db` の `NL_HC_HANRO` 表 → `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_HC_HANRO.parquet`。
 全列を同名・同順で保存し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として書き出す。
 空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
 

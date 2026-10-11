@@ -9,7 +9,7 @@
 | 物理名 | `NL_HY_BAMEIORIGIN` |
 | 論理名 | To confirm |
 | 層・形式 | `processed snapshot`、Parquet |
-| 保存先 | `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/NL_HY_BAMEIORIGIN.parquet` |
+| 保存先 | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_HY_BAMEIORIGIN.parquet` |
 | 直接の入力 | `data/raw/race.db` の `NL_HY_BAMEIORIGIN` 表 |
 | 取得元 | To confirm |
 | 技術的な目的 | raw のユーザー表。入力表の各行・各列を同名のParquetへ保存する。 |
@@ -22,13 +22,13 @@
 | raw側の宣言主キー | `KettoNum` |
 | その他のprocessed制約 | 列はすべてNULL許容の`string`。最大長、既定値、CHECK制約の宣言はない。 |
 | 機微区分・アクセス権 | To confirm |
-| 確認時の行数・列数 | 179,265 行・6 列 |
-| 確認時のファイルサイズ | 7,003,993 byte |
+| 確認時の行数・列数 | 179,278 行・6 列 |
+| 確認時のファイルサイズ | 7,004,394 byte |
 | 品質確認 | rawとの表名・列名・列順、変換時の行数、Parquetスキーマを照合済み。業務品質基準はTo confirm。 |
 
 ## 加工と対応関係
 
-`data/raw/race.db` の `NL_HY_BAMEIORIGIN` 表 → `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/NL_HY_BAMEIORIGIN.parquet`。
+`data/raw/race.db` の `NL_HY_BAMEIORIGIN` 表 → `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_HY_BAMEIORIGIN.parquet`。
 全列を同名・同順で保存し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として書き出す。
 空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
 

@@ -9,7 +9,7 @@
 | 物理名 | `SY_PROC_FILES` |
 | 論理名 | To confirm |
 | 層・形式 | `processed snapshot`、Parquet |
-| 保存先 | `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/SY_PROC_FILES.parquet` |
+| 保存先 | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/SY_PROC_FILES.parquet` |
 | 直接の入力 | `data/raw/race.db` の `SY_PROC_FILES` 表 |
 | 取得元 | To confirm |
 | 技術的な目的 | raw のユーザー表。入力表の各行・各列を同名のParquetへ保存する。 |
@@ -22,13 +22,13 @@
 | raw側の宣言主キー | `FileName` |
 | その他のprocessed制約 | 列はすべてNULL許容の`string`。最大長、既定値、CHECK制約の宣言はない。 |
 | 機微区分・アクセス権 | To confirm |
-| 確認時の行数・列数 | 8,004 行・9 列 |
-| 確認時のファイルサイズ | 315,479 byte |
+| 確認時の行数・列数 | 8,639 行・9 列 |
+| 確認時のファイルサイズ | 341,172 byte |
 | 品質確認 | rawとの表名・列名・列順、変換時の行数、Parquetスキーマを照合済み。業務品質基準はTo confirm。 |
 
 ## 加工と対応関係
 
-`data/raw/race.db` の `SY_PROC_FILES` 表 → `data/processed/snapshots/81806ba398bb4fbe9a92eb1dbb75806f/SY_PROC_FILES.parquet`。
+`data/raw/race.db` の `SY_PROC_FILES` 表 → `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/SY_PROC_FILES.parquet`。
 全列を同名・同順で保存し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として書き出す。
 空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
 

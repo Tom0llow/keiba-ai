@@ -83,7 +83,7 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 
 ### 3.3. 物理変換と業務加工を分ける
 
-[再処理記録](data-preprocessing/race-parquet-2026-10-06.md)と[物理定義](table-definition/README.md)では、全列string・NULL許容、原列名・列順の保存が確認されている。空白、ゼロ日付、特別なコード値の業務意味は未承認である。
+[最新の再処理記録](data-preprocessing/race-parquet-2026-10-11.md)と[物理定義](table-definition/README.md)では、全列string・NULL許容、原列名・列順の保存が確認されている。過去の再処理記録は日付付き文書として履歴に残す。空白、ゼロ日付、特別なコード値の業務意味は未承認である。
 
 型変換・欠損分類・結合・集計は別の派生データへ行い、入力snapshotを上書きしない。各変換規則に原列、単位・倍率、コード表の版、Why/Impact/Validation、規則IDを持たせる。文字列`"0"`、空白、NULL、未提供、適用外を同じ意味へまとめる判断も実装前決定とする。
 
