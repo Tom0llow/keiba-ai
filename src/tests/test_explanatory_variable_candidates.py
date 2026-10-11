@@ -222,7 +222,10 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
     assert result.audit.valid
 
 
-@pytest.mark.parametrize("field_name", ["market_unknown", "ticket_total_final_odds"])
+@pytest.mark.parametrize(
+    "field_name",
+    ["market_unknown", "market_pair_support", "ticket_total_final_odds"],
+)
 def test_f19_rejects_undocumented_market_fields(field_name: str) -> None:
     record = _record()
     market_group = replace(record.groups["F19"], values={field_name: 1})
@@ -233,6 +236,23 @@ def test_f19_rejects_undocumented_market_fields(field_name: str) -> None:
 
     assert any(
         violation.field_name == field_name and violation.reason == "F19 market field is not allowed"
+        for violation in error.value.audit.violations
+    )
+
+
+def test_f19_ticket_totals_must_be_shared_within_a_race() -> None:
+    first = _record(horse_id="horse-1")
+    second = _record(horse_id="horse-2")
+    first_group = replace(first.groups["F19"], values={"ticket_total_tansyo": 100})
+    second_group = replace(second.groups["F19"], values={"ticket_total_tansyo": 200})
+    first = replace(first, groups={**first.groups, "F19": first_group})
+    second = replace(second, groups={**second.groups, "F19": second_group})
+
+    with pytest.raises(CandidateGenerationError) as error:
+        build_explanatory_variable_candidates([first, second])
+
+    assert any(
+        violation.reason == "F19 ticket total must be identical within a race"
         for violation in error.value.audit.violations
     )
 

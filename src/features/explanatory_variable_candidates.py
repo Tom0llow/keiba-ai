@@ -89,7 +89,6 @@ _ALLOWED_MARKET_FIELD_NAMES = frozenset(
     {
         "marketlogoddschange",
         "marketoddsratio",
-        "marketpairsupport",
         "marketpairsupporti",
         "marketrankchange",
         "marketplacelow",
@@ -264,6 +263,7 @@ def audit_candidate_inputs(records: Sequence[CandidateRecord]) -> CandidateAudit
     race_freeze_at: dict[str, datetime] = {}
     race_group_fields: dict[tuple[str, str], frozenset[str]] = {}
     race_group_scopes: dict[tuple[str, str], str] = {}
+    race_ticket_totals: dict[tuple[str, str, str], CandidateValue] = {}
 
     for row_index, record in enumerate(records):
         if not isinstance(record, CandidateRecord):
@@ -408,6 +408,23 @@ def audit_candidate_inputs(records: Sequence[CandidateRecord]) -> CandidateAudit
                             "candidate field names must be identical within a race",
                         )
                     )
+                for field_name, value in values.items():
+                    if not isinstance(field_name, str) or not _is_ticket_total_field(field_name):
+                        continue
+                    shared_key = (race_id, group_id, field_name)
+                    if shared_key not in race_ticket_totals:
+                        race_ticket_totals[shared_key] = value
+                    elif not _candidate_values_equal(race_ticket_totals[shared_key], value):
+                        violations.append(
+                            _violation(
+                                row_index,
+                                race_id,
+                                horse_id,
+                                group_id,
+                                field_name,
+                                "F19 ticket total must be identical within a race",
+                            )
+                        )
             if isinstance(group.source_scope, str):
                 key = (race_id, group_id)
                 previous_scope = race_group_scopes.setdefault(key, group.source_scope)
@@ -849,6 +866,11 @@ def _is_allowed_market_field(field_name: str) -> bool:
     normalized = "".join(character for character in field_name.casefold() if character.isalnum())
     if normalized in _ALLOWED_MARKET_FIELD_NAMES:
         return True
+    return _is_ticket_total_field(field_name)
+
+
+def _is_ticket_total_field(field_name: str) -> bool:
+    normalized = "".join(character for character in field_name.casefold() if character.isalnum())
     return any(
         normalized
         in {
@@ -858,6 +880,12 @@ def _is_allowed_market_field(field_name: str) -> bool:
         }
         for ticket_type in _MARKET_TICKET_TYPES
     )
+
+
+def _candidate_values_equal(left: CandidateValue, right: CandidateValue) -> bool:
+    if _is_missing(left) or _is_missing(right):
+        return _is_missing(left) and _is_missing(right)
+    return left == right
 
 
 def _violation(
