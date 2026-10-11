@@ -133,6 +133,8 @@ _TARGET_RESULT_FIELD_MARKERS = (
     "finish",
     "finalodds",
     "outcome",
+    "kakuteijyuni",
+    "nyusenjyuni",
     "payout",
     "placing",
     "position",
@@ -140,6 +142,7 @@ _TARGET_RESULT_FIELD_MARKERS = (
     "refund",
     "result",
     "score",
+    "speed",
     "time",
     "winflag",
     "winner",
@@ -155,11 +158,8 @@ _RESULT_FIELD_NAME_MARKERS = (
     "placing",
     "position",
     "prize",
-    "rank",
     "result",
     "refund",
-    "speed",
-    "time",
     "winner",
 )
 

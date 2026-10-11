@@ -275,6 +275,29 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
 
 
 @pytest.mark.parametrize(
+    ("group_id", "field_name"),
+    [
+        ("F09", "relative_metric_rank"),
+        ("F09", "relative_metric_zscore"),
+        ("F20", "same_gate_ability_rank"),
+        ("F20", "same_trainer_ability_rank"),
+        ("F21", "opponent_graph_score"),
+    ],
+)
+def test_relative_rank_and_score_candidates_are_not_result_fields(
+    group_id: str,
+    field_name: str,
+) -> None:
+    record = _record()
+    group = replace(record.groups[group_id], values={field_name: 1.0})
+    record = replace(record, groups={**record.groups, group_id: group})
+
+    result = build_explanatory_variable_candidates([record])
+
+    assert result.audit.valid
+
+
+@pytest.mark.parametrize(
     "field_name",
     [
         "ticket_total_tansyo",
