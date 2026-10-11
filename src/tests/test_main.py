@@ -10,6 +10,7 @@ from typer.testing import CliRunner
 
 from data.race_key import RaceKey
 from data.retriever.weekly import WeeklyBatchResult
+from features.explanatory_variable_candidates import CANDIDATE_GROUP_IDS
 from main import app
 from models.evaluate_model import RankingMetrics
 
@@ -256,6 +257,148 @@ def _feature_payload(*, future_odds: bool = False) -> dict[str, object]:
         "feature_names": ["ability", "historical_odds"],
         "records": records,
     }
+
+
+def _candidate_payload(*, target_result: bool = False) -> dict[str, object]:
+    return {
+        "records": [
+            {
+                "race_id": "race-1",
+                "horse_id": "horse-1",
+                "freeze_at": "2026-01-01T12:00:00+00:00",
+                "groups": {
+                    group_id: {
+                        "values": {"candidate_value": 1.0},
+                        "available_at": "2025-12-31T12:00:00+00:00",
+                        "source_event_at": "2025-12-31T00:00:00+00:00",
+                        "source_scope": "historical",
+                        "status": "confirmed",
+                        "source_race_ids": ["past-race-1"],
+                        "contains_target_result": target_result if group_id == "F01" else False,
+                        "contains_future_data": False,
+                    }
+                    for group_id in CANDIDATE_GROUP_IDS
+                },
+            }
+        ]
+    }
+
+
+def test_model_candidate_features_cli_writes_all_candidate_groups(tmp_path: Path) -> None:
+    input_path = tmp_path / "candidates.json"
+    output_path = tmp_path / "generated.json"
+    input_path.write_text(json.dumps(_candidate_payload()), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "candidate-features",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 0
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["candidate_group_ids"] == list(CANDIDATE_GROUP_IDS)
+    assert payload["audit"]["valid"] is True
+    assert set(payload["records"][0]["groups"]) == set(CANDIDATE_GROUP_IDS)
+
+
+def test_model_candidate_features_cli_rejects_target_race_result(tmp_path: Path) -> None:
+    input_path = tmp_path / "candidates.json"
+    output_path = tmp_path / "generated.json"
+    input_path.write_text(json.dumps(_candidate_payload(target_result=True)), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "candidate-features",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert payload["audit"]["valid"] is False
+    assert any(
+        "target race result is not allowed" in violation["reason"]
+        for violation in payload["audit"]["violations"]
+    )
+
+
+def test_model_candidate_features_cli_rejects_unspecified_boundary_flags(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "candidates.json"
+    output_path = tmp_path / "generated.json"
+    payload = _candidate_payload()
+    records = cast(list[dict[str, object]], payload["records"])
+    groups = cast(dict[str, object], records[0]["groups"])
+    group = cast(dict[str, object], groups["F01"])
+    del group["contains_target_result"]
+    del group["contains_future_data"]
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "candidate-features",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    error_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert error_payload["error"]["type"] == "input"
+    assert "contains_future_data" in error_payload["error"]["message"]
+    assert "contains_target_result" in error_payload["error"]["message"]
+
+
+def test_model_candidate_features_cli_reports_source_event_at_separately(
+    tmp_path: Path,
+) -> None:
+    input_path = tmp_path / "candidates.json"
+    output_path = tmp_path / "generated.json"
+    payload = _candidate_payload()
+    records = cast(list[dict[str, object]], payload["records"])
+    groups = cast(dict[str, object], records[0]["groups"])
+    group = cast(dict[str, object], groups["F01"])
+    group["source_event_at"] = "2026-01-01T12:01:00+00:00"
+    input_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = runner.invoke(
+        app,
+        [
+            "model",
+            "candidate-features",
+            "--input",
+            str(input_path),
+            "--output",
+            str(output_path),
+        ],
+    )
+
+    assert result.exit_code == 1
+    error_payload = json.loads(output_path.read_text(encoding="utf-8"))
+    violation = next(
+        item
+        for item in error_payload["audit"]["violations"]
+        if item["reason"] == "source_event_at is after freeze_at"
+    )
+    assert violation["source_event_at"] == "2026-01-01T12:01:00+00:00"
+    assert violation["available_at"] is None
 
 
 def test_model_features_cli_writes_audited_missing_features(tmp_path: Path) -> None:

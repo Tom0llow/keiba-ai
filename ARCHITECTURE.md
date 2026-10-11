@@ -148,7 +148,8 @@ This boundary is recorded in ADR-008.
 `src/main.py` is the user-facing Typer entry point for historical-basic,
 historical-odds, latest, and
 prediction-time realtime retrieval, standalone preprocessing, and the model
-commands `model audit`, `model features`, and `model walk-forward`. XML
+commands `model audit`, `model features`, `model candidate-features`, and
+`model walk-forward`. XML
 transformation, feature validation, and model evaluation remain below the CLI
 boundary.
 

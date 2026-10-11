@@ -31,7 +31,7 @@ MVPの確定仕様は次の範囲とする。
 | 原本からの加工 | `DataPreprocesser`がread-only SQLiteから文字列とNULLを維持してParquetを公開する。`src/features/`が明示入力から特徴量別中間Parquetを生成し、`src/make_datamart/`がそれらを結合する。 | JRA-VAN業務コード解釈、受信履歴からの過去集計、原本Parquetから中間入力を作る変換は未実装。 |
 | 公開 | 完全snapshotとrace-local O1/O2 versionを完成後にCURRENTで公開する。失敗時は従前の参照を維持する。 | snapshotの完成は、過去の出馬表・訂正履歴を保持したことを意味しない。 |
 | 読み込み | `DataLoader`は完全表・Arrow batch・RaceKey指定のO1/O2をParquetから読む。 | 各読取でCURRENTを再解決するため、複数表を同一版へ固定する公開APIがない。 |
-| CLI | `src/main.py`の取得フラグ、`preprocess rebuild`、`model audit/features/walk-forward`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルとdatamartはPython APIから明示的に生成・保存する。 |
+| CLI | `src/main.py`の取得フラグ、`preprocess rebuild`、`model audit/features/candidate-features/walk-forward`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルとdatamartはPython APIから明示的に生成・保存する。 |
 | モデル | ADR-009〜011によりLambdaRank境界、FeatureSchema、時点監査、race-level walk-forward、native成果物形式を決定し、`src/models/`と`src/features/`へ実装済み。 | JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物の製品統合は未実装。 |
 
 既存の`src/tests/test_data_pipeline.py`は、原本削除後のParquet読取、変換失敗時のCURRENT維持、対象レースだけのO1/O2公開を検証する。これを学習・推論や時点再現の検証済み証拠とは扱わない。
@@ -139,7 +139,7 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 | `src/models/evaluate_model.py` / `walk_forward.py` | レース別指標とrace-level時間順分割。 | train/validation/testを同一レースから分離せず、train以外を学習へ渡さない。 |
 | `src/models/predict_model.py` | 保存した特徴量契約とモデルによる1レースのscore/rank生成。 | 学習と共通の特徴量計算。確率化や購入方策を持たない。 |
 | `src/models/artifacts.py` | モデル・manifest・予測・評価の検証済み公開と再読取。 | ファイルI/Oを集約し、実行可能オブジェクトの任意復元を避ける。 |
-| `src/main.py` | `model audit/features/walk-forward`のJSON入力検証と呼出し。 | 外部取得を暗黙に開始せず、既存取得CLIを維持する。 |
+| `src/main.py` | `model audit/features/candidate-features/walk-forward`のJSON入力検証と呼出し。候補群は正規化済み値の監査境界として扱う。 | 外部取得を暗黙に開始せず、既存取得CLIを維持する。 |
 
 依存は`CLI → モデルの処理編成 → 特徴量/データ契約 → DataLoader`、保存は明示した成果物境界へ向ける。特徴量やloaderがモデル・CLIをimportしない。時刻・乱数・設定・パスを明示引数にし、import時の処理や隠れたグローバルクライアントを作らない。
 
@@ -577,17 +577,20 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 ### 11.2. コマンド案と既存との区別
 
-実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
+実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/candidate-features/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
 
 | コマンド案 | 入力 | 成果物 |
 | --- | --- | --- |
 | `model audit` | schema ID・feature names・freeze/available時刻を含むJSON。 | 時点・欠損・利用可能性の監査報告。 |
 | `model features` | 承認済みschemaと時刻付きFeatureInput JSON。 | 欠損を保持したFeatureRowsと監査結果。 |
+| `model candidate-features` | F01〜F21の各候補値、`available_at` / `source_event_at`、`source_scope` / `status`、漏洩確認フラグを含むJSON。 | 正規化済み候補値と時点・欠損・整合性の監査結果。現行の`FeatureSchema`へは投入しない。 |
 | `model walk-forward` | 着順付きFeatureInput JSONとrace-level分割設定。 | 拡大型Walk-forwardのfold境界と指標。 |
 | `model train` | 固定した選定設定、承認済み学習範囲。 | モデル一式と再現manifest。 |
 | `model predict` | モデルID、RaceKey、入力参照、freeze_at。 | score/rankと実行・監査情報。 |
 
 取得フラグとの併用は現行サブコマンドの規則に合わせて拒否する。コマンドは入力・必須決定事項を先に検証し、時点監査に失敗した場合は外部取得や学習を開始しない。終了コードは監査・入力契約違反時に1、JSON出力はUTF-8の標準JSONとし、欠損NaNは`null`へ変換する。
+
+`model candidate-features`は、上流で作成済みの正規化値だけを受け取る監査・出力境界である。F01〜F21の業務コード解釈、履歴窓、閾値、集計式はこのコマンドで決定せず、対象レース結果や未来データを含む入力を拒否する。候補群は生成結果として保持するが、承認前に数値`FeatureSchema`へ自動投入しない。
 
 ## 12. 成果物と再現性
 
