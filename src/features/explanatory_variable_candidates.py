@@ -97,6 +97,8 @@ _RESULT_FIELD_NAMES = frozenset(
         "targetfinish",
         "targetresult",
         "target",
+        "time",
+        "timediff",
         "winflag",
         "winner",
     }
