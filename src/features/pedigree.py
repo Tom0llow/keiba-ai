@@ -6,10 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from features.feature_table import (
+from features.common.base import FeatureBuilder
+from features.common.feature_table import (
     FeatureTableRow,
     IntermediateFeatureTable,
-    build_feature_table,
     validate_common_row,
 )
 
@@ -29,37 +29,48 @@ class PedigreeInput:
 PedigreeRecord = PedigreeInput
 
 
-def build_pedigree(records: Sequence[PedigreeInput]) -> IntermediateFeatureTable:
-    """Build pedigree columns as strings without category encoding."""
-    rows: list[FeatureTableRow] = []
-    for record in records:
-        if not isinstance(record, PedigreeInput):
-            raise TypeError("records must contain PedigreeInput values")
-        if record.sire is not None and not isinstance(record.sire, str):
-            raise TypeError("sire must be a string or None")
-        if record.broodmare_sire is not None and not isinstance(record.broodmare_sire, str):
-            raise TypeError("broodmare_sire must be a string or None")
-        value = record.sire if record.sire is not None else record.broodmare_sire
-        freeze_at, available_at = validate_common_row(
-            record.race_id,
-            record.horse_id,
-            record.freeze_at,
-            record.available_at,
-            value,
-            "pedigree",
-        )
-        if (record.sire is not None or record.broodmare_sire is not None) and available_at is None:
-            raise ValueError("non-missing pedigree values require available_at")
-        rows.append(
-            FeatureTableRow(
+class PedigreeBuilder(FeatureBuilder[PedigreeInput]):
+    """Generate normalized rows using the shared intermediate-table builder."""
+
+    feature_name = "pedigree"
+
+    def _build_rows(self, records: Sequence[PedigreeInput]) -> list[FeatureTableRow]:
+        rows: list[FeatureTableRow] = []
+        for record in records:
+            if not isinstance(record, PedigreeInput):
+                raise TypeError("records must contain PedigreeInput values")
+            if record.sire is not None and not isinstance(record.sire, str):
+                raise TypeError("sire must be a string or None")
+            if record.broodmare_sire is not None and not isinstance(record.broodmare_sire, str):
+                raise TypeError("broodmare_sire must be a string or None")
+            value = record.sire if record.sire is not None else record.broodmare_sire
+            freeze_at, available_at = validate_common_row(
                 record.race_id,
                 record.horse_id,
-                freeze_at,
-                available_at,
-                {"sire": record.sire, "broodmare_sire": record.broodmare_sire},
+                record.freeze_at,
+                record.available_at,
+                value,
+                "pedigree",
             )
-        )
-    return build_feature_table("pedigree", rows)
+            if (
+                record.sire is not None or record.broodmare_sire is not None
+            ) and available_at is None:
+                raise ValueError("non-missing pedigree values require available_at")
+            rows.append(
+                FeatureTableRow(
+                    record.race_id,
+                    record.horse_id,
+                    freeze_at,
+                    available_at,
+                    {"sire": record.sire, "broodmare_sire": record.broodmare_sire},
+                )
+            )
+        return rows
+
+
+def build_pedigree(records: Sequence[PedigreeInput]) -> IntermediateFeatureTable:
+    """Build this feature through the shared intermediate-table contract."""
+    return PedigreeBuilder().build(records)
 
 
 def build_pedigree_table(records: Sequence[PedigreeInput]) -> IntermediateFeatureTable:

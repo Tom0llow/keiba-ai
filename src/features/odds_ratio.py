@@ -7,10 +7,10 @@ from dataclasses import dataclass
 from datetime import datetime
 from math import isfinite, isnan
 
-from features.feature_table import (
+from features.common.base import FeatureBuilder
+from features.common.feature_table import (
     FeatureTableRow,
     IntermediateFeatureTable,
-    build_feature_table,
     validate_common_row,
 )
 
@@ -30,35 +30,44 @@ class OddsRatioInput:
 OddsRatioRecord = OddsRatioInput
 
 
-def build_odds_ratio(records: Sequence[OddsRatioInput]) -> IntermediateFeatureTable:
-    """Build odds/reference-odds ratios, preserving missing input as null."""
-    rows: list[FeatureTableRow] = []
-    for record in records:
-        if not isinstance(record, OddsRatioInput):
-            raise TypeError("records must contain OddsRatioInput values")
-        odds = _normalize_odds(record.odds, "odds")
-        reference_odds = _normalize_odds(record.reference_odds, "reference_odds")
-        ratio = None if odds is None or reference_odds is None else odds / reference_odds
-        if ratio is not None and not isfinite(ratio):
-            raise ValueError("odds_ratio must be finite")
-        freeze_at, available_at = validate_common_row(
-            record.race_id,
-            record.horse_id,
-            record.freeze_at,
-            record.available_at,
-            ratio,
-            "odds_ratio",
-        )
-        rows.append(
-            FeatureTableRow(
+class OddsRatioBuilder(FeatureBuilder[OddsRatioInput]):
+    """Generate normalized rows using the shared intermediate-table builder."""
+
+    feature_name = "odds_ratio"
+
+    def _build_rows(self, records: Sequence[OddsRatioInput]) -> list[FeatureTableRow]:
+        rows: list[FeatureTableRow] = []
+        for record in records:
+            if not isinstance(record, OddsRatioInput):
+                raise TypeError("records must contain OddsRatioInput values")
+            odds = _normalize_odds(record.odds, "odds")
+            reference_odds = _normalize_odds(record.reference_odds, "reference_odds")
+            ratio = None if odds is None or reference_odds is None else odds / reference_odds
+            if ratio is not None and not isfinite(ratio):
+                raise ValueError("odds_ratio must be finite")
+            freeze_at, available_at = validate_common_row(
                 record.race_id,
                 record.horse_id,
-                freeze_at,
-                available_at,
-                {"odds_ratio": ratio},
+                record.freeze_at,
+                record.available_at,
+                ratio,
+                "odds_ratio",
             )
-        )
-    return build_feature_table("odds_ratio", rows)
+            rows.append(
+                FeatureTableRow(
+                    record.race_id,
+                    record.horse_id,
+                    freeze_at,
+                    available_at,
+                    {"odds_ratio": ratio},
+                )
+            )
+        return rows
+
+
+def build_odds_ratio(records: Sequence[OddsRatioInput]) -> IntermediateFeatureTable:
+    """Build this feature through the shared intermediate-table contract."""
+    return OddsRatioBuilder().build(records)
 
 
 def build_odds_ratio_table(records: Sequence[OddsRatioInput]) -> IntermediateFeatureTable:

@@ -1,4 +1,4 @@
-"""Tests for the explicit F01-F21 candidate feature boundary."""
+"""Tests for the explicit F01-F21 explanatory-variable boundary."""
 
 from __future__ import annotations
 
@@ -10,16 +10,17 @@ from typing import cast
 import pytest
 
 from features.basic_conditions_and_weight import SPEC as F10_SPEC
+from features.common.rows import FeatureTableRow
 from features.condition_adjusted_ability import SPEC as F03_SPEC
 from features.condition_suitability import SPEC as F05_SPEC
 from features.expected_race_development import SPEC as F13_SPEC
-from features.explanatory_variable_candidates import (
-    CANDIDATE_GROUP_IDS,
-    CANDIDATE_GROUP_SPECS,
-    CandidateGenerationError,
-    CandidateGroupInput,
-    CandidateRecord,
-    build_explanatory_variable_candidates,
+from features.explanatory_variables import (
+    FEATURE_GROUP_IDS,
+    FEATURE_GROUP_SPECS,
+    FeatureBatchInput,
+    FeatureBuildError,
+    FeatureGroupInput,
+    build_explanatory_variables,
 )
 from features.hill_and_wood_workouts import SPEC as F17_SPEC
 from features.history_volume_and_missingness import SPEC as F15_SPEC
@@ -49,11 +50,11 @@ def _record(
     race_id: str = "race-1",
     horse_id: str = "horse-1",
     freeze_at: datetime = FREEZE_AT,
-) -> CandidateRecord:
+) -> FeatureBatchInput:
     groups = {
-        group_id: CandidateGroupInput(
-            group_id=group_id,
-            values=({"market_win_odds": 1.0} if group_id == "F19" else {"candidate_value": 1.0}),
+        feature_id: FeatureGroupInput(
+            feature_id=feature_id,
+            values=({"market_win_odds": 1.0} if feature_id == "F19" else {"feature_value": 1.0}),
             available_at=AVAILABLE_AT,
             source_event_at=AVAILABLE_AT,
             source_scope="historical",
@@ -62,22 +63,26 @@ def _record(
             contains_target_result=False,
             contains_future_data=False,
         )
-        for group_id in CANDIDATE_GROUP_IDS
+        for feature_id in FEATURE_GROUP_IDS
     }
-    return CandidateRecord(race_id, horse_id, freeze_at, groups)
+    return FeatureBatchInput(race_id, horse_id, freeze_at, groups)
 
 
-def test_build_candidates_keeps_all_21_groups_outside_model_schema() -> None:
-    result = build_explanatory_variable_candidates([_record()])
+def test_build_variables_keeps_all_21_groups_outside_model_schema() -> None:
+    result = build_explanatory_variables([_record()])
 
-    assert tuple(result.records[0].groups) == CANDIDATE_GROUP_IDS
-    assert tuple(spec.group_id for spec in CANDIDATE_GROUP_SPECS) == CANDIDATE_GROUP_IDS
-    assert result.records[0].groups["F01"].available_at == AVAILABLE_AT
-    assert result.records[0].groups["F21"].values["candidate_value"] == 1.0
+    assert tuple(result.inputs[0].groups) == FEATURE_GROUP_IDS
+    assert tuple(spec.feature_id for spec in FEATURE_GROUP_SPECS) == FEATURE_GROUP_IDS
+    assert result.inputs[0].groups["F01"].available_at == AVAILABLE_AT
+    assert result.inputs[0].groups["F21"].values["feature_value"] == 1.0
+    assert tuple(result.rows) == FEATURE_GROUP_IDS
+    assert all(isinstance(rows[0], FeatureTableRow) for rows in result.rows.values())
+    assert result.rows["F01"][0].values == {"feature_value": 1.0}
+    assert result.rows["F01"][0].freeze_at == FREEZE_AT
     assert result.audit.valid
 
 
-def test_each_candidate_group_has_its_own_spec_module() -> None:
+def test_each_feature_group_has_its_own_spec_module() -> None:
     specs = (
         F01_SPEC,
         F02_SPEC,
@@ -102,19 +107,19 @@ def test_each_candidate_group_has_its_own_spec_module() -> None:
         F21_SPEC,
     )
 
-    assert tuple(spec.group_id for spec in specs) == CANDIDATE_GROUP_IDS
-    assert specs == CANDIDATE_GROUP_SPECS
+    assert tuple(spec.feature_id for spec in specs) == FEATURE_GROUP_IDS
+    assert specs == FEATURE_GROUP_SPECS
 
 
-def test_candidate_groups_are_not_added_to_feature_schema_allow_list() -> None:
+def test_feature_groups_are_not_added_to_feature_schema_allow_list() -> None:
     with pytest.raises(ValueError, match="approved allow-list"):
-        FeatureSchema.from_names(("F01",), schema_id="candidate-not-model-v1")
+        FeatureSchema.from_names(("F01",), schema_id="feature-not-model-v1")
 
 
-def test_missing_candidate_is_retained_without_available_at() -> None:
+def test_missing_feature_is_retained_without_available_at() -> None:
     record = _record()
-    missing_group = CandidateGroupInput(
-        group_id="F19",
+    missing_group = FeatureGroupInput(
+        feature_id="F19",
         values={"market_win_odds": None},
         available_at=None,
         source_event_at=None,
@@ -125,14 +130,14 @@ def test_missing_candidate_is_retained_without_available_at() -> None:
     )
     record = replace(record, groups={**record.groups, "F19": missing_group})
 
-    result = build_explanatory_variable_candidates([record])
+    result = build_explanatory_variables([record])
 
-    assert result.records[0].groups["F19"].values["market_win_odds"] is None
-    assert result.records[0].groups["F19"].available_at is None
+    assert result.inputs[0].groups["F19"].values["market_win_odds"] is None
+    assert result.inputs[0].groups["F19"].available_at is None
     assert result.audit.missing_values == 1
 
 
-def test_future_candidate_is_rejected() -> None:
+def test_future_feature_is_rejected() -> None:
     record = _record()
     future_group = replace(
         record.groups["F01"],
@@ -140,11 +145,11 @@ def test_future_candidate_is_rejected() -> None:
     )
     record = replace(record, groups={**record.groups, "F01": future_group})
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([record])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([record])
 
     violation = error.value.audit.violations[0]
-    assert violation.group_id == "F01"
+    assert violation.feature_id == "F01"
     assert "after freeze_at" in violation.reason
 
 
@@ -161,8 +166,8 @@ def test_source_event_after_freeze_is_rejected_for_any_source_scope(
     )
     record = replace(record, groups={**record.groups, "F01": future_source_group})
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([record])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([record])
 
     assert any(
         violation.reason == "source_event_at is after freeze_at"
@@ -177,13 +182,13 @@ def test_source_event_after_freeze_is_rejected_for_any_source_scope(
     assert violation.available_at is None
 
 
-def test_candidate_boundary_flags_are_required_in_dataclass_api() -> None:
+def test_feature_boundary_flags_are_required_in_dataclass_api() -> None:
     group = _record().groups["F01"]
-    constructor = cast(Callable[..., CandidateGroupInput], CandidateGroupInput)
+    constructor = cast(Callable[..., FeatureGroupInput], FeatureGroupInput)
 
     with pytest.raises(TypeError, match="contains_target_result"):
         constructor(
-            group_id=group.group_id,
+            feature_id=group.feature_id,
             values=group.values,
             available_at=group.available_at,
             source_event_at=group.source_event_at,
@@ -196,8 +201,8 @@ def test_candidate_boundary_flags_are_required_in_dataclass_api() -> None:
 def test_freeze_at_is_required_by_python_api() -> None:
     record = replace(_record(), freeze_at=cast(datetime, None))
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([record])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([record])
 
     assert any(
         violation.reason == "freeze_at is required" for violation in error.value.audit.violations
@@ -240,13 +245,13 @@ def test_freeze_at_is_required_by_python_api() -> None:
         "finish_position",
     ],
 )
-def test_result_derived_candidate_field_names_are_rejected(field_name: str) -> None:
+def test_result_derived_feature_field_names_are_rejected(field_name: str) -> None:
     record = _record()
     result_group = replace(record.groups["F01"], values={field_name: 1.0})
     record = replace(record, groups={**record.groups, "F01": result_group})
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([record])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([record])
 
     assert any(
         violation.field_name == field_name
@@ -269,17 +274,17 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
     field_name: str,
 ) -> None:
     record = _record()
-    group_id = "F19" if field_name.startswith("market") else "F01"
-    group = replace(record.groups[group_id], values={field_name: 1})
-    record = replace(record, groups={**record.groups, group_id: group})
+    feature_id = "F19" if field_name.startswith("market") else "F01"
+    group = replace(record.groups[feature_id], values={field_name: 1})
+    record = replace(record, groups={**record.groups, feature_id: group})
 
-    result = build_explanatory_variable_candidates([record])
+    result = build_explanatory_variables([record])
 
     assert result.audit.valid
 
 
 @pytest.mark.parametrize(
-    ("group_id", "field_name"),
+    ("feature_id", "field_name"),
     [
         ("F09", "relative_metric_rank"),
         ("F09", "relative_metric_zscore"),
@@ -288,15 +293,15 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
         ("F21", "opponent_graph_score"),
     ],
 )
-def test_relative_rank_and_score_candidates_are_not_result_fields(
-    group_id: str,
+def test_relative_rank_and_score_variables_are_not_result_fields(
+    feature_id: str,
     field_name: str,
 ) -> None:
     record = _record()
-    group = replace(record.groups[group_id], values={field_name: 1.0})
-    record = replace(record, groups={**record.groups, group_id: group})
+    group = replace(record.groups[feature_id], values={field_name: 1.0})
+    record = replace(record, groups={**record.groups, feature_id: group})
 
-    result = build_explanatory_variable_candidates([record])
+    result = build_explanatory_variables([record])
 
     assert result.audit.valid
 
@@ -324,7 +329,7 @@ def test_f19_documented_market_fields_are_allowed(field_name: str) -> None:
     market_group = replace(record.groups["F19"], values={field_name: 1})
     record = replace(record, groups={**record.groups, "F19": market_group})
 
-    result = build_explanatory_variable_candidates([record])
+    result = build_explanatory_variables([record])
 
     assert result.audit.valid
 
@@ -338,8 +343,8 @@ def test_f19_rejects_undocumented_market_fields(field_name: str) -> None:
     market_group = replace(record.groups["F19"], values={field_name: 1})
     record = replace(record, groups={**record.groups, "F19": market_group})
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([record])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([record])
 
     assert any(
         violation.field_name == field_name and violation.reason == "F19 market field is not allowed"
@@ -355,8 +360,8 @@ def test_f19_ticket_totals_must_be_shared_within_a_race() -> None:
     first = replace(first, groups={**first.groups, "F19": first_group})
     second = replace(second, groups={**second.groups, "F19": second_group})
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([first, second])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([first, second])
 
     assert any(
         violation.reason == "F19 ticket total must be identical within a race"
@@ -364,20 +369,20 @@ def test_f19_ticket_totals_must_be_shared_within_a_race() -> None:
     )
 
 
-def test_non_candidate_group_value_is_reported_as_generation_error() -> None:
+def test_non_feature_group_value_is_reported_as_generation_error() -> None:
     record = _record()
-    groups: dict[str, CandidateGroupInput | None] = dict(record.groups)
+    groups: dict[str, FeatureGroupInput | None] = dict(record.groups)
     groups["F01"] = None
     malformed_record = replace(
         record,
-        groups=cast(Mapping[str, CandidateGroupInput], groups),
+        groups=cast(Mapping[str, FeatureGroupInput], groups),
     )
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([malformed_record])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([malformed_record])
 
     assert any(
-        violation.reason == "groups must contain CandidateGroupInput values"
+        violation.reason == "groups must contain FeatureGroupInput values"
         for violation in error.value.audit.violations
     )
 
@@ -394,7 +399,7 @@ def test_non_candidate_group_value_is_reported_as_generation_error() -> None:
         ),
     ],
 )
-def test_invalid_candidate_group_metadata_is_rejected(
+def test_invalid_feature_group_metadata_is_rejected(
     attribute: str,
     value: object,
     reason: str,
@@ -410,36 +415,34 @@ def test_invalid_candidate_group_metadata_is_rejected(
             source_race_ids=cast(tuple[str, ...], value),
         )
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates(
-            [replace(record, groups={**record.groups, "F01": group})]
-        )
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([replace(record, groups={**record.groups, "F01": group})])
 
     assert any(violation.reason == reason for violation in error.value.audit.violations)
 
 
-def test_candidate_group_set_must_be_exactly_f01_through_f21() -> None:
+def test_feature_group_set_must_be_exactly_f01_through_f21() -> None:
     record = _record()
     missing_groups = dict(record.groups)
     del missing_groups["F21"]
-    with pytest.raises(CandidateGenerationError) as missing_error:
-        build_explanatory_variable_candidates([replace(record, groups=missing_groups)])
+    with pytest.raises(FeatureBuildError) as missing_error:
+        build_explanatory_variables([replace(record, groups=missing_groups)])
     assert any(
-        violation.reason == "candidate group is missing" and violation.group_id == "F21"
+        violation.reason == "feature group is missing" and violation.feature_id == "F21"
         for violation in missing_error.value.audit.violations
     )
 
     extra_groups = dict(record.groups)
-    extra_groups["F22"] = replace(record.groups["F21"], group_id="F22")
-    with pytest.raises(CandidateGenerationError) as extra_error:
-        build_explanatory_variable_candidates([replace(record, groups=extra_groups)])
+    extra_groups["F22"] = replace(record.groups["F21"], feature_id="F22")
+    with pytest.raises(FeatureBuildError) as extra_error:
+        build_explanatory_variables([replace(record, groups=extra_groups)])
     assert any(
-        violation.reason == "candidate group is not F01-F21" and violation.group_id == "F22"
+        violation.reason == "feature group is not F01-F21" and violation.feature_id == "F22"
         for violation in extra_error.value.audit.violations
     )
 
 
-def test_candidate_boundary_violations_are_rejected() -> None:
+def test_feature_boundary_violations_are_rejected() -> None:
     record = _record()
     base_group = record.groups["F01"]
     updates = (
@@ -454,37 +457,37 @@ def test_candidate_boundary_violations_are_rejected() -> None:
             **record.groups,
             "F01": update,
         }
-        with pytest.raises(CandidateGenerationError):
-            build_explanatory_variable_candidates([replace(record, groups=updated_groups)])
+        with pytest.raises(FeatureBuildError):
+            build_explanatory_variables([replace(record, groups=updated_groups)])
 
 
-def test_same_race_requires_one_freeze_time_and_stable_candidate_columns() -> None:
+def test_same_race_requires_one_freeze_time_and_stable_feature_columns() -> None:
     first = _record(horse_id="horse-1")
     second = _record(horse_id="horse-2", freeze_at=FREEZE_AT.replace(minute=13))
     second_group = replace(second.groups["F01"], values={"other_value": 1.0})
     second = replace(second, groups={**second.groups, "F01": second_group})
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates([first, second])
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([first, second])
 
     reasons = {violation.reason for violation in error.value.audit.violations}
     assert "freeze_at must be identical for all rows in a race" in reasons
-    assert "candidate field names must be identical within a race" in reasons
+    assert "feature field names must be identical within a race" in reasons
 
 
 def test_duplicate_horse_and_non_contiguous_race_rows_are_rejected() -> None:
     records = [_record(race_id="race-1", horse_id="horse-1"), _record(race_id="race-2")]
     records.append(_record(race_id="race-1", horse_id="horse-2"))
 
-    with pytest.raises(CandidateGenerationError) as error:
-        build_explanatory_variable_candidates(records)
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables(records)
 
     reasons = {violation.reason for violation in error.value.audit.violations}
     assert "rows for each race must be contiguous" in reasons
 
     duplicate_records = [_record(), _record(horse_id="horse-1")]
-    with pytest.raises(CandidateGenerationError) as duplicate_error:
-        build_explanatory_variable_candidates(duplicate_records)
+    with pytest.raises(FeatureBuildError) as duplicate_error:
+        build_explanatory_variables(duplicate_records)
     assert any(
         violation.reason == "horse_id must be unique within a race"
         for violation in duplicate_error.value.audit.violations

@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import tracemalloc
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
 
-from features.feature_table import read_feature_table, validate_feature_table, write_feature_table
+from features.common.feature_table import (
+    read_feature_table,
+    validate_feature_table,
+    write_feature_table,
+)
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
 from features.pedigree import PedigreeInput, build_pedigree
 from features.previous_race_result import PreviousRaceResultInput, build_previous_race_result
@@ -118,3 +123,30 @@ def test_feature_table_requires_timezone_aware_timestamps() -> None:
         build_previous_race_result(
             [PreviousRaceResultInput("race-1", "horse-1", datetime(2026, 1, 1, 12), None, None)]
         )
+
+
+def test_feature_table_validation_does_not_copy_all_string_values() -> None:
+    row_count = 20_000
+    schema = build_pedigree([]).schema
+    table = pa.Table.from_arrays(
+        [
+            pa.array(["race-1"] * row_count, type=pa.string()),
+            pa.array([f"horse-{index}" for index in range(row_count)], type=pa.string()),
+            pa.array([FREEZE_AT] * row_count, type=schema.field("freeze_at").type),
+            pa.array([AVAILABLE_AT] * row_count, type=schema.field("available_at").type),
+            pa.array(["s" * 1_000] * row_count, type=pa.string()),
+            pa.array(["b" * 1_000] * row_count, type=pa.string()),
+        ],
+        schema=schema,
+    )
+    table = pa.concat_tables([table.slice(0, row_count // 2), table.slice(row_count // 2)])
+
+    tracemalloc.start()
+    try:
+        assert validate_feature_table(table, expected_freeze_at=FREEZE_AT) is table
+        _, peak_bytes = tracemalloc.get_traced_memory()
+    finally:
+        tracemalloc.stop()
+
+    # Allow ample room for key tracking; copying both string columns exceeds 38 MiB.
+    assert peak_bytes < 16 * 1024 * 1024, f"validation allocated {peak_bytes / 1024**2:.2f} MiB"

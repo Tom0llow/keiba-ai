@@ -1,10 +1,10 @@
 # ADR-017: 説明変数候補の監査境界を分離する
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-10-11
 - Decision Owners: Repository maintainers
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: [ADR-019](ADR-019-unify-feature-builders-and-common-contracts.md)
 
 ## Context
 
