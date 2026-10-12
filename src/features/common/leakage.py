@@ -13,10 +13,16 @@ _RESULT_FIELD_NAMES = frozenset(
         "arrivalrank",
         "confirmedfinish",
         "confirmedresult",
+        "confirmedtime",
+        "deadheat",
+        "earnings",
         "finalodds",
         "finishposition",
         "finishresult",
+        "harontimel3",
+        "last3f",
         "lastodds",
+        "margin",
         "ninki",
         "oddsfinal",
         "outcome",
@@ -54,8 +60,14 @@ _HISTORICAL_FIELD_PREFIXES = (
 )
 _TARGET_RESULT_FIELD_MARKERS = (
     "arrival",
+    "confirmedtime",
+    "deadheat",
+    "earnings",
     "finish",
     "finalodds",
+    "harontimel3",
+    "last3f",
+    "margin",
     "outcome",
     "kakuteijyuni",
     "nyusenjyuni",
@@ -107,7 +119,9 @@ def is_result_field(field_name: str) -> bool:
     target_field = normalized[len("target") :]
     if target_field.startswith("race"):
         target_field = target_field[len("race") :]
-    return target_field.startswith(_TARGET_RESULT_FIELD_MARKERS)
+    return target_field in _RESULT_FIELD_NAMES or target_field.startswith(
+        _TARGET_RESULT_FIELD_MARKERS
+    )
 
 
 def audit_source(

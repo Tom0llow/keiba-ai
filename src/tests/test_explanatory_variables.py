@@ -243,6 +243,37 @@ def test_freeze_at_is_required_by_python_api() -> None:
         "race_result",
         "race_result_score",
         "finish_position",
+        *[
+            f"{prefix}{alias}"
+            for prefix in ("", "target_", "target_race_")
+            for alias in (
+                "last_3f",
+                "last3f",
+                "HaronTimeL3",
+                "confirmed_time",
+                "dead_heat",
+                "earnings",
+                "margin",
+                "last_odds",
+                "ninki",
+                "popularity",
+                "odds_final",
+            )
+        ],
+        "LAST-3F",
+        "haron.time.l3",
+        "TARGET-LAST.3F",
+        "Target.Race.HARON-TIME-L3",
+        "TARGET-RACE-CONFIRMED.TIME",
+        "Target.Race.Dead-Heat",
+        "target-race-EARNINGS",
+        "TARGET.RACE.Margin",
+        "target_race_last_3f_mean",
+        "target_race_HaronTimeL3_delta",
+        "target_confirmed_time_zscore",
+        "target_dead_heat_count",
+        "target_race_earnings_mean",
+        "target_margin_delta",
     ],
 )
 def test_result_derived_feature_field_names_are_rejected(field_name: str) -> None:
@@ -268,6 +299,34 @@ def test_result_derived_feature_field_names_are_rejected(field_name: str) -> Non
         "market_rank_change",
         "previous_race_result",
         "previous_race_finish_position",
+        *[
+            f"{prefix}_{alias}"
+            for prefix in ("past", "previous", "historical", "history")
+            for alias in (
+                "last_3f",
+                "last3f",
+                "HaronTimeL3",
+                "confirmed_time",
+                "dead_heat",
+                "earnings",
+                "margin",
+            )
+        ],
+        "history_result",
+        "PAST-LAST.3F",
+        "Historical.HARON-TIME-L3",
+        "last_3f_mean",
+        "HaronTimeL3_delta",
+        "confirmed_time_zscore",
+        "dead_heat_count",
+        "earnings_mean",
+        "margin_delta",
+        "past_last_3f_mean",
+        "previous_HaronTimeL3_delta",
+        "historical_confirmed_time_zscore",
+        "history_earnings_mean",
+        "past_target_race_last_3f_mean",
+        "historical_target_race_HaronTimeL3_delta",
     ],
 )
 def test_market_and_historical_fields_are_not_treated_as_result_fields(
@@ -289,7 +348,9 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
         ("F09", "relative_metric_rank"),
         ("F09", "relative_metric_zscore"),
         ("F20", "same_gate_ability_rank"),
+        ("F20", "same_gate_ability_zscore"),
         ("F20", "same_trainer_ability_rank"),
+        ("F20", "same_trainer_ability_zscore"),
         ("F21", "opponent_graph_score"),
     ],
 )

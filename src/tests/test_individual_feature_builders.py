@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta
+from functools import partial
 from pathlib import Path
 
 import pyarrow as pa
@@ -20,10 +21,34 @@ from features.common.registry import FEATURE_BUILDERS, FEATURE_GROUP_IDS, FEATUR
 from features.common.rows import FeatureTableRow
 from features.common.types import FeatureBuildError, FeatureValuesInput
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
+from features.past_racing_ability import PastRacingAbilityBuilder
 from make_datamart.builder import join_feature_tables, read_datamart, write_datamart
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)
+RESULT_ALIAS_FIELDS = (
+    *(
+        f"{prefix}{alias}"
+        for prefix in ("", "target_", "target_race_")
+        for alias in (
+            "last_3f",
+            "last3f",
+            "HaronTimeL3",
+            "confirmed_time",
+            "dead_heat",
+            "earnings",
+            "margin",
+        )
+    ),
+    "TARGET-LAST.3F",
+    "Target.Race.HARON-TIME-L3",
+    "target_race_last_3f_mean",
+    "target_race_HaronTimeL3_delta",
+    "target_confirmed_time_zscore",
+    "target_dead_heat_count",
+    "target_race_earnings_mean",
+    "target_margin_delta",
+)
 
 
 def _input(feature_id: str, *, horse_id: str = "horse-1") -> FeatureValuesInput:
@@ -73,6 +98,60 @@ def test_individual_builders_reject_future_source_evidence(feature_id: str) -> N
         violation.reason == "source_event_at is after freeze_at"
         for violation in error.value.audit.violations
     )
+
+
+@pytest.mark.parametrize("field_name", RESULT_ALIAS_FIELDS)
+@pytest.mark.parametrize("build_table", [False, True])
+def test_past_racing_ability_rejects_result_aliases_with_valid_source_evidence(
+    field_name: str, build_table: bool
+) -> None:
+    record = replace(_input("F02"), values={field_name: 35.0})
+    builder = PastRacingAbilityBuilder()
+    generate = (
+        partial(builder.build, column_types={field_name: pa.float64()})
+        if build_table
+        else builder.build_rows
+    )
+
+    with pytest.raises(FeatureBuildError) as error:
+        generate([record])
+
+    assert any(
+        violation.feature_id == "F02"
+        and violation.field_name == field_name
+        and violation.reason == "result-derived field is not allowed"
+        for violation in error.value.audit.violations
+    )
+
+
+@pytest.mark.parametrize(
+    "field_name",
+    [
+        "last_3f_mean",
+        "HaronTimeL3_delta",
+        *[
+            f"{prefix}_{alias}"
+            for prefix in ("past", "previous", "historical", "history")
+            for alias in ("last_3f_mean", "HaronTimeL3_delta")
+        ],
+        "past_target_race_last_3f_mean",
+        "historical_target_race_HaronTimeL3_delta",
+    ],
+)
+def test_non_target_result_alias_derivatives_are_preserved_by_builders_and_tables(
+    field_name: str,
+) -> None:
+    record = replace(_input("F02"), values={field_name: 35.0})
+    builder = PastRacingAbilityBuilder()
+    rows = builder.build_rows([record])
+    table = builder.build([record], column_types={field_name: pa.float64()})
+    direct_table = build_feature_table(
+        "past_racing_ability", rows, column_types={field_name: pa.float64()}
+    )
+
+    assert rows[0].values == {field_name: 35.0}
+    assert table[field_name].to_pylist() == [35.0]
+    assert direct_table.equals(table, check_metadata=True)
 
 
 def test_new_tables_require_explicit_types_instead_of_inferring_them() -> None:
@@ -138,10 +217,20 @@ def test_declared_types_do_not_silently_coerce_values(
         )
 
 
-def test_result_columns_are_rejected_even_when_every_value_is_null() -> None:
-    row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, None, {"KakuteiJyuni": None})
+@pytest.mark.parametrize("field_name", ["KakuteiJyuni", *RESULT_ALIAS_FIELDS])
+def test_result_columns_are_rejected_even_when_every_value_is_null(field_name: str) -> None:
+    row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, None, {field_name: None})
     with pytest.raises(ValueError, match="result-derived"):
-        build_feature_table("recent_performance", [row], column_types={"KakuteiJyuni": pa.int64()})
+        build_feature_table("recent_performance", [row], column_types={field_name: pa.int64()})
+
+
+@pytest.mark.parametrize("field_name", RESULT_ALIAS_FIELDS)
+def test_intermediate_table_rejects_result_aliases_with_valid_available_at(
+    field_name: str,
+) -> None:
+    row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, {field_name: 35.0})
+    with pytest.raises(ValueError, match="result-derived"):
+        build_feature_table("past_racing_ability", [row], column_types={field_name: pa.float64()})
 
 
 def test_individual_builder_rejects_another_features_input_type() -> None:
