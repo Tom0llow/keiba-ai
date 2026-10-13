@@ -1,4 +1,4 @@
-"""Build validated ranking features and audit their temporal availability."""
+"""Project computed feature values into validated model inputs and datasets."""
 
 from __future__ import annotations
 
@@ -29,9 +29,6 @@ class FeatureInput:
     features: Mapping[str, FeatureValue]
     available_at: Mapping[str, TimestampInput | None]
     finish_position: int | None = None
-
-
-FeatureRecord = FeatureInput
 
 
 @dataclass(frozen=True)
@@ -448,7 +445,6 @@ __all__ = [
     "FeatureGenerationError",
     "FeatureGenerationResult",
     "FeatureInput",
-    "FeatureRecord",
     "TimestampInput",
     "audit_feature_availability",
     "build_feature_rows",

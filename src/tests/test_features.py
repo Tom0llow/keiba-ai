@@ -7,7 +7,7 @@ from math import isnan
 
 import pytest
 
-from features.builder import (
+from models.dataset_builder import (
     FeatureGenerationError,
     FeatureInput,
     audit_feature_availability,

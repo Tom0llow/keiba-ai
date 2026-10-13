@@ -11,14 +11,16 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from features.feature_table import (
+from features.common.availability import normalize_timestamp
+from features.common.feature_table import (
     BASE_COLUMNS,
     FEATURE_COLUMNS,
+    FEATURE_NAMES,
     TIMESTAMP_TYPE,
     IntermediateFeatureTable,
-    feature_column_type,
-    normalize_timestamp,
+    feature_column_types,
     read_feature_table,
+    table_column_types,
     validate_feature_table,
 )
 
@@ -93,6 +95,7 @@ def join_feature_tables(tables: Sequence[IntermediateFeatureTable]) -> pa.Table:
                     raise ValueError(f"freeze_at mismatch for key {key!r}")
         row_indexes[feature_name] = indexes
 
+    value_types = {_feature_name(table): table_column_types(table) for table in validated_tables}
     output_names = ["race_id", "horse_id", "freeze_at"]
     output_arrays: list[pa.Array] = [
         base_table["race_id"],
@@ -117,7 +120,7 @@ def join_feature_tables(tables: Sequence[IntermediateFeatureTable]) -> pa.Table:
         output_arrays.append(pa.array(available_values, type=available_type))
         output_schema_fields.append(pa.field(available_at_name, available_type))
 
-        for column_name in FEATURE_COLUMNS[feature_name]:
+        for column_name in value_types[feature_name]:
             _ensure_output_column_is_free(output_names, column_name)
             values = [_feature_value(table, indexes, key, column_name) for key in base_keys]
             column_type = table.schema.field(column_name).type
@@ -125,16 +128,22 @@ def join_feature_tables(tables: Sequence[IntermediateFeatureTable]) -> pa.Table:
             output_arrays.append(pa.array(values, type=column_type))
             output_schema_fields.append(pa.field(column_name, column_type))
 
+    metadata = {
+        b"keiba_ai.table_kind": b"datamart",
+        _DATAMART_FEATURE_NAMES_METADATA: json.dumps(feature_names_in_order).encode("utf-8"),
+    }
+    if any(name not in FEATURE_COLUMNS for name in feature_names_in_order):
+        metadata[b"keiba_ai.feature_column_types"] = json.dumps(
+            {
+                name: [(column, str(value_type)) for column, value_type in types.items()]
+                for name, types in value_types.items()
+            }
+        ).encode("utf-8")
     return pa.Table.from_arrays(
         output_arrays,
         schema=pa.schema(
             output_schema_fields,
-            metadata={
-                b"keiba_ai.table_kind": b"datamart",
-                _DATAMART_FEATURE_NAMES_METADATA: json.dumps(feature_names_in_order).encode(
-                    "utf-8"
-                ),
-            },
+            metadata=metadata,
         ),
     )
 
@@ -182,10 +191,15 @@ def _validate_datamart(table: pa.Table) -> None:
     if metadata.get(b"keiba_ai.table_kind") != b"datamart":
         raise ValueError("datamart metadata is missing or invalid")
     feature_names = _datamart_feature_names(metadata)
+    value_types = _datamart_column_types(metadata, feature_names)
     expected_columns = ["race_id", "horse_id", "freeze_at"]
     for feature_name in feature_names:
-        expected_columns.append(f"{feature_name}__available_at")
-        expected_columns.extend(FEATURE_COLUMNS[feature_name])
+        available_column = f"{feature_name}__available_at"
+        _ensure_output_column_is_free(expected_columns, available_column)
+        expected_columns.append(available_column)
+        for column_name in value_types[feature_name]:
+            _ensure_output_column_is_free(expected_columns, column_name)
+            expected_columns.append(column_name)
     if table.column_names != expected_columns:
         raise ValueError(
             f"datamart columns must be {expected_columns!r}, got {table.column_names!r}"
@@ -198,8 +212,8 @@ def _validate_datamart(table: pa.Table) -> None:
     }
     for feature_name in feature_names:
         expected_types[f"{feature_name}__available_at"] = TIMESTAMP_TYPE
-        for column_name in FEATURE_COLUMNS[feature_name]:
-            expected_types[column_name] = feature_column_type(feature_name, column_name)
+        for column_name in value_types[feature_name]:
+            expected_types[column_name] = value_types[feature_name][column_name]
     for column_name, expected_type in expected_types.items():
         actual_type = table.schema.field(column_name).type
         if actual_type != expected_type:
@@ -234,16 +248,47 @@ def _validate_datamart(table: pa.Table) -> None:
                 and normalized_available_at > normalized_freeze_at
             ):
                 raise ValueError("available_at must not be after freeze_at")
-            for column_name in FEATURE_COLUMNS[feature_name]:
+            for column_name in value_types[feature_name]:
                 value = table[column_name][row_index].as_py()
                 if value is not None and normalized_available_at is None:
                     raise ValueError(f"non-missing {column_name} requires available_at")
-                if (
-                    feature_name == "odds_ratio"
-                    and value is not None
-                    and (not isinstance(value, (int, float)) or not isfinite(float(value)))
-                ):
-                    raise ValueError("odds_ratio must be finite or null")
+                if isinstance(value, float) and not isfinite(value):
+                    raise ValueError(f"{column_name} must be finite or null")
+
+
+def _datamart_column_types(
+    metadata: dict[bytes, bytes], feature_names: list[str]
+) -> dict[str, dict[str, pa.DataType]]:
+    raw = metadata.get(b"keiba_ai.feature_column_types")
+    if raw is None:
+        return {name: feature_column_types(name) for name in feature_names}
+    scalar_types = {
+        "int64": pa.int64(),
+        "double": pa.float64(),
+        "string": pa.string(),
+        "bool": pa.bool_(),
+    }
+    try:
+        decoded = json.loads(raw)
+        if not isinstance(decoded, dict) or set(decoded) != set(feature_names):
+            raise ValueError("datamart column type metadata must match feature names")
+        schemas: dict[str, dict[str, pa.DataType]] = {}
+        for name in feature_names:
+            entries = decoded[name]
+            if not isinstance(entries, list):
+                raise ValueError("datamart column type entries must be a list")
+            types: dict[str, pa.DataType] = {}
+            for entry in entries:
+                if not isinstance(entry, list) or len(entry) != 2:
+                    raise ValueError("invalid datamart column type entry")
+                column, type_name = entry
+                if not isinstance(column, str) or not isinstance(type_name, str) or column in types:
+                    raise ValueError("datamart value columns must be unique strings")
+                types[column] = scalar_types[type_name]
+            schemas[name] = feature_column_types(name, types)
+        return schemas
+    except (KeyError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("invalid datamart column type metadata") from exc
 
 
 def _datamart_feature_names(metadata: dict[bytes, bytes]) -> list[str]:
@@ -259,7 +304,7 @@ def _datamart_feature_names(metadata: dict[bytes, bytes]) -> list[str]:
         or not decoded
         or any(not isinstance(feature_name, str) for feature_name in decoded)
         or len(set(decoded)) != len(decoded)
-        or any(feature_name not in FEATURE_COLUMNS for feature_name in decoded)
+        or any(feature_name not in FEATURE_NAMES for feature_name in decoded)
     ):
         raise ValueError("datamart feature_names metadata is invalid")
     return decoded

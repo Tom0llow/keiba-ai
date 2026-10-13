@@ -122,6 +122,7 @@ src/
 │  │  └─ snapshot.py
 │  └─ loader/
 │     ├─ __init__.py
+│     ├─ read_json.py
 │     └─ read_parquet.py
 └─ tests/
    └─ ...
@@ -148,7 +149,10 @@ This boundary is recorded in ADR-008.
 `src/main.py` is the user-facing Typer entry point for historical-basic,
 historical-odds, latest, and
 prediction-time realtime retrieval, standalone preprocessing, and the model
-commands `model audit`, `model features`, and `model walk-forward`. XML
+commands `model audit`, `model features`, `model explanatory-variables`, and
+`model walk-forward`. `src/features/make_features.py` registers and executes
+the feature audit/generation commands; `main.py` retains retrieval,
+preprocessing, and walk-forward orchestration. XML
 transformation, feature validation, and model evaluation remain below the CLI
 boundary.
 
@@ -304,6 +308,13 @@ The loader can:
 This means model code has one storage contract—Parquet—regardless of whether the
 source data arrived through historical, latest, or realtime retrieval.
 
+`src/data/loader/read_json.py` separately reads explicit UTF-8 JSON object
+inputs for CLI workflows. It preserves decoded values and does not depend on
+Typer, feature contracts, or the Parquet `DataLoader` facade. Feature input
+conversion, structured CLI errors, and JSON output remain in
+`src/features/make_features.py`. ADR-019 records this placement; no `src/run`
+package is introduced.
+
 ## Configuration and persisted state
 
 `config/data.toml` owns the raw SQLite path, processed directory, and JVLink
@@ -337,14 +348,47 @@ feature rows from its caller. ADR-010 records this model boundary and artifact
 contract. Missing feature values, including unavailable odds history, remain
 missing and are passed through without final-odds fallback or imputation. Equal
 scores are ordered by horse ID, independently of input row order.
-`src/features/builder.py` validates explicit feature values and their
-timezone-aware availability against `freeze_at`. The feature-specific modules
-under `src/features/` build independently validated intermediate Parquet tables
-for previous-race results, odds ratios, and pedigree values. `src/make_datamart/`
-reads those saved tables and performs an ordered, validated left join while
-retaining each feature's availability timestamp. `src/models/walk_forward.py`
+`src/models/dataset_builder.py` validates explicit numeric model inputs and their
+timezone-aware availability against `freeze_at`, projects the approved schema,
+and builds `RankingDataset`. It does not own intermediate table schemas.
+
+Every feature-specific module under `src/features/` owns its input type,
+builder, build function, and normalization. The previous-race result, odds
+ratio, pedigree, and F01-F21 modules share `FeatureBuilder` and the sole middle-row
+type `FeatureTableRow`. F01-F21 builders consume explicitly computed values and
+source evidence; no unapproved business formulas are introduced. The thin
+`explanatory_variables.py` facade combines their individual row-generation APIs.
+F01-F21 identifiers are `feature_id`, not candidate identifiers, and remain
+independent of numeric model adoption.
+
+Shared feature responsibilities are located under `src/features/common/`:
+
+| Module | Responsibility |
+| --- | --- |
+| `base.py` | Common row-generation and table-building procedure, with a batch hook for feature-owned calculations. |
+| `rows.py` | The sole intermediate row contract, `FeatureTableRow`. |
+| `types.py` | Explicit source-input types and structured audit/build results, not another middle-row type. |
+| `availability.py` | UTC timestamp parsing and `freeze_at` / `available_at` / `source_event_at` limits. |
+| `leakage.py` | Target-result, future-data, result-column, and historical-source checks. |
+| `validation.py` | Scalar values, missingness, confirmation status, and group-level audit composition. |
+| `audit.py` | Row keys, race shape, freeze-time consistency, and batch audits. |
+| `normalization.py` | Audited explicit inputs to common middle rows without imputation. |
+| `registry.py` | F01-F21 specification, input-type, and individual-builder registration. |
+| `feature_table.py` | Arrow schemas, table validation, and explicit Parquet persistence. |
+
+The three original value-column schemas and saved metadata are unchanged.
+F01-F21 tables require caller-declared scalar column types; ordered type metadata
+is validated when saved and reloaded. `src/make_datamart/` reads the same common
+tables and performs an ordered, validated left join while retaining each
+feature's availability timestamp. It does not generate feature values. Mixed
+tables carry explicit type metadata; existing three-feature datamarts retain
+their original metadata and remain readable. ADR-019 records these boundaries
+and the candidate API/CLI migration, extending the table contract of ADR-012.
+
+`src/models/walk_forward.py`
 performs expanding race-level train/validation/test splits. The model CLI uses
-JSON input at this boundary and does not start data retrieval implicitly. These
+JSON input at this boundary through `features/make_features.py` and the
+independent JSON reader, and does not start data retrieval implicitly. These
 modules do not yet interpret raw JRA-VAN business codes or build historical
 aggregates; those transformations remain a separate feature-source
 implementation.

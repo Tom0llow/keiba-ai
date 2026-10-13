@@ -9,7 +9,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from features.feature_table import write_feature_table
+from features.common.feature_table import write_feature_table
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
 from features.previous_race_result import PreviousRaceResultInput, build_previous_race_result
 from make_datamart.builder import (

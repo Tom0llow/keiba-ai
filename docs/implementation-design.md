@@ -31,12 +31,12 @@ MVPの確定仕様は次の範囲とする。
 | 原本からの加工 | `DataPreprocesser`がread-only SQLiteから文字列とNULLを維持してParquetを公開する。`src/features/`が明示入力から特徴量別中間Parquetを生成し、`src/make_datamart/`がそれらを結合する。 | JRA-VAN業務コード解釈、受信履歴からの過去集計、原本Parquetから中間入力を作る変換は未実装。 |
 | 公開 | 完全snapshotとrace-local O1/O2 versionを完成後にCURRENTで公開する。失敗時は従前の参照を維持する。 | snapshotの完成は、過去の出馬表・訂正履歴を保持したことを意味しない。 |
 | 読み込み | `DataLoader`は完全表・Arrow batch・RaceKey指定のO1/O2をParquetから読む。 | 各読取でCURRENTを再解決するため、複数表を同一版へ固定する公開APIがない。 |
-| CLI | `src/main.py`の取得フラグ、`preprocess rebuild`、`model audit/features/walk-forward`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルとdatamartはPython APIから明示的に生成・保存する。 |
+| CLI | `src/main.py`の取得フラグ、`preprocess rebuild`、`model audit/features/explanatory-variables/walk-forward`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルとdatamartはPython APIから明示的に生成・保存する。 |
 | モデル | ADR-009〜011によりLambdaRank境界、FeatureSchema、時点監査、race-level walk-forward、native成果物形式を決定し、`src/models/`と`src/features/`へ実装済み。 | JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物の製品統合は未実装。 |
 
 既存の`src/tests/test_data_pipeline.py`は、原本削除後のParquet読取、変換失敗時のCURRENT維持、対象レースだけのO1/O2公開を検証する。これを学習・推論や時点再現の検証済み証拠とは扱わない。
 
-モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、race-level walk-forward、native成果物の保存/再読込、`src/features/builder.py`の明示入力に対する特徴量生成・時点監査、および特徴量別中間テーブルとdatamartの保存・結合である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。現時点のallow-listは事前能力値と履歴オッズであり、血統文字列などの中間列は数値FeatureSchemaへ自動投入しない。曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物、購入判断は未実装であり、上流の決定と別実装単位として残す。
+モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、race-level walk-forward、native成果物の保存/再読込、`src/models/dataset_builder.py`の明示数値入力に対する投影・時点監査、および`src/features/`の説明変数別中間テーブルとdatamartの保存・結合である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。現時点のallow-listは事前能力値と履歴オッズであり、血統文字列などの中間列は数値FeatureSchemaへ自動投入しない。曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物、購入判断は未実装であり、上流の決定と別実装単位として残す。
 
 ### 2.2. 要件・仕様・ADRへの追跡
 
@@ -128,20 +128,25 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 | 配置候補 | 責務 | 依存・境界 |
 | --- | --- | --- |
 | `src/data/loader/read_parquet.py`とfacade | 完全snapshot・race-local versionの固定読取契約を追加する候補。 | Parquetのみ。既存のCURRENT読取との互換性を設計する。 |
-| `src/features/builder.py` | 承認済み規則に従う明示入力の投影、欠損保持、時点監査。 | `FeatureInput`のfreeze/available時刻を検証し、取得処理を呼ばない。結果ラベルを特徴量へ流さない。 |
+| `src/models/dataset_builder.py` | 数値モデルへの明示入力の投影、欠損保持、時点監査、RankingDataset構築。 | `FeatureInput`のfreeze/available時刻を検証する。中間テーブルの生成・保存や取得処理を担当しない。 |
 | `src/features/previous_race_result.py` | 前レース結果の中間テーブル生成。 | 正規化済み入力のみを受け、Parquet保存は共通のテーブル契約へ委譲する。 |
 | `src/features/odds_ratio.py` | オッズ比率の中間テーブル生成。 | オッズ履歴不足はNULLで保持し、補完や最終オッズへの暗黙 fallback を行わない。 |
 | `src/features/pedigree.py` | 血統識別子の中間テーブル生成。 | 文字列を保持し、未承認のカテゴリ符号化を行わない。 |
-| `src/features/feature_table.py` | 特徴量中間テーブルの共通スキーマ、時点監査、Parquet入出力。 | feature名・列・キー重複・`available_at <= freeze_at`を検証する。 |
+| `src/features/recent_performance.py`〜`src/features/opponent_pagerank.py` | F01〜F21それぞれの専用Input、Builder、build、normalizeを所有する。 | 共通基底`FeatureBuilder`を利用し、明示値と証跡から`FeatureTableRow`と中間テーブルを生成する。業務式、履歴窓、閾値、JRA-VANコード解釈は承認後に個別実装する。 |
+| `src/features/explanatory_variables.py` | 個別説明変数の生成と監査をまとめる薄いAPI。 | `FeatureBatchInput`を受け、説明変数ID別の共通中間行と監査を返す。モデルallow-listへ自動投入しない。 |
+| `src/features/common/` | `base.py`の基底クラス、`rows.py`の中間行、`types.py`の入力と監査型、`availability.py`の時点、`leakage.py`の漏洩、`validation.py`の値・欠損、`audit.py`のレース整合、`normalization.py`の共通正規化、`registry.py`の登録。 | 共通中間行は`FeatureTableRow`だけとし、`FeatureRecord`を導入しない。説明変数の監査は物理読込から独立してfeatures配下で管理する。 |
+| `src/data/loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
+| `src/features/make_features.py` | 特徴量CLI登録、入力型への変換、監査・生成の呼出し、結果JSON出力。 | JSON readerを利用し、CLI例外と終了コードを管理する。個別計算・監査モジュールはこの実行境界をimportしない。 |
+| `src/features/common/feature_table.py` | 特徴量中間テーブルの共通スキーマ、検証、Parquet入出力。 | 既存3の列契約を維持し、F01〜F21は呼出し元が列名とArrow型を明示する。feature名・列・型metadata・キー重複・`available_at <= freeze_at`を検証する。 |
 | `src/make_datamart/builder.py` | 保存済み特徴量中間テーブルの読み込み、順序を保つleft join、datamart保存。 | 余分なキー、`freeze_at`不一致、列衝突を拒否し、特徴量ごとのavailable時刻を残す。 |
 | `src/models/ranking_dataset.py` | 行キー、ラベル、連続レース行、group、型・順序の検証。 | 既に生成された特徴量と別経路の結果を結合する。 |
 | `src/models/train_model.py` | LightGBMの構築・学習と学習記録。 | 検証済みデータ、設定、明示した乱数・実行条件。SQLite・CLIに依存しない。 |
 | `src/models/evaluate_model.py` / `walk_forward.py` | レース別指標とrace-level時間順分割。 | train/validation/testを同一レースから分離せず、train以外を学習へ渡さない。 |
 | `src/models/predict_model.py` | 保存した特徴量契約とモデルによる1レースのscore/rank生成。 | 学習と共通の特徴量計算。確率化や購入方策を持たない。 |
 | `src/models/artifacts.py` | モデル・manifest・予測・評価の検証済み公開と再読取。 | ファイルI/Oを集約し、実行可能オブジェクトの任意復元を避ける。 |
-| `src/main.py` | `model audit/features/walk-forward`のJSON入力検証と呼出し。 | 外部取得を暗黙に開始せず、既存取得CLIを維持する。 |
+| `src/main.py` | 全体CLI入口、取得・加工・Walk-forwardの実行。特徴量コマンドを`make_features.py`へ委譲する。 | 外部取得を暗黙に開始せず、既存取得CLIを維持する。 |
 
-依存は`CLI → モデルの処理編成 → 特徴量/データ契約 → DataLoader`、保存は明示した成果物境界へ向ける。特徴量やloaderがモデル・CLIをimportしない。時刻・乱数・設定・パスを明示引数にし、import時の処理や隠れたグローバルクライアントを作らない。
+特徴量コマンドの依存は`main.py → features/make_features.py → 特徴量の監査・生成API / data/loader/read_json.py`とし、保存は明示した成果物境界へ向ける。下位の個別計算・監査モジュールとloaderはCLI入口をimportしない。時刻・乱数・設定・パスを明示引数にし、import時の取得処理や隠れたグローバルクライアントを作らない。
 
 ## 6. 入出力データ契約の候補
 
@@ -577,17 +582,22 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 ### 11.2. コマンド案と既存との区別
 
-実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
+実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/explanatory-variables/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
+
+ADR-019に従い、特徴量コマンドの登録と実行処理は`src/features/make_features.py`、汎用JSON読込は`src/data/loader/read_json.py`が担当する。`src/run`、`cli.py`、`json_io.py`は導入しない。旧`candidate-features`は`explanatory-variables`へ、出力ID項目`candidate_group_ids`は`feature_ids`へ、監査項目`group_id`は`feature_id`へ移行する。その他の引数・終了コードと数値モデルCLIの契約は維持する。
 
 | コマンド案 | 入力 | 成果物 |
 | --- | --- | --- |
 | `model audit` | schema ID・feature names・freeze/available時刻を含むJSON。 | 時点・欠損・利用可能性の監査報告。 |
 | `model features` | 承認済みschemaと時刻付きFeatureInput JSON。 | 欠損を保持したFeatureRowsと監査結果。 |
+| `model explanatory-variables` | F01〜F21の各説明変数値、`available_at` / `source_event_at`、`source_scope` / `status`、漏洩確認フラグを含むJSON。 | 共通中間行の説明変数値と時点・欠損・整合性の監査結果。現行の`FeatureSchema`へは投入しない。 |
 | `model walk-forward` | 着順付きFeatureInput JSONとrace-level分割設定。 | 拡大型Walk-forwardのfold境界と指標。 |
 | `model train` | 固定した選定設定、承認済み学習範囲。 | モデル一式と再現manifest。 |
 | `model predict` | モデルID、RaceKey、入力参照、freeze_at。 | score/rankと実行・監査情報。 |
 
 取得フラグとの併用は現行サブコマンドの規則に合わせて拒否する。コマンドは入力・必須決定事項を先に検証し、時点監査に失敗した場合は外部取得や学習を開始しない。終了コードは監査・入力契約違反時に1、JSON出力はUTF-8の標準JSONとし、欠損NaNは`null`へ変換する。
+
+`model explanatory-variables`は、Accepted ADR-019に従い、上流で作成済みの明示値だけを受け取る監査・出力境界である。F01〜F21の業務コード解釈、履歴窓、閾値、集計式はこのコマンドで決定せず、対象レース結果や未来データを含む入力を拒否する。各説明変数は既存と同じ基底クラスで生成した`FeatureTableRow`として保持するが、承認前に数値`FeatureSchema`へ自動投入しない。中間Parquetを作る場合は個別の`build_*`に列名とArrow型を明示し、型を推測しない。
 
 ## 12. 成果物と再現性
 
