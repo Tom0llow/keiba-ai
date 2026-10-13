@@ -26,6 +26,7 @@ _RESULT_FIELD_NAMES = frozenset(
         "ninki",
         "oddsfinal",
         "outcome",
+        "passingposition",
         "payout",
         "payoutamount",
         "placing",
@@ -119,7 +120,7 @@ def is_result_field(field_name: str) -> bool:
     target_field = normalized[len("target") :]
     if target_field.startswith("race"):
         target_field = target_field[len("race") :]
-    return target_field in _RESULT_FIELD_NAMES or target_field.startswith(
+    return target_field.startswith(tuple(_RESULT_FIELD_NAMES)) or target_field.startswith(
         _TARGET_RESULT_FIELD_MARKERS
     )
 

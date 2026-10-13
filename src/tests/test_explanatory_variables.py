@@ -43,6 +43,45 @@ from models.ranking_dataset import FeatureSchema
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 AVAILABLE_AT = datetime(2025, 12, 31, 12, tzinfo=UTC)
+RESULT_FIELD_ALIASES = (
+    "arrival",
+    "arrival_rank",
+    "confirmed_finish",
+    "confirmed_result",
+    "confirmed_time",
+    "dead_heat",
+    "earnings",
+    "final_odds",
+    "finish_position",
+    "finish_result",
+    "HaronTimeL3",
+    "last_3f",
+    "last3f",
+    "last_odds",
+    "margin",
+    "ninki",
+    "odds_final",
+    "outcome",
+    "passing_position",
+    "payout",
+    "payout_amount",
+    "placing",
+    "popularity",
+    "position",
+    "prize",
+    "prize_money",
+    "refund",
+    "result_rank",
+    "race_result",
+    "result",
+    "target_finish",
+    "target_result",
+    "target",
+    "time",
+    "time_diff",
+    "win_flag",
+    "winner",
+)
 
 
 def _record(
@@ -258,6 +297,7 @@ def test_freeze_at_is_required_by_python_api() -> None:
                 "ninki",
                 "popularity",
                 "odds_final",
+                "passing_position",
             )
         ],
         "LAST-3F",
@@ -274,11 +314,29 @@ def test_freeze_at_is_required_by_python_api() -> None:
         "target_dead_heat_count",
         "target_race_earnings_mean",
         "target_margin_delta",
+        *[
+            f"{prefix}{alias}_{suffix}"
+            for prefix in ("target_", "target_race_", "TARGET-", "Target.Race.")
+            for alias in RESULT_FIELD_ALIASES
+            for suffix in ("mean", "delta", "zscore")
+        ],
+        "target_race_prize_money_mean",
+        "target_race_popularity_mean",
+        "target_race_last_odds_mean",
+        "target_race_passing_position_mean",
     ],
 )
-def test_result_derived_feature_field_names_are_rejected(field_name: str) -> None:
+@pytest.mark.parametrize("value", [100.0, None])
+def test_result_derived_feature_field_names_are_rejected(
+    field_name: str, value: float | None
+) -> None:
     record = _record()
-    result_group = replace(record.groups["F01"], values={field_name: 1.0})
+    result_group = replace(
+        record.groups["F01"],
+        values={field_name: value},
+        status="missing" if value is None else "confirmed",
+        available_at=None if value is None else AVAILABLE_AT,
+    )
     record = replace(record, groups={**record.groups, "F01": result_group})
 
     with pytest.raises(FeatureBuildError) as error:
@@ -327,6 +385,29 @@ def test_result_derived_feature_field_names_are_rejected(field_name: str) -> Non
         "history_earnings_mean",
         "past_target_race_last_3f_mean",
         "historical_target_race_HaronTimeL3_delta",
+        *[
+            f"{alias}_{suffix}"
+            for alias in (
+                "confirmed_finish",
+                "last_odds",
+                "ninki",
+                "popularity",
+                "odds_final",
+                "passing_position",
+            )
+            for suffix in ("mean", "delta", "zscore")
+        ],
+        *[
+            f"{prefix}_{target_prefix}{alias}_mean"
+            for prefix in ("past", "previous", "historical", "history")
+            for target_prefix in ("", "target_", "target_race_")
+            for alias in RESULT_FIELD_ALIASES
+        ],
+        *[
+            f"{prefix}_passing_position_{suffix}"
+            for prefix in ("past", "previous", "historical", "history")
+            for suffix in ("delta", "zscore")
+        ],
     ],
 )
 def test_market_and_historical_fields_are_not_treated_as_result_fields(
@@ -340,6 +421,25 @@ def test_market_and_historical_fields_are_not_treated_as_result_fields(
     result = build_explanatory_variables([record])
 
     assert result.audit.valid
+
+
+@pytest.mark.parametrize("prefix", ["target_", "target_race_"])
+@pytest.mark.parametrize("alias", ["distance", "weight"])
+def test_pre_race_target_metadata_is_not_treated_as_result_fields(prefix: str, alias: str) -> None:
+    record = _record()
+    field_name = f"{prefix}{alias}"
+    group = replace(
+        record.groups["F10"],
+        values={field_name: 100.0},
+        source_scope="pre_race",
+        source_race_ids=(),
+    )
+    record = replace(record, groups={**record.groups, "F10": group})
+
+    result = build_explanatory_variables([record])
+
+    assert result.audit.valid
+    assert result.rows["F10"][0].values == {field_name: 100.0}
 
 
 @pytest.mark.parametrize(

@@ -26,6 +26,45 @@ from make_datamart.builder import join_feature_tables, read_datamart, write_data
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)
+RESULT_FIELD_ALIASES = (
+    "arrival",
+    "arrival_rank",
+    "confirmed_finish",
+    "confirmed_result",
+    "confirmed_time",
+    "dead_heat",
+    "earnings",
+    "final_odds",
+    "finish_position",
+    "finish_result",
+    "HaronTimeL3",
+    "last_3f",
+    "last3f",
+    "last_odds",
+    "margin",
+    "ninki",
+    "odds_final",
+    "outcome",
+    "passing_position",
+    "payout",
+    "payout_amount",
+    "placing",
+    "popularity",
+    "position",
+    "prize",
+    "prize_money",
+    "refund",
+    "result_rank",
+    "race_result",
+    "result",
+    "target_finish",
+    "target_result",
+    "target",
+    "time",
+    "time_diff",
+    "win_flag",
+    "winner",
+)
 RESULT_ALIAS_FIELDS = (
     *(
         f"{prefix}{alias}"
@@ -38,6 +77,7 @@ RESULT_ALIAS_FIELDS = (
             "dead_heat",
             "earnings",
             "margin",
+            "passing_position",
         )
     ),
     "TARGET-LAST.3F",
@@ -48,6 +88,16 @@ RESULT_ALIAS_FIELDS = (
     "target_dead_heat_count",
     "target_race_earnings_mean",
     "target_margin_delta",
+    *(
+        f"{prefix}{alias}_{suffix}"
+        for prefix in ("target_", "target_race_", "TARGET-", "Target.Race.")
+        for alias in RESULT_FIELD_ALIASES
+        for suffix in ("mean", "delta", "zscore")
+    ),
+    "target_race_prize_money_mean",
+    "target_race_popularity_mean",
+    "target_race_last_odds_mean",
+    "target_race_passing_position_mean",
 )
 
 
@@ -102,10 +152,16 @@ def test_individual_builders_reject_future_source_evidence(feature_id: str) -> N
 
 @pytest.mark.parametrize("field_name", RESULT_ALIAS_FIELDS)
 @pytest.mark.parametrize("build_table", [False, True])
+@pytest.mark.parametrize("value", [100.0, None])
 def test_past_racing_ability_rejects_result_aliases_with_valid_source_evidence(
-    field_name: str, build_table: bool
+    field_name: str, build_table: bool, value: float | None
 ) -> None:
-    record = replace(_input("F02"), values={field_name: 35.0})
+    record = replace(
+        _input("F02"),
+        values={field_name: value},
+        status="missing" if value is None else "confirmed",
+        available_at=None if value is None else AVAILABLE_AT,
+    )
     builder = PastRacingAbilityBuilder()
     generate = (
         partial(builder.build, column_types={field_name: pa.float64()})
@@ -136,6 +192,29 @@ def test_past_racing_ability_rejects_result_aliases_with_valid_source_evidence(
         ],
         "past_target_race_last_3f_mean",
         "historical_target_race_HaronTimeL3_delta",
+        *[
+            f"{alias}_{suffix}"
+            for alias in (
+                "confirmed_finish",
+                "last_odds",
+                "ninki",
+                "popularity",
+                "odds_final",
+                "passing_position",
+            )
+            for suffix in ("mean", "delta", "zscore")
+        ],
+        *[
+            f"{prefix}_{target_prefix}{alias}_mean"
+            for prefix in ("past", "previous", "historical", "history")
+            for target_prefix in ("", "target_", "target_race_")
+            for alias in RESULT_FIELD_ALIASES
+        ],
+        *[
+            f"{prefix}_passing_position_{suffix}"
+            for prefix in ("past", "previous", "historical", "history")
+            for suffix in ("delta", "zscore")
+        ],
     ],
 )
 def test_non_target_result_alias_derivatives_are_preserved_by_builders_and_tables(
@@ -151,6 +230,27 @@ def test_non_target_result_alias_derivatives_are_preserved_by_builders_and_table
 
     assert rows[0].values == {field_name: 35.0}
     assert table[field_name].to_pylist() == [35.0]
+    assert direct_table.equals(table, check_metadata=True)
+
+
+@pytest.mark.parametrize("prefix", ["target_", "target_race_"])
+@pytest.mark.parametrize("alias", ["distance", "weight"])
+def test_pre_race_target_metadata_is_preserved_by_builders_and_tables(
+    prefix: str, alias: str
+) -> None:
+    field_name = f"{prefix}{alias}"
+    record = replace(
+        _input("F10"), values={field_name: 100.0}, source_scope="pre_race", source_race_ids=()
+    )
+    builder = FEATURE_BUILDERS["F10"]
+    rows = builder.build_rows([record])
+    table = builder.build([record], column_types={field_name: pa.float64()})
+    direct_table = build_feature_table(
+        builder.feature_name, rows, column_types={field_name: pa.float64()}
+    )
+
+    assert rows[0].values == {field_name: 100.0}
+    assert table[field_name].to_pylist() == [100.0]
     assert direct_table.equals(table, check_metadata=True)
 
 
@@ -225,10 +325,11 @@ def test_result_columns_are_rejected_even_when_every_value_is_null(field_name: s
 
 
 @pytest.mark.parametrize("field_name", RESULT_ALIAS_FIELDS)
+@pytest.mark.parametrize("value", [100.0, None])
 def test_intermediate_table_rejects_result_aliases_with_valid_available_at(
-    field_name: str,
+    field_name: str, value: float | None
 ) -> None:
-    row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, {field_name: 35.0})
+    row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, {field_name: value})
     with pytest.raises(ValueError, match="result-derived"):
         build_feature_table("past_racing_ability", [row], column_types={field_name: pa.float64()})
 
