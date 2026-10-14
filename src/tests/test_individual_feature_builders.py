@@ -11,18 +11,26 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from features.common.feature_table import (
-    build_feature_table,
-    read_feature_table,
-    validate_feature_table,
-    write_feature_table,
-)
-from features.common.registry import FEATURE_BUILDERS, FEATURE_GROUP_IDS, FEATURE_INPUT_TYPES
-from features.common.rows import FeatureTableRow
-from features.common.types import FeatureBuildError, FeatureValuesInput
+from features.catalog.loader import load_feature_definitions
+from features.catalog.registry import create_feature_registry
+from features.contracts.rows import FeatureTableRow
+from features.contracts.types import FeatureBuildError, FeatureValuesInput
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
 from features.past_racing_ability import PastRacingAbilityBuilder
+from features.tables.build import build_feature_table
+from features.tables.parquet import read_feature_table, write_feature_table
+from features.validation.table import validate_feature_table
 from make_datamart.builder import join_feature_tables, read_datamart, write_datamart
+
+REGISTRY = create_feature_registry(
+    load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")
+)
+FEATURE_GROUP_IDS = REGISTRY.feature_ids
+FEATURE_GROUP_SPECS = REGISTRY.definitions
+FEATURE_BUILDERS = {
+    entry.definition.feature_id: entry.builder_type(entry.definition) for entry in REGISTRY.features
+}
+FEATURE_INPUT_TYPES = {entry.definition.feature_id: entry.input_type for entry in REGISTRY.features}
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)
@@ -135,8 +143,10 @@ def test_each_builder_returns_common_rows_and_round_trips_a_table(
     assert table[field_name].to_pylist() == [2.0]
     assert table["freeze_at"].to_pylist() == [FREEZE_AT]
     path = tmp_path / "feature.parquet"
-    write_feature_table(table, path)
-    assert read_feature_table(path).equals(table, check_metadata=True)
+    write_feature_table(table, path, registered_names=REGISTRY.names)
+    assert read_feature_table(path, registered_names=REGISTRY.names).equals(
+        table, check_metadata=True
+    )
 
 
 @pytest.mark.parametrize("feature_id", FEATURE_GROUP_IDS)
@@ -162,7 +172,7 @@ def test_past_racing_ability_rejects_result_aliases_with_valid_source_evidence(
         status="missing" if value is None else "confirmed",
         available_at=None if value is None else AVAILABLE_AT,
     )
-    builder = PastRacingAbilityBuilder()
+    builder = PastRacingAbilityBuilder(REGISTRY.by_name("past_racing_ability").definition)
     generate = (
         partial(builder.build, column_types={field_name: pa.float64()})
         if build_table
@@ -221,11 +231,14 @@ def test_non_target_result_alias_derivatives_are_preserved_by_builders_and_table
     field_name: str,
 ) -> None:
     record = replace(_input("F02"), values={field_name: 35.0})
-    builder = PastRacingAbilityBuilder()
+    builder = PastRacingAbilityBuilder(REGISTRY.by_name("past_racing_ability").definition)
     rows = builder.build_rows([record])
     table = builder.build([record], column_types={field_name: pa.float64()})
     direct_table = build_feature_table(
-        "past_racing_ability", rows, column_types={field_name: pa.float64()}
+        "past_racing_ability",
+        rows,
+        column_types={field_name: pa.float64()},
+        registered_names=REGISTRY.names,
     )
 
     assert rows[0].values == {field_name: 35.0}
@@ -246,7 +259,10 @@ def test_pre_race_target_metadata_is_preserved_by_builders_and_tables(
     rows = builder.build_rows([record])
     table = builder.build([record], column_types={field_name: pa.float64()})
     direct_table = build_feature_table(
-        builder.feature_name, rows, column_types={field_name: pa.float64()}
+        builder.feature_name,
+        rows,
+        column_types={field_name: pa.float64()},
+        registered_names=REGISTRY.names,
     )
 
     assert rows[0].values == {field_name: 100.0}
@@ -284,13 +300,13 @@ def test_old_and_new_feature_tables_join_and_round_trip_together(tmp_path: Path)
     graph = FEATURE_BUILDERS["F21"].build(
         [record], column_types={"opponent_graph_known": pa.bool_()}
     )
-    table = join_feature_tables([odds, graph])
+    table = join_feature_tables([odds, graph], registered_names=REGISTRY.names)
     assert table["horse_id"].to_pylist() == ["horse-1", "horse-2"]
     assert table["opponent_graph_known"].to_pylist() == [True, None]
     assert table["odds_ratio"].to_pylist() == [0.5, 1.0]
     path = tmp_path / "datamart.parquet"
-    write_datamart(table, path)
-    assert read_datamart(path).equals(table, check_metadata=True)
+    write_datamart(table, path, registered_names=REGISTRY.names)
+    assert read_datamart(path, registered_names=REGISTRY.names).equals(table, check_metadata=True)
 
 
 def test_feature_type_manifest_tampering_is_rejected() -> None:
@@ -300,7 +316,9 @@ def test_feature_type_manifest_tampering_is_rejected() -> None:
     metadata = dict(table.schema.metadata or {})
     metadata[b"keiba_ai.feature_column_types"] = json.dumps([["pre_race_value", "string"]]).encode()
     with pytest.raises(ValueError, match="must have type"):
-        validate_feature_table(table.replace_schema_metadata(metadata))
+        validate_feature_table(
+            table.replace_schema_metadata(metadata), registered_names=REGISTRY.names
+        )
 
 
 @pytest.mark.parametrize(
@@ -313,7 +331,10 @@ def test_declared_types_do_not_silently_coerce_values(
     row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, {"pre_race_value": value})
     with pytest.raises(ValueError, match="does not match declared type"):
         build_feature_table(
-            "recent_performance", [row], column_types={"pre_race_value": value_type}
+            "recent_performance",
+            [row],
+            column_types={"pre_race_value": value_type},
+            registered_names=REGISTRY.names,
         )
 
 
@@ -321,7 +342,12 @@ def test_declared_types_do_not_silently_coerce_values(
 def test_result_columns_are_rejected_even_when_every_value_is_null(field_name: str) -> None:
     row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, None, {field_name: None})
     with pytest.raises(ValueError, match="result-derived"):
-        build_feature_table("recent_performance", [row], column_types={field_name: pa.int64()})
+        build_feature_table(
+            "recent_performance",
+            [row],
+            column_types={field_name: pa.int64()},
+            registered_names=REGISTRY.names,
+        )
 
 
 @pytest.mark.parametrize("field_name", RESULT_ALIAS_FIELDS)
@@ -331,7 +357,12 @@ def test_intermediate_table_rejects_result_aliases_with_valid_available_at(
 ) -> None:
     row = FeatureTableRow("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, {field_name: value})
     with pytest.raises(ValueError, match="result-derived"):
-        build_feature_table("past_racing_ability", [row], column_types={field_name: pa.float64()})
+        build_feature_table(
+            "past_racing_ability",
+            [row],
+            column_types={field_name: pa.float64()},
+            registered_names=REGISTRY.names,
+        )
 
 
 def test_individual_builder_rejects_another_features_input_type() -> None:
@@ -354,7 +385,7 @@ def test_existing_datamart_metadata_is_preserved() -> None:
     odds = build_odds_ratio(
         [OddsRatioInput("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, 2.0, 4.0)]
     )
-    assert join_feature_tables([odds]).schema.metadata == {
+    assert join_feature_tables([odds], registered_names=REGISTRY.names).schema.metadata == {
         b"keiba_ai.table_kind": b"datamart",
         b"keiba_ai.feature_names": b'["odds_ratio"]',
     }
@@ -364,9 +395,9 @@ def test_new_datamart_validation_rejects_non_finite_values(tmp_path: Path) -> No
     feature = FEATURE_BUILDERS["F01"].build(
         [_input("F01")], column_types={"pre_race_value": pa.float64()}
     )
-    table = join_feature_tables([feature])
+    table = join_feature_tables([feature], registered_names=REGISTRY.names)
     index = table.column_names.index("pre_race_value")
     invalid = table.set_column(index, table.schema.field(index), pa.array([float("inf")]))
     with pytest.raises(ValueError, match="pre_race_value must be finite"):
-        write_datamart(invalid, tmp_path / "datamart.parquet")
+        write_datamart(invalid, tmp_path / "datamart.parquet", registered_names=REGISTRY.names)
     assert not (tmp_path / "datamart.parquet").exists()

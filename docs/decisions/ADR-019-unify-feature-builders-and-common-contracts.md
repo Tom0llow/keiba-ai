@@ -1,10 +1,10 @@
 # ADR-019: 説明変数生成と共通契約を統一する
 
-- Status: Accepted
+- Status: Superseded by ADR-020
 - Date: 2026-10-12
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-017, ADR-018
-- Superseded by: N/A
+- Superseded by: ADR-020（配置・登録・CLI境界。生成・監査・保存契約は継承）
 
 ## Context
 

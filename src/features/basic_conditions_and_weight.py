@@ -7,12 +7,11 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from features.common.base import FeatureBuilder
-from features.common.feature_table import FeatureTableRow, IntermediateFeatureTable
-from features.common.normalization import normalize_feature_inputs
-from features.common.types import FeatureGroupSpec, FeatureValuesInput
-
-SPEC = FeatureGroupSpec("F10", "basic_conditions_and_weight")
+from features.contracts.rows import FeatureTableRow
+from features.contracts.types import FeatureDefinition, FeatureValuesInput
+from features.generation.base import FeatureBuilder
+from features.generation.normalization import normalize_feature_inputs
+from features.tables.schema import IntermediateFeatureTable
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -23,20 +22,29 @@ class BasicConditionsAndWeightInput(FeatureValuesInput):
 class BasicConditionsAndWeightBuilder(FeatureBuilder[FeatureValuesInput]):
     """Build this feature using its own normalization and shared table contract."""
 
-    feature_name = SPEC.label
+    feature_name = "basic_conditions_and_weight"
+    definition: FeatureDefinition
+
+    def __init__(self, definition: FeatureDefinition) -> None:
+        super().__init__(definition)
+        self.definition = definition
 
     def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_basic_conditions_and_weight(records)
+        return _normalize_basic_conditions_and_weight(records, self.definition)
 
 
 def build_basic_conditions_and_weight(
-    records: Sequence[BasicConditionsAndWeightInput], *, column_types: Mapping[str, pa.DataType]
+    records: Sequence[BasicConditionsAndWeightInput],
+    *,
+    definition: FeatureDefinition,
+    column_types: Mapping[str, pa.DataType],
 ) -> IntermediateFeatureTable:
     """Build a table using caller-declared column types without inferring rules."""
-    return BasicConditionsAndWeightBuilder().build(records, column_types=column_types)
+    return BasicConditionsAndWeightBuilder(definition).build(records, column_types=column_types)
 
 
 def _normalize_basic_conditions_and_weight(
     records: Sequence[FeatureValuesInput],
+    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, SPEC.feature_id, BasicConditionsAndWeightInput)
+    return normalize_feature_inputs(records, definition.feature_id, BasicConditionsAndWeightInput)

@@ -6,12 +6,10 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import datetime
 
-from features.common.base import FeatureBuilder
-from features.common.feature_table import (
-    FeatureTableRow,
-    IntermediateFeatureTable,
-    validate_common_row,
-)
+from features.contracts.rows import FeatureTableRow
+from features.generation.base import FeatureBuilder
+from features.tables.schema import IntermediateFeatureTable
+from features.validation.table import validate_common_row
 
 
 @dataclass(frozen=True, slots=True)

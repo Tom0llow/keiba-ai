@@ -10,12 +10,23 @@ import pytest
 from typer import Typer
 from typer.testing import CliRunner
 
-from data.race_key import RaceKey
-from data.retriever.weekly import WeeklyBatchResult
-from features.explanatory_variables import FEATURE_GROUP_IDS
-from features.make_features import register_feature_commands
-from main import app
+from features.catalog.loader import load_feature_definitions
+from features.catalog.registry import create_feature_registry
 from models.evaluate_model import RankingMetrics
+from race_key import RaceKey
+from retriever.weekly import WeeklyBatchResult
+from run.app import app
+from run.features import register_feature_commands
+
+REGISTRY = create_feature_registry(
+    load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")
+)
+FEATURE_GROUP_IDS = REGISTRY.feature_ids
+FEATURE_GROUP_SPECS = REGISTRY.definitions
+FEATURE_BUILDERS = {
+    entry.definition.feature_id: entry.builder_type(entry.definition) for entry in REGISTRY.features
+}
+FEATURE_INPUT_TYPES = {entry.definition.feature_id: entry.input_type for entry in REGISTRY.features}
 
 runner = CliRunner()
 
@@ -26,8 +37,8 @@ def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
     preprocesser = Mock()
     preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
     with (
-        patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml,
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+        patch("run.retrieval.DataRetriever.from_toml", return_value=retriever) as from_toml,
+        patch("run.retrieval.DataPreprocesser.from_toml", return_value=preprocesser),
     ):
         result = runner.invoke(app, ["--retrieve", "--mode=historical-basic"])
 
@@ -45,8 +56,8 @@ def test_latest_cli_retrieves_then_refreshes_processed_data() -> None:
     preprocesser = Mock()
     preprocesser.update.return_value = {"NL_RA_RACE": 100}
     with (
-        patch("main.DataRetriever.from_toml", return_value=retriever),
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+        patch("run.retrieval.DataRetriever.from_toml", return_value=retriever),
+        patch("run.retrieval.DataPreprocesser.from_toml", return_value=preprocesser),
     ):
         result = runner.invoke(app, ["--retrieve", "--mode=latest"])
 
@@ -60,7 +71,7 @@ def test_historical_odds_cli_plan_only_is_forwarded() -> None:
     retriever.retrieve_historical_odds.return_value = WeeklyBatchResult(
         "plan", 2008, None, 4, 8, 0, 8, {}, True
     )
-    with patch("main.DataRetriever.from_toml", return_value=retriever) as from_toml:
+    with patch("run.retrieval.DataRetriever.from_toml", return_value=retriever) as from_toml:
         result = runner.invoke(
             app,
             ["--retrieve", "--mode=historical-odds", "--plan-only"],
@@ -84,8 +95,8 @@ def test_historical_odds_cli_publishes_once_after_all_years_complete() -> None:
     preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
     retriever.publish_historical_odds.side_effect = lambda publisher: publisher()
     with (
-        patch("main.DataRetriever.from_toml", return_value=retriever),
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+        patch("run.retrieval.DataRetriever.from_toml", return_value=retriever),
+        patch("run.retrieval.DataPreprocesser.from_toml", return_value=preprocesser),
     ):
         result = runner.invoke(app, ["--retrieve", "--mode=historical-odds"])
 
@@ -105,7 +116,7 @@ def test_historical_odds_cli_returns_failure_for_failed_batch() -> None:
     retriever.retrieve_historical_odds.return_value = WeeklyBatchResult(
         "failed", 2008, "run", 1, 2, 2, 2, {}
     )
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
+    with patch("run.retrieval.DataRetriever.from_toml", return_value=retriever):
         result = runner.invoke(app, ["--retrieve", "--mode=historical-odds"])
 
     assert result.exit_code == 1
@@ -115,7 +126,7 @@ def test_historical_odds_cli_returns_failure_for_failed_batch() -> None:
 def test_historical_odds_cli_confirms_explicit_provider_missing_race() -> None:
     retriever = Mock()
     retriever.confirm_historical_odds_provider_missing.return_value = 2
-    with patch("main.DataRetriever.from_toml", return_value=retriever):
+    with patch("run.retrieval.DataRetriever.from_toml", return_value=retriever):
         result = runner.invoke(
             app,
             [
@@ -151,8 +162,8 @@ def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:
         "ARCHIVE_O2_ODDS_UMAREN": 7,
     }
     with (
-        patch("main.DataRetriever.from_toml", return_value=retriever),
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+        patch("run.retrieval.DataRetriever.from_toml", return_value=retriever),
+        patch("run.retrieval.DataPreprocesser.from_toml", return_value=preprocesser),
     ):
         result = runner.invoke(
             app,
@@ -196,9 +207,9 @@ def test_realtime_cli_uses_race_config_when_options_are_omitted() -> None:
     }
     race_key = RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
     with (
-        patch("main.JVLinkConfig.from_toml", return_value=Mock(realtime_race=race_key)),
-        patch("main.DataRetriever.from_toml", return_value=retriever),
-        patch("main.DataPreprocesser.from_toml", return_value=preprocesser),
+        patch("run.retrieval.JVLinkConfig.from_toml", return_value=Mock(realtime_race=race_key)),
+        patch("run.retrieval.DataRetriever.from_toml", return_value=retriever),
+        patch("run.retrieval.DataPreprocesser.from_toml", return_value=preprocesser),
     ):
         result = runner.invoke(app, ["--retrieve", "--mode=realtime"])
 
@@ -229,7 +240,7 @@ def test_legacy_historical_mode_names_are_rejected() -> None:
 def test_preprocess_rebuild_can_run_without_retrieval() -> None:
     preprocesser = Mock()
     preprocesser.rebuild.return_value = {"NL_RA_RACE": 100}
-    with patch("main.DataPreprocesser.from_toml", return_value=preprocesser):
+    with patch("run.retrieval.DataPreprocesser.from_toml", return_value=preprocesser):
         result = runner.invoke(app, ["preprocess", "rebuild"])
 
     assert result.exit_code == 0
@@ -635,7 +646,7 @@ def test_model_walk_forward_cli_includes_schema_and_freeze_times(tmp_path: Path)
     fold.test_freeze_at = (datetime(2026, 1, 3, 12, tzinfo=UTC),)
     fold_result = Mock(fold=fold, metrics=metrics)
     evaluation = Mock(fold_results=(fold_result,), metrics=metrics)
-    with patch("main.evaluate_walk_forward", return_value=evaluation):
+    with patch("run.models.evaluate_walk_forward", return_value=evaluation):
         result = runner.invoke(
             app,
             [

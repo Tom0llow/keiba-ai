@@ -4,47 +4,53 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from types import MappingProxyType
+from typing import TYPE_CHECKING
 
-from features.common.audit import audit_feature_inputs as _audit_feature_inputs
-from features.common.normalization import normalize_batch
-from features.common.registry import (
-    FEATURE_BUILDERS,
-    FEATURE_GROUP_IDS,
-    FEATURE_GROUP_SPECS,
-    FEATURE_INPUT_TYPES,
-)
-from features.common.types import (
+from features.generation.normalization import normalize_batch
+from features.validation.audit import audit_feature_inputs as _audit_feature_inputs
+
+if TYPE_CHECKING:
+    from features.catalog.registry import FeatureRegistry
+from features.contracts.types import (
     FeatureAudit,
     FeatureBatchInput,
     FeatureBuildError,
     FeatureBuildResult,
+    FeatureDefinition,
     FeatureGroupInput,
-    FeatureGroupSpec,
     FeatureScalar,
     FeatureViolation,
 )
 from features.market_characteristics import validate_market_batches
 
 
-def audit_feature_inputs(records: Sequence[FeatureBatchInput]) -> FeatureAudit:
+def audit_feature_inputs(
+    records: Sequence[FeatureBatchInput], *, registry: FeatureRegistry
+) -> FeatureAudit:
     """Combine shared auditing with feature-owned market validation."""
-    audit = _audit_feature_inputs(records)
-    return validate_market_batches(records, audit)
+    audit = _audit_feature_inputs(records, required_feature_ids=registry.feature_ids)
+    return validate_market_batches(
+        records, audit, feature_id=registry.by_name("market_characteristics").definition.feature_id
+    )
 
 
 def build_explanatory_variables(
     records: Sequence[FeatureBatchInput],
+    *,
+    registry: FeatureRegistry,
 ) -> FeatureBuildResult:
     """Generate individual common middle rows without choosing business formulas."""
     if not records:
         raise ValueError("feature generation requires at least one record")
-    audit = audit_feature_inputs(records)
+    audit = audit_feature_inputs(records, registry=registry)
     if not audit.valid:
         raise FeatureBuildError(audit)
-    inputs = tuple(normalize_batch(record) for record in records)
+    inputs = tuple(normalize_batch(record, registry.feature_ids) for record in records)
     rows = {}
-    for feature_id, builder in FEATURE_BUILDERS.items():
-        input_type = FEATURE_INPUT_TYPES[feature_id]
+    for registration in registry.features:
+        feature_id = registration.definition.feature_id
+        builder = registration.builder_type(registration.definition)
+        input_type = registration.input_type
         feature_inputs = [
             input_type(
                 feature_id=feature_id,
@@ -67,14 +73,12 @@ def build_explanatory_variables(
 
 
 __all__ = [
-    "FEATURE_GROUP_IDS",
-    "FEATURE_GROUP_SPECS",
     "FeatureAudit",
     "FeatureBatchInput",
     "FeatureBuildError",
     "FeatureBuildResult",
+    "FeatureDefinition",
     "FeatureGroupInput",
-    "FeatureGroupSpec",
     "FeatureScalar",
     "FeatureViolation",
     "audit_feature_inputs",

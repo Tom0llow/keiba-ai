@@ -10,11 +10,14 @@ data loading, feature generation, and ranking-model evaluation. Its current
 source boundary is:
 
 ```text
-src/main.py    # user-facing CLI
-src/data/      # retrieval, preprocessing, and processed-data loading
-src/features/  # feature generation
-src/models/    # ranking and evaluation
-src/tests/     # application and environment tests
+src/main.py      # launches run.app.app
+src/run/         # command registration and execution boundaries
+src/retriever/   # retrieval
+src/preprocesser/ # raw-to-Parquet processing and publication
+src/utils/       # processed-data and JSON readers only
+src/features/    # catalogs, contracts, validation, generation and tables
+src/models/      # model inputs, ranking and evaluation
+src/tests/       # application and environment tests
 ```
 
 `ARCHITECTURE.md` and Accepted ADRs describe implemented contracts. The project
@@ -48,7 +51,8 @@ coherent responsibility and have a name that describes that responsibility.
   code must not import an entry point merely to share behavior.
 - Pass important dependencies explicitly instead of constructing hidden global
   clients deep in the package.
-- Do not create an undifferentiated `utils` module for unrelated behavior.
+- Keep `utils/` limited to the authorized processed-data and JSON readers.
+  Do not add unrelated feature validation, generation or retrieval there.
 - Keep public interfaces as small as the current callers require.
 
 Keep entry points responsible for boundary concerns and delegation rather than
@@ -169,8 +173,8 @@ one; when introduced, document and test it as a public contract.
 
 ## 7. Configuration and dependencies
 
-Introduce configuration only for behavior that must vary by environment or user
-choice. Validate required values at the system boundary and keep ownership and
+Configuration may own explicit reviewed registries, as `config/features.toml`
+does under ADR-020, as well as behavior that varies by environment or user choice. Validate required values at the system boundary and keep ownership and
 precedence explicit. Never use configuration as a substitute for a clear product
 decision.
 

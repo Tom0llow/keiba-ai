@@ -316,8 +316,9 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 ## 17. Architecture
 
-The current repository has a CLI in `src/main.py`, application modules under
-`src/data/`, `src/features/`, and `src/models/`, and tests under `src/tests/`.
+The current repository launches `src/run/` from `src/main.py`. Application
+modules live under `src/retriever/`, `src/preprocesser/`, `src/utils/`,
+`src/features/`, and `src/models/`; tests remain under `src/tests/`.
 It is not installed as a Python distribution. `ARCHITECTURE.md` describes the
 implemented module boundaries.
 

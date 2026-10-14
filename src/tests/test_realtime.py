@@ -4,9 +4,9 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import Mock
 
-from data.race_key import RaceKey
-from data.retriever.realtime import RealtimeRetriever
-from data.retriever.setting import JVLinkProfile
+from race_key import RaceKey
+from retriever.realtime import RealtimeRetriever
+from retriever.setting import JVLinkProfile
 
 
 def _profile(data_specs: set[str]) -> JVLinkProfile:

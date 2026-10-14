@@ -7,10 +7,10 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from data.config import DataPaths
-from data.data_loader import DataLoader
-from data.data_preprocesser import DataPreprocesser
-from data.race_key import RaceKey
+from data_paths import DataPaths
+from preprocesser.data_preprocesser import DataPreprocesser
+from race_key import RaceKey
+from utils.data_loader import DataLoader
 
 
 def _paths(tmp_path: Path) -> DataPaths:

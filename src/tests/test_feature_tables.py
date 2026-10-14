@@ -9,14 +9,11 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from features.common.feature_table import (
-    read_feature_table,
-    validate_feature_table,
-    write_feature_table,
-)
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
 from features.pedigree import PedigreeInput, build_pedigree
 from features.previous_race_result import PreviousRaceResultInput, build_previous_race_result
+from features.tables.parquet import read_feature_table, write_feature_table
+from features.validation.table import validate_feature_table
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)

@@ -4,8 +4,8 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from data.race_key import RaceKey
-from data.retriever.odds_archive import OddsArchive
+from race_key import RaceKey
+from retriever.odds_archive import OddsArchive
 
 
 def _seed_realtime_tables(database: Path) -> None:

@@ -7,12 +7,11 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from features.common.base import FeatureBuilder
-from features.common.feature_table import FeatureTableRow, IntermediateFeatureTable
-from features.common.normalization import normalize_feature_inputs
-from features.common.types import FeatureGroupSpec, FeatureValuesInput
-
-SPEC = FeatureGroupSpec("F17", "hill_and_wood_workouts")
+from features.contracts.rows import FeatureTableRow
+from features.contracts.types import FeatureDefinition, FeatureValuesInput
+from features.generation.base import FeatureBuilder
+from features.generation.normalization import normalize_feature_inputs
+from features.tables.schema import IntermediateFeatureTable
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -23,20 +22,29 @@ class HillAndWoodWorkoutsInput(FeatureValuesInput):
 class HillAndWoodWorkoutsBuilder(FeatureBuilder[FeatureValuesInput]):
     """Build this feature using its own normalization and shared table contract."""
 
-    feature_name = SPEC.label
+    feature_name = "hill_and_wood_workouts"
+    definition: FeatureDefinition
+
+    def __init__(self, definition: FeatureDefinition) -> None:
+        super().__init__(definition)
+        self.definition = definition
 
     def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_hill_and_wood_workouts(records)
+        return _normalize_hill_and_wood_workouts(records, self.definition)
 
 
 def build_hill_and_wood_workouts(
-    records: Sequence[HillAndWoodWorkoutsInput], *, column_types: Mapping[str, pa.DataType]
+    records: Sequence[HillAndWoodWorkoutsInput],
+    *,
+    definition: FeatureDefinition,
+    column_types: Mapping[str, pa.DataType],
 ) -> IntermediateFeatureTable:
     """Build a table using caller-declared column types without inferring rules."""
-    return HillAndWoodWorkoutsBuilder().build(records, column_types=column_types)
+    return HillAndWoodWorkoutsBuilder(definition).build(records, column_types=column_types)
 
 
 def _normalize_hill_and_wood_workouts(
     records: Sequence[FeatureValuesInput],
+    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, SPEC.feature_id, HillAndWoodWorkoutsInput)
+    return normalize_feature_inputs(records, definition.feature_id, HillAndWoodWorkoutsInput)
