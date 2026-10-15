@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.setting import (
     JVLinkConfig,
     JVLinkProfile,

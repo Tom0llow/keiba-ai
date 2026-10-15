@@ -12,7 +12,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from pathlib import Path
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 
 KEY_COLUMNS = ("idYear", "idMonthDay", "idJyoCD", "idKaiji", "idNichiji", "idRaceNum")
 ODDS_TABLES = {

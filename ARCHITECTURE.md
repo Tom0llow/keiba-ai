@@ -107,8 +107,8 @@ src/
 ├─ utils/
 │  ├─ data_loader.py              # 処理済みデータ読込API
 │  └─ loader/                     # Parquet・JSON読込
-├─ data_paths.py                  # 共有パス設定
-├─ race_key.py                    # レース識別と純粋変換
+├─ settings/data_paths.py         # 共有パス設定
+├─ domain/race_key.py             # 共有レース識別型
 ├─ features/
 │  ├─ catalog/                    # TOML読込・実装登録
 │  ├─ contracts/                  # 入力・中間行・結果の型
@@ -116,7 +116,10 @@ src/
 │  ├─ generation/                 # 共通生成手順・正規化
 │  ├─ tables/                     # スキーマ・構築・Parquet保存
 │  └─ ...                         # 説明変数固有の入力・生成
-├─ make_datamart/                 # 中間テーブルの結合
+├─ make_datamart/
+│  ├─ builder.py                  # 中間テーブル読込・純粋な結合
+│  ├─ validation/table.py         # 結合後のスキーマ・行検証
+│  └─ tables/                    # 列・metadata契約とParquet保存
 ├─ models/                        # モデル入力・学習・評価
 └─ tests/
    └─ ...
@@ -308,6 +311,12 @@ ADR-020 replaces the earlier CLI and source placement decisions.
 
 ## Configuration and persisted state
 
+`settings/data_paths.py` owns explicit `DataPaths` TOML loading and path
+resolution; it has no global instance or implicit default settings.
+`domain/race_key.py` owns the immutable `RaceKey` shared by retrieval,
+preprocessing and loading. `retriever/race_key_parser.py` converts raw
+race-key rows without I/O. ADR-021 records this placement.
+
 `config/data.toml` owns the raw SQLite path, processed directory, and JVLink
 runtime directory. `config/jvlink.toml` owns the local executable/seed paths,
 semantic retrieval profiles, and the optional target race for realtime retrieval;
@@ -384,12 +393,21 @@ implementations; consumers import the owning modules directly, including
 
 The three original value-column schemas and saved metadata are unchanged.
 F01-F21 tables require caller-declared scalar column types; ordered type metadata
-is validated when saved and reloaded. `src/make_datamart/` reads the same common
-tables and performs an ordered, validated left join while retaining each
-feature's availability timestamp. It does not generate feature values. Mixed
-tables carry explicit type metadata; existing three-feature datamarts retain
-their original metadata and remain readable. ADR-020 records their current placement and catalog contract, inheriting
-the generation, audit, storage and candidate API/CLI migration from ADR-019, extending the table contract of ADR-012.
+is validated when saved and reloaded. `src/make_datamart/builder.py` reads
+intermediate Parquet inputs and delegates to its pure ordered left join,
+retaining each feature's availability timestamp. It does not generate feature
+values. `make_datamart/tables/schema.py` shares ordered columns, collision
+checks and metadata generation/decoding between construction and validation.
+`make_datamart/validation/table.py` validates schemas, keys, timestamps,
+missingness and finite values. `make_datamart/tables/parquet.py` validates
+before writing and after reading, forwarding explicit `registered_names`.
+Schema and validation do not import the builder. The five existing public
+functions remain available from `make_datamart` and `make_datamart.builder`.
+Mixed tables carry explicit type metadata; existing three-feature datamarts
+retain their original metadata and remain readable. ADR-021 records the shared
+placement and datamart split. ADR-020 retains the feature catalog contract,
+inheriting generation, audit, storage and candidate API/CLI migration from
+ADR-019 and extending the table contract of ADR-012.
 
 `src/models/walk_forward.py`
 performs expanding race-level train/validation/test splits. The model CLI uses

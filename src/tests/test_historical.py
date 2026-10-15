@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.historical import HistoricalRetriever
 from retriever.setting import JVLinkProfile
 

@@ -9,7 +9,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 
 _DEFAULT_BATCH_SIZE = 1_000
 _TABLE_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*\Z")

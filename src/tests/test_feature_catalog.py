@@ -27,7 +27,8 @@ from features.jockey_combination import (
 from features.tables.build import build_feature_table
 from features.tables.parquet import read_feature_table, write_feature_table
 from features.validation.table import validate_feature_table
-from make_datamart.builder import join_feature_tables, read_datamart, write_datamart
+from make_datamart.builder import join_feature_tables
+from make_datamart.tables.parquet import read_datamart, write_datamart
 from run.app import app
 
 CONFIG = Path(__file__).resolve().parents[2] / "config/features.toml"
@@ -258,6 +259,10 @@ def test_saved_unknown_names_are_rejected_even_when_metadata_is_consistent(tmp_p
     pq.write_table(datamart, tmp_path / "unknown-datamart.parquet")
     with pytest.raises(ValueError, match="feature_names metadata is invalid"):
         read_datamart(tmp_path / "unknown-datamart.parquet", registered_names=registry.names)
+    rejected_path = tmp_path / "rejected-datamart.parquet"
+    with pytest.raises(ValueError, match="feature_names metadata is invalid"):
+        write_datamart(datamart, rejected_path, registered_names=registry.names)
+    assert not rejected_path.exists()
 
 
 def test_catalog_import_does_not_load_individual_implementations() -> None:

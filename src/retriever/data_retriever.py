@@ -7,8 +7,7 @@ from datetime import date
 from pathlib import Path
 from typing import TypeVar
 
-from data_paths import DataPaths
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.acquisition_lock import AcquisitionLock
 from retriever.historical import HistoricalRetriever
 from retriever.jvlinktosqlite import JVLinkToSQLiteRunner
@@ -21,6 +20,7 @@ from retriever.setting import (
     validate_historical_odds_batch,
 )
 from retriever.weekly import WeeklyBatchResult, WeeklyHistoricalOddsRetriever
+from settings.data_paths import DataPaths
 
 T = TypeVar("T")
 

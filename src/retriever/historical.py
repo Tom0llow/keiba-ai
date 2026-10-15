@@ -10,9 +10,10 @@ from dataclasses import replace
 from datetime import date
 from pathlib import Path
 
-from race_key import RaceKey, race_key_from_row
+from domain.race_key import RaceKey
 from retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
 from retriever.odds_archive import OddsArchive
+from retriever.race_key_parser import race_key_from_row
 from retriever.setting import JVLinkProfile, JVLinkSettingBuilder
 
 _JRA_JYO_CODES = tuple(f"{code:02d}" for code in range(1, 11))

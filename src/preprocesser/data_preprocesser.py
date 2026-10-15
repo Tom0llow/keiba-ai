@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from data_paths import DataPaths
+from domain.race_key import RaceKey
 from preprocesser.read_sqlite import SQLiteReader
 from preprocesser.snapshot import SnapshotPublisher
-from race_key import RaceKey
+from settings.data_paths import DataPaths
 
 
 class DataPreprocesser:

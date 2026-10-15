@@ -4,7 +4,7 @@ import sqlite3
 from datetime import date
 from pathlib import Path
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.odds_archive import OddsArchive
 
 

@@ -318,7 +318,8 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 The current repository launches `src/run/` from `src/main.py`. Application
 modules live under `src/retriever/`, `src/preprocesser/`, `src/utils/`,
-`src/features/`, and `src/models/`; tests remain under `src/tests/`.
+`src/settings/`, `src/domain/`, `src/features/`, `src/make_datamart/`,
+and `src/models/`; tests remain under `src/tests/`.
 It is not installed as a Python distribution. `ARCHITECTURE.md` describes the
 implemented module boundaries.
 

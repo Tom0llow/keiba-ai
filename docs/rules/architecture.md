@@ -15,6 +15,9 @@ src/run/         # command registration and execution boundaries
 src/retriever/   # retrieval
 src/preprocesser/ # raw-to-Parquet processing and publication
 src/utils/       # processed-data and JSON readers only
+src/settings/    # explicit shared path settings
+src/domain/      # shared race identity
+src/make_datamart/ # ordered join, validation and persistence
 src/features/    # catalogs, contracts, validation, generation and tables
 src/models/      # model inputs, ranking and evaluation
 src/tests/       # application and environment tests
@@ -53,6 +56,10 @@ coherent responsibility and have a name that describes that responsibility.
   clients deep in the package.
 - Keep `utils/` limited to the authorized processed-data and JSON readers.
   Do not add unrelated feature validation, generation or retrieval there.
+- Keep shared `DataPaths` in `settings/` and `RaceKey` in `domain/`; raw
+  race-key conversion belongs to `retriever/race_key_parser.py`.
+- Keep datamart schema contracts independent of its builder and validation;
+  Parquet boundaries use validation before writing and after reading.
 - Keep public interfaces as small as the current callers require.
 
 Keep entry points responsible for boundary concerns and delegation rather than

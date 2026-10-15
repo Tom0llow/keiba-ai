@@ -9,7 +9,7 @@ from unittest.mock import Mock
 
 import pytest
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.acquisition_lock import AcquisitionBlocked, AcquisitionLock
 from retriever.jvlinktosqlite import (
     JVLinkExecutionResult,

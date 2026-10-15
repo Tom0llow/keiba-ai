@@ -8,8 +8,8 @@ import tempfile
 import uuid
 from pathlib import Path
 
+from domain.race_key import RaceKey
 from preprocesser.read_sqlite import SQLiteReader
-from race_key import RaceKey
 
 _REALTIME_TABLES = (
     "ARCHIVE_O1_ODDS_TANFUKUWAKU",

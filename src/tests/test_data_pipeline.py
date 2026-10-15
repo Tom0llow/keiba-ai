@@ -1,15 +1,16 @@
 """Tests for raw SQLite preprocessing and processed Parquet loading."""
 
 import sqlite3
+from contextlib import closing
 from datetime import date
 from pathlib import Path
 
 import pyarrow as pa
 import pytest
 
-from data_paths import DataPaths
+from domain.race_key import RaceKey
 from preprocesser.data_preprocesser import DataPreprocesser
-from race_key import RaceKey
+from settings.data_paths import DataPaths
 from utils.data_loader import DataLoader
 
 
@@ -23,7 +24,7 @@ def _paths(tmp_path: Path) -> DataPaths:
 
 def _create_source(path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    with sqlite3.connect(path) as database:
+    with closing(sqlite3.connect(path)) as database, database:
         database.execute("CREATE TABLE NL_RA_RACE (RaceKey TEXT, RaceDate TEXT, Note TEXT)")
         database.executemany(
             "INSERT INTO NL_RA_RACE VALUES (?, ?, ?)",

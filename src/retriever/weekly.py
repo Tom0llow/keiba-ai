@@ -12,7 +12,7 @@ from pathlib import Path
 from typing import TypeVar
 from zoneinfo import ZoneInfo
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.acquisition_lock import AcquisitionBlocked, AcquisitionLock
 from retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
 from retriever.odds_archive import OddsArchive

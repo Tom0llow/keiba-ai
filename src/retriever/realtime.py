@@ -5,7 +5,7 @@ from __future__ import annotations
 import tempfile
 from pathlib import Path
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 from retriever.jvlinktosqlite import JVLinkToSQLiteRunner
 from retriever.odds_archive import OddsArchive
 from retriever.setting import JVLinkProfile, JVLinkSettingBuilder

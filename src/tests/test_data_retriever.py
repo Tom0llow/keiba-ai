@@ -4,9 +4,9 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from data_paths import DataPaths
 from retriever.data_retriever import DataRetriever
 from retriever.setting import JVLinkConfig, JVLinkProfile
+from settings.data_paths import DataPaths
 
 
 def _profile() -> JVLinkProfile:

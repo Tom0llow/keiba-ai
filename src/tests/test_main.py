@@ -10,10 +10,10 @@ import pytest
 from typer import Typer
 from typer.testing import CliRunner
 
+from domain.race_key import RaceKey
 from features.catalog.loader import load_feature_definitions
 from features.catalog.registry import create_feature_registry
 from models.evaluate_model import RankingMetrics
-from race_key import RaceKey
 from retriever.weekly import WeeklyBatchResult
 from run.app import app
 from run.features import register_feature_commands

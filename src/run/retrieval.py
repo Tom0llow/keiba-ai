@@ -10,8 +10,8 @@ from typing import Annotated
 
 import typer
 
+from domain.race_key import RaceKey
 from preprocesser.data_preprocesser import DataPreprocesser
-from race_key import RaceKey
 from retriever.data_retriever import DataRetriever
 from retriever.setting import JVLinkConfig
 

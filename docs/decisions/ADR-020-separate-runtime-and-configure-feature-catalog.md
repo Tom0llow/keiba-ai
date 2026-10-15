@@ -1,10 +1,10 @@
 # ADR-020: 実行境界を分離し特徴量登録をTOMLへ統合する
 
-- Status: Accepted
+- Status: Superseded（共有パス・レースキーの配置判断のみ。その他はAccepted）
 - Date: 2026-10-13
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-019（配置・登録・CLI境界の判断）
-- Superseded by: N/A
+- Superseded by: ADR-021（共有パス・レースキーの配置判断のみ）
 
 ## Context
 

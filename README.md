@@ -23,8 +23,8 @@ src/
 ├─ utils/
 │  ├─ data_loader.py              # 処理済みデータ読込API
 │  └─ loader/                     # Parquet・JSON読込
-├─ data_paths.py                  # 共有パス設定
-├─ race_key.py                    # レース識別と純粋変換
+├─ settings/data_paths.py         # 共有パス設定
+├─ domain/race_key.py             # 共有レース識別型
 ├─ features/
 │  ├─ catalog/                    # TOML読込・実装登録
 │  ├─ contracts/                  # 入力・中間行・結果の型
@@ -32,7 +32,10 @@ src/
 │  ├─ generation/                 # 共通生成手順・正規化
 │  ├─ tables/                     # スキーマ・構築・Parquet保存
 │  └─ ...                         # 説明変数固有の入力・生成
-├─ make_datamart/                 # 中間テーブルの結合
+├─ make_datamart/
+│  ├─ builder.py                  # 中間テーブル読込・純粋な結合
+│  ├─ validation/table.py         # 結合後のスキーマ・行検証
+│  └─ tables/                    # 列・metadata契約とParquet保存
 ├─ models/                        # モデル入力・学習・評価
 └─ tests/
    └─ ...
@@ -372,7 +375,12 @@ retain fixed validation for the original three when omitted.
 
 Import `DataRetriever` from `retriever.data_retriever`, `DataPreprocesser` from
 `preprocesser.data_preprocesser`, `DataLoader` from `utils.data_loader`,
-`DataPaths` from `data_paths`, and `RaceKey` from `race_key`. The former
+`DataPaths` from `settings.data_paths`, and `RaceKey` from `domain.race_key`.
+Raw race-key rows are converted by `retriever.race_key_parser.race_key_from_row`.
+Import datamart construction from `make_datamart.builder`, validation from
+`make_datamart.validation.table`, and persistence from
+`make_datamart.tables.parquet`. All five existing public functions remain
+available from both `make_datamart` and `make_datamart.builder`. The former
 `src/data/`, `features/common/`, `features/make_features.py` and module `SPEC`
 constants are removed. Acquired data and existing Parquet artifacts remain in
 their original locations and formats. `docs/GUARDED_WORKFLOW_REPAIR.md` remains

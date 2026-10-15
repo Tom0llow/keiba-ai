@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from data_paths import DataPaths
-from race_key import RaceKey
+from domain.race_key import RaceKey
+from settings.data_paths import DataPaths
 from utils.loader.read_parquet import ParquetReader
 
 

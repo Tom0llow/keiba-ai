@@ -123,7 +123,7 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 
 ## 5. モジュール責務と依存方向
 
-ADR-020の責務別配置で取得・加工・読込の契約を維持する。実装済みの配置と、今後の候補を次に示す。
+ADR-020とADR-021の責務別配置で取得・加工・読込の契約を維持する。実装済みの配置と、今後の候補を次に示す。
 
 | 配置候補 | 責務 | 依存・境界 |
 | --- | --- | --- |
@@ -138,7 +138,11 @@ ADR-020の責務別配置で取得・加工・読込の契約を維持する。�
 | `src/utils/loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
 | `src/run/features.py`、`feature_inputs.py`、`json_output.py` | 特徴量CLI登録・実行、入力型への変換、結果JSON出力。 | 汎用JSON readerを利用し、下位の個別計算・監査モジュールは実行境界へ依存しない。 |
 | `src/features/tables/`と`validation/table.py` | 特徴量中間テーブルのスキーマ・構築・検証・Parquet入出力。 | 既存3の契約を維持し、他の名前は明示的な`registered_names`と列型を要求する。 |
-| `src/make_datamart/builder.py` | 保存済み特徴量中間テーブルの読み込み、順序を保つleft join、datamart保存。 | 余分なキー、`freeze_at`不一致、列衝突を拒否し、特徴量ごとのavailable時刻を残す。 |
+| `src/settings/data_paths.py` | 明示されたTOMLから共有パス設定を読み、相対パスを解決する。 | 既定設定の暗黙読込やグローバルインスタンスを持たない。 |
+| `src/domain/race_key.py`、`src/retriever/race_key_parser.py` | 共有の`RaceKey`型と、取得境界のraw行変換をそれぞれ所有する。 | 型と変換の挙動を維持し、変換でI/Oを行わない。 |
+| `src/make_datamart/builder.py` | 保存済み中間テーブルの読込を編成し、純粋なleft joinで順序を保つ。 | 余分なキー、`freeze_at`不一致、列衝突を拒否し、特徴量ごとのavailable時刻を残す。 |
+| `src/make_datamart/validation/table.py` | datamartのスキーマ、キー、時点、欠損、有限値を検証する。 | 列契約を`tables/schema.py`と共有し、builderに依存しない。 |
+| `src/make_datamart/tables/schema.py`、`parquet.py` | 順序付きの列・型・metadata契約と、検証付きParquet保存・再読込。 | 登録名を明示し、保存前・読込後に検証する。既存の`make_datamart`と`make_datamart.builder`の5公開関数を維持する。 |
 | `src/models/ranking_dataset.py` | 行キー、ラベル、連続レース行、group、型・順序の検証。 | 既に生成された特徴量と別経路の結果を結合する。 |
 | `src/models/train_model.py` | LightGBMの構築・学習と学習記録。 | 検証済みデータ、設定、明示した乱数・実行条件。SQLite・CLIに依存しない。 |
 | `src/models/evaluate_model.py` / `walk_forward.py` | レース別指標とrace-level時間順分割。 | train/validation/testを同一レースから分離せず、train以外を学習へ渡さない。 |

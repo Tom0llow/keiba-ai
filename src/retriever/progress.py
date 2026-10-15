@@ -13,8 +13,9 @@ from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
-from race_key import RaceKey, race_key_from_row
+from domain.race_key import RaceKey
 from retriever.acquisition_lock import AcquisitionBlocked, canonical_path
+from retriever.race_key_parser import race_key_from_row
 from retriever.setting import HistoricalOddsBatch, JVLinkProfile
 
 LEDGER_FILENAME = "historical-odds-progress.db"

@@ -9,7 +9,7 @@ from datetime import date, datetime
 from pathlib import Path
 from typing import Any, Protocol, cast
 
-from race_key import RaceKey
+from domain.race_key import RaceKey
 
 
 class RaceKeyLike(Protocol):

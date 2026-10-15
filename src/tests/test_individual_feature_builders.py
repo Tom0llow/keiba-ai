@@ -20,7 +20,8 @@ from features.past_racing_ability import PastRacingAbilityBuilder
 from features.tables.build import build_feature_table
 from features.tables.parquet import read_feature_table, write_feature_table
 from features.validation.table import validate_feature_table
-from make_datamart.builder import join_feature_tables, read_datamart, write_datamart
+from make_datamart.builder import join_feature_tables
+from make_datamart.tables.parquet import read_datamart, write_datamart
 
 REGISTRY = create_feature_registry(
     load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")
