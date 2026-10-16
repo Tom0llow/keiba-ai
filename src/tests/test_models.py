@@ -12,8 +12,9 @@ from typing import cast
 
 import pytest
 
-import models.train_model as train_model_module
-from models.evaluate_model import evaluate_ranking
+import models.lightgbm_backend as lightgbm_backend_module
+from models.artifacts import NativeModelArtifact
+from models.evaluate_model import evaluate_ranking, ndcg_at_3, top1_accuracy, top3_overlap
 from models.predict_model import RankingModel
 from models.ranking_dataset import (
     TIE_BREAK_RULE,
@@ -235,6 +236,32 @@ def test_metrics_are_race_equal_and_top3_uses_overlap() -> None:
         evaluate_ranking(dataset, cast(Sequence[float], (True,) * len(scores)))
 
 
+@pytest.mark.parametrize(
+    ("metric", "field"),
+    [
+        (ndcg_at_3, "ndcg_at_3"),
+        (top1_accuracy, "top1_accuracy"),
+        (top3_overlap, "top3_overlap"),
+    ],
+)
+def test_individual_metrics_match_combined_result_and_validate_scores(
+    metric: Callable[[RankingDataset, Sequence[float]], float], field: str
+) -> None:
+    dataset = RankingDataset.from_rows(
+        _training_rows(),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
+    )
+    scores = (1.0,) * len(dataset.rows)
+
+    assert metric(dataset, scores) == getattr(evaluate_ranking(dataset, scores), field)
+    with pytest.raises(ValueError, match="one value per dataset row"):
+        metric(dataset, scores[:-1])
+    for invalid in (True, "1.0", float("nan"), float("inf")):
+        with pytest.raises(ValueError, match=r"real numbers|finite"):
+            metric(dataset, cast(Sequence[float], (invalid,) * len(scores)))
+
+
 class _TieBooster:
     def __init__(self, feature_names: Sequence[str] = ("ability",)) -> None:
         self._feature_names = tuple(feature_names)
@@ -309,6 +336,32 @@ def test_prediction_rejects_mismatched_feature_schema() -> None:
                 schema_id="different-v1",
             ),
         )
+
+
+def test_prediction_and_evaluation_use_the_same_tie_rule_for_each_race() -> None:
+    schema = _schema(("ability",))
+    dataset = RankingDataset.from_rows(
+        [
+            RankingRow(race_id, f"horse-{size + 1 - position}", {"ability": 1.0}, position)
+            for race_id, size in (("race-1", 4), ("race-2", 3))
+            for position in range(1, size + 1)
+        ],
+        feature_names=("ability",),
+        feature_schema=schema,
+    )
+    model = RankingModel.from_native_booster(_TieBooster(), ("ability",), schema)
+    rows = tuple(FeatureRow(row.race_id, row.horse_id, row.features) for row in dataset.rows)
+
+    predictions = model.predict(rows)
+    metrics = evaluate_ranking(dataset, model.predict_scores(rows))
+
+    assert [(row.race_id, row.horse_id, row.rank) for row in predictions] == [
+        (race_id, f"horse-{rank}", rank)
+        for race_id, size in (("race-1", 4), ("race-2", 3))
+        for rank in range(1, size + 1)
+    ]
+    assert metrics.top1_accuracy == 0.0
+    assert metrics.top3_overlap == (2.0 / 3.0 + 1.0) / 2.0
 
 
 def test_prediction_rejects_race_with_fewer_than_three_rows() -> None:
@@ -391,6 +444,31 @@ def test_model_load_rejects_metadata_change_with_unchanged_native(tmp_path: Path
         RankingModel.load(model_path)
 
 
+def test_native_artifact_rejects_mismatched_schema_before_publication(tmp_path: Path) -> None:
+    artifact = NativeModelArtifact(tmp_path / "ranking.model")
+
+    with pytest.raises(ValueError, match="feature names do not match"):
+        artifact.save(_TieBooster(("historical_odds",)), _schema(("ability",)))
+
+    assert not tuple(tmp_path.iterdir())
+
+
+def test_native_artifact_rejects_unfinished_or_changed_native_files(tmp_path: Path) -> None:
+    model_path = tmp_path / "ranking.model"
+    artifact = NativeModelArtifact(model_path)
+    artifact.save(_SavingBooster(b"native-model"), _schema(("ability",)))
+    ready_path = model_path.with_name("ranking.model.ready")
+    ready_path.unlink()
+
+    with pytest.raises(FileNotFoundError):
+        artifact.load()
+
+    ready_path.write_text("ready\n", encoding="ascii")
+    model_path.write_bytes(b"changed-native-model")
+    with pytest.raises(ValueError, match="native model does not match metadata"):
+        artifact.load()
+
+
 @pytest.mark.parametrize(
     ("field", "value", "message"),
     [
@@ -457,7 +535,7 @@ def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> No
 
     lightgbm_module = ModuleType("lightgbm")
     lightgbm_module.__dict__["LGBMRanker"] = _CapturingRanker
-    monkeypatch.setattr(train_model_module, "_load_lightgbm", lambda: lightgbm_module)
+    monkeypatch.setattr(lightgbm_backend_module, "load_lightgbm", lambda: lightgbm_module)
 
     dataset = RankingDataset.from_rows(
         _training_rows(),
@@ -500,6 +578,9 @@ def test_lightgbm_train_predict_and_native_save_load(tmp_path: Path) -> None:
     model.save(model_path)
     loaded_model = RankingModel.load(model_path)
     loaded_predictions = loaded_model.predict(feature_rows, feature_schema=schema)
+    contents = NativeModelArtifact(model_path).load()
+    copied_path = tmp_path / "copied.model"
+    NativeModelArtifact(copied_path).save(contents.booster, contents.feature_schema)
 
     assert model.objective == "lambdarank"
     assert model.tie_break_rule == TIE_BREAK_RULE
@@ -507,6 +588,8 @@ def test_lightgbm_train_predict_and_native_save_load(tmp_path: Path) -> None:
     assert [prediction.rank for prediction in predictions[:4]] == [1, 2, 3, 4]
     assert all(isfinite(prediction.score) for prediction in predictions)
     assert loaded_predictions == predictions
+    assert contents.feature_schema == schema
+    assert RankingModel.load(copied_path).predict(feature_rows) == predictions
     assert model_path.is_file()
     metadata_path = model_path.with_name("ranking.model.metadata.json")
     assert metadata_path.is_file()

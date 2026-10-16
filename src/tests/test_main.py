@@ -7,17 +7,70 @@ from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
+from rich.text import Text
 from typer import Typer
 from typer.testing import CliRunner
 
-from data.race_key import RaceKey
-from data.retriever.weekly import WeeklyBatchResult
-from features.explanatory_variables import FEATURE_GROUP_IDS
-from features.make_features import register_feature_commands
-from main import app
+from domain.race_key import RaceKey
+from features.catalog.loader import load_feature_definitions
+from features.catalog.registry import create_feature_registry
+from main import app, register_feature_commands
 from models.evaluate_model import RankingMetrics
+from retriever.weekly import WeeklyBatchResult
+
+REGISTRY = create_feature_registry(
+    load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")
+)
+FEATURE_GROUP_IDS = REGISTRY.feature_ids
+FEATURE_GROUP_SPECS = REGISTRY.definitions
+FEATURE_BUILDERS = {
+    entry.definition.feature_id: entry.builder_type(entry.definition) for entry in REGISTRY.features
+}
+FEATURE_INPUT_TYPES = {entry.definition.feature_id: entry.input_type for entry in REGISTRY.features}
 
 runner = CliRunner()
+
+
+@pytest.fixture(params=[False, True], ids=["default-color", "forced-color"])
+def cli_color_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if request.param:
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("TTY_COMPATIBLE", raising=False)
+
+
+@pytest.mark.parametrize(
+    "command",
+    [
+        [],
+        ["preprocess"],
+        ["preprocess", "rebuild"],
+        ["model"],
+        ["model", "features"],
+        ["model", "walk-forward"],
+    ],
+)
+def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[str]) -> None:
+    with (
+        patch("main.read_json", side_effect=AssertionError("unexpected input read")) as reader,
+        patch(
+            "main.DataRetriever.from_toml", side_effect=AssertionError("unexpected retriever")
+        ) as retriever,
+        patch(
+            "main.DataPreprocesser.from_toml", side_effect=AssertionError("unexpected preprocesser")
+        ) as preprocesser,
+        patch(
+            "main.JVLinkConfig.from_toml", side_effect=AssertionError("unexpected config read")
+        ) as config,
+    ):
+        result = runner.invoke(app, [*command, "--help"])
+
+    assert result.exit_code == 0
+    reader.assert_not_called()
+    retriever.assert_not_called()
+    preprocesser.assert_not_called()
+    config.assert_not_called()
 
 
 def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
@@ -224,6 +277,121 @@ def test_legacy_historical_mode_names_are_rejected() -> None:
         result = runner.invoke(app, ["--retrieve", f"--mode={mode}"])
 
         assert result.exit_code == 2
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        (["--plan-only", "--recover"], "retrieval options require"),
+        (
+            ["--retrieve", "--plan-only", "--recover", "model"],
+            "retrieval options cannot be used with a subcommand",
+        ),
+        (
+            ["--mode=unknown", "--plan-only", "--recover"],
+            "--plan-only cannot be combined with --recover",
+        ),
+        (
+            ["--retrieve", "--mode=unknown", "--confirm-provider-missing", "--recover"],
+            "--confirm-provider-missing cannot be combined",
+        ),
+        (
+            ["--retrieve", "--mode=realtime", "--date=2026-01-01", "--plan-only"],
+            "odds-only options require",
+        ),
+        (
+            ["--retrieve", "--mode=historical-odds", "--date=2026-01-01"],
+            "require --confirm-provider-missing",
+        ),
+    ],
+)
+@pytest.mark.usefixtures("cli_color_mode")
+def test_retrieval_option_errors_preserve_validation_priority(
+    arguments: list[str], message: str
+) -> None:
+    with (
+        patch("main.DataRetriever.from_toml") as retriever,
+        patch("main.DataPreprocesser.from_toml") as preprocesser,
+        patch("main.JVLinkConfig.from_toml") as config,
+    ):
+        result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 2
+    output = Text.from_ansi(result.output).plain
+    assert message in " ".join(output.replace("│", "").split())
+    retriever.assert_not_called()
+    preprocesser.assert_not_called()
+    config.assert_not_called()
+
+
+@pytest.mark.parametrize("mode", ["historical-basic", "latest"])
+@pytest.mark.parametrize("option", ["--recover", "--jyo=05", "--data-spec=0B41"])
+def test_non_odds_modes_reject_odds_and_race_options(mode: str, option: str) -> None:
+    with patch("main.DataRetriever.from_toml") as retriever:
+        result = runner.invoke(app, ["--retrieve", f"--mode={mode}", option])
+
+    assert result.exit_code == 2
+    assert "odds-only options require" in result.output
+    retriever.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "race_option", ["--date=2026-01-01", "--jyo=05", "--kaiji=01", "--nichiji=01", "--race=01"]
+)
+def test_realtime_partial_race_never_falls_back_to_configuration(race_option: str) -> None:
+    with (
+        patch("main.JVLinkConfig.from_toml") as config,
+        patch("main.DataRetriever.from_toml") as retriever,
+    ):
+        result = runner.invoke(app, ["--retrieve", "--mode=realtime", race_option])
+
+    assert result.exit_code == 2
+    assert "realtime CLI options must include" in result.output
+    config.assert_not_called()
+    retriever.assert_not_called()
+
+
+@pytest.mark.usefixtures("cli_color_mode")
+def test_provider_confirmation_requires_explicit_race_before_validating_specs() -> None:
+    with (
+        patch("main.JVLinkConfig.from_toml") as config,
+        patch("main.DataRetriever.from_toml") as retriever,
+    ):
+        result = runner.invoke(
+            app,
+            [
+                "--retrieve",
+                "--mode=historical-odds",
+                "--confirm-provider-missing",
+                "--data-spec=invalid",
+            ],
+        )
+
+    assert result.exit_code == 2
+    assert "--confirm-provider-missing requires" in Text.from_ansi(result.output).plain
+    config.assert_not_called()
+    retriever.assert_not_called()
+
+
+@pytest.mark.parametrize("confirm", [False, True])
+def test_invalid_complete_race_retains_mode_specific_error_translation(confirm: bool) -> None:
+    arguments = ["--retrieve", f"--mode={'historical-odds' if confirm else 'realtime'}"]
+    if confirm:
+        arguments.append("--confirm-provider-missing")
+    arguments.extend(
+        ["--date=2026-01-01", "--jyo=invalid", "--kaiji=01", "--nichiji=01", "--race=01"]
+    )
+    with patch("main.DataRetriever.from_toml") as retriever:
+        result = runner.invoke(app, arguments)
+
+    if confirm:
+        assert result.exit_code == 2
+        assert "invalid provider-missing RaceKey" in result.output
+    else:
+        assert result.exit_code == 1
+        assert isinstance(result.exception, ValueError)
+        assert "jyo_code must be a two-digit string" in str(result.exception)
+    retriever.assert_not_called()
 
 
 def test_preprocess_rebuild_can_run_without_retrieval() -> None:
@@ -493,10 +661,36 @@ def test_model_audit_cli_returns_nonzero_for_future_feature(tmp_path: Path) -> N
 
     assert result.exit_code == 1
     payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert list(payload) == ["schema_id", "feature_names", "freeze_at", "audit"]
     assert payload["audit"]["valid"] is False
     assert payload["feature_names"] == ["ability", "historical_odds"]
     assert payload["freeze_at"] == ["2026-01-01T12:00:00+00:00"] * 3
     assert "after freeze_at" in payload["audit"]["violations"][0]["reason"]
+
+
+@pytest.mark.parametrize("command", ["features", "walk-forward"])
+def test_model_generation_errors_preserve_schema_and_audit_context(
+    tmp_path: Path, command: str
+) -> None:
+    input_path = tmp_path / "features.json"
+    output_path = tmp_path / "error.json"
+    input_path.write_text(json.dumps(_feature_payload(future_odds=True)), encoding="utf-8")
+    arguments = ["model", command, "--input", str(input_path), "--output", str(output_path)]
+    if command == "walk-forward":
+        arguments.extend(
+            ["--min-train-races=1", "--validation-races=1", "--test-races=1", "--step-races=1"]
+        )
+
+    result = runner.invoke(app, arguments)
+
+    assert result.exit_code == 1
+    payload = json.loads(output_path.read_text(encoding="utf-8"))
+    assert list(payload) == ["schema_id", "audit", "error"]
+    assert payload["schema_id"] == "cli-v1"
+    assert payload["audit"]["valid"] is False
+    assert payload["audit"]["violations"][0]["feature_name"] == "historical_odds"
+    assert payload["error"]["type"] == "input"
+    assert "after freeze_at" in payload["error"]["message"]
 
 
 def test_model_audit_cli_writes_structured_error_for_invalid_utf8(tmp_path: Path) -> None:

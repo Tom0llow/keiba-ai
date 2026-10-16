@@ -7,23 +7,20 @@ from dataclasses import dataclass, replace
 
 import pyarrow as pa
 
-from features.common.audit import audit_feature_inputs
-from features.common.base import FeatureBuilder
-from features.common.feature_table import FeatureTableRow, IntermediateFeatureTable
-from features.common.normalization import input_batches, normalize_feature_inputs
-from features.common.types import (
+from features.contracts.rows import FeatureTableRow
+from features.contracts.types import (
     FeatureAudit,
     FeatureBatchInput,
-    FeatureBuildError,
+    FeatureDefinition,
     FeatureGroupInput,
-    FeatureGroupSpec,
     FeatureScalar,
     FeatureValuesInput,
     _violation,
 )
-from features.common.validation import _feature_values_equal
-
-SPEC = FeatureGroupSpec("F19", "market_characteristics")
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
+from features.tables.schema import IntermediateFeatureTable
+from features.validation.values import feature_values_equal
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -31,33 +28,36 @@ class MarketCharacteristicsInput(FeatureValuesInput):
     """Provide explicit market characteristics values and source evidence."""
 
 
-class MarketCharacteristicsBuilder(FeatureBuilder[FeatureValuesInput]):
+class MarketCharacteristicsBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
-    feature_name = SPEC.label
+    feature_name = "market_characteristics"
+    input_type = MarketCharacteristicsInput
 
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+    def audit_batches(
+        self, records: Sequence[FeatureBatchInput], audit: FeatureAudit
+    ) -> FeatureAudit:
+        """Append market-field and race-wide ticket-total checks."""
+        return validate_market_batches(records, audit, feature_id=self.definition.feature_id)
+
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
         return _normalize_market_characteristics(records)
 
 
 def build_market_characteristics(
-    records: Sequence[MarketCharacteristicsInput], *, column_types: Mapping[str, pa.DataType]
+    records: Sequence[MarketCharacteristicsInput],
+    *,
+    definition: FeatureDefinition,
+    column_types: Mapping[str, pa.DataType],
 ) -> IntermediateFeatureTable:
     """Build a table using caller-declared column types without inferring rules."""
-    return MarketCharacteristicsBuilder().build(records, column_types=column_types)
+    return MarketCharacteristicsBuilder(definition).build(records, column_types=column_types)
 
 
 def _normalize_market_characteristics(
     records: Sequence[FeatureValuesInput],
 ) -> list[FeatureTableRow]:
-    rows = normalize_feature_inputs(records, SPEC.feature_id, MarketCharacteristicsInput)
-    batches = input_batches(records, SPEC.feature_id)
-    audit = validate_market_batches(
-        batches, audit_feature_inputs(batches, required_feature_ids=(SPEC.feature_id,))
-    )
-    if not audit.valid:
-        raise FeatureBuildError(audit)
-    return rows
+    return normalize_audited_feature_inputs(records)
 
 
 _ALLOWED_MARKET_FIELD_NAMES = frozenset(
@@ -98,7 +98,7 @@ def _is_ticket_total_field(field_name: str) -> bool:
 
 
 def validate_market_batches(
-    records: Sequence[FeatureBatchInput], audit: FeatureAudit
+    records: Sequence[FeatureBatchInput], audit: FeatureAudit, *, feature_id: str
 ) -> FeatureAudit:
     """Check documented market columns and race-wide ticket total consistency."""
     violations = list(audit.violations)
@@ -106,7 +106,7 @@ def validate_market_batches(
     for row_index, record in enumerate(records):
         if not isinstance(record.groups, Mapping):
             continue
-        group = record.groups.get("F19")
+        group = record.groups.get(feature_id)
         if not isinstance(group, FeatureGroupInput) or not isinstance(group.values, Mapping):
             continue
         for field_name, value in group.values.items():
@@ -118,9 +118,9 @@ def validate_market_batches(
                         row_index,
                         record.race_id,
                         record.horse_id,
-                        "F19",
+                        feature_id,
                         field_name,
-                        "F19 market field is not allowed",
+                        f"{feature_id} market field is not allowed",
                     )
                 )
             if not _is_ticket_total_field(field_name):
@@ -128,15 +128,15 @@ def validate_market_batches(
             key = (record.race_id, field_name)
             if key not in totals:
                 totals[key] = value
-            elif not _feature_values_equal(totals[key], value):
+            elif not feature_values_equal(totals[key], value):
                 violations.append(
                     _violation(
                         row_index,
                         record.race_id,
                         record.horse_id,
-                        "F19",
+                        feature_id,
                         field_name,
-                        "F19 ticket total must be identical within a race",
+                        f"{feature_id} ticket total must be identical within a race",
                     )
                 )
     return replace(audit, violations=tuple(violations))

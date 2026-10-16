@@ -1,0 +1,1 @@
+"""Share audited row generation."""

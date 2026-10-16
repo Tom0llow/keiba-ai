@@ -1,40 +1,44 @@
-"""Command-line entry point for keiba-ai data workflows."""
+"""Define and execute the keiba-ai command-line interface."""
 
 from __future__ import annotations
 
 import json
-from dataclasses import asdict
+from collections.abc import Callable
+from dataclasses import asdict, dataclass
 from datetime import datetime
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, NoReturn
 
 import typer
 
-from data.data_preprocesser import DataPreprocesser
-from data.data_retriever import DataRetriever
-from data.race_key import RaceKey
-from data.retriever.setting import JVLinkConfig
-from features.make_features import (
-    audit_payload,
-    input_error_payload,
-    read_feature_inputs_or_exit,
-    register_feature_commands,
-    write_json,
-)
+from domain.race_key import RaceKey
+from features.catalog.loader import load_feature_definitions
+from features.catalog.registry import create_feature_registry
+from features.contracts.types import FeatureBatchInput
+from features.explanatory_variables import FeatureBuildError, build_explanatory_variables
+from features.serialization.inputs import parse_explanatory_inputs
+from features.serialization.outputs import explanatory_payload, feature_audit_payload
 from models.dataset_builder import (
     FeatureGenerationError,
+    FeatureInput,
     audit_feature_availability,
+    build_features,
     build_ranking_dataset,
 )
-from models.evaluate_model import RankingMetrics
-from models.walk_forward import WalkForwardConfig, WalkForwardEvaluation, evaluate_walk_forward
-
-app = typer.Typer(no_args_is_help=True)
-preprocess_app = typer.Typer(no_args_is_help=True, help="Publish processed Parquet data.")
-model_app = typer.Typer(no_args_is_help=True, help="Build features and evaluate ranking models.")
-app.add_typer(preprocess_app, name="preprocess")
-app.add_typer(model_app, name="model")
-register_feature_commands(model_app)
+from models.ranking_dataset import FeatureSchema
+from models.serialization.inputs import parse_feature_inputs
+from models.serialization.outputs import (
+    audit_payload,
+    model_audit_payload,
+    model_evaluation_payload,
+    model_features_payload,
+)
+from models.walk_forward import WalkForwardConfig, evaluate_walk_forward
+from preprocesser.data_preprocesser import DataPreprocesser
+from retriever.data_retriever import DataRetriever
+from retriever.setting import JVLinkConfig
+from utils.json_output import write_json
+from utils.loader.read_json import read_json
 
 DataConfigOption = Annotated[
     Path,
@@ -46,7 +50,41 @@ JVLinkConfigOption = Annotated[
 ]
 
 
-@app.callback(invoke_without_command=True)
+@dataclass(frozen=True)
+class _RaceOptions:
+    race_datetime: datetime | None
+    jyo_code: str | None
+    kaiji: str | None
+    nichiji: str | None
+    race_number: str | None
+
+    @property
+    def specified(self) -> bool:
+        return any(
+            value is not None
+            for value in (
+                self.race_datetime,
+                self.jyo_code,
+                self.kaiji,
+                self.nichiji,
+                self.race_number,
+            )
+        )
+
+    def require_complete(self, message: str) -> RaceKey:
+        if (
+            self.race_datetime is None
+            or self.jyo_code is None
+            or self.kaiji is None
+            or self.nichiji is None
+            or self.race_number is None
+        ):
+            raise typer.BadParameter(message)
+        return RaceKey(
+            self.race_datetime.date(), self.jyo_code, self.kaiji, self.nichiji, self.race_number
+        )
+
+
 def main(
     ctx: typer.Context,
     retrieve: Annotated[
@@ -92,33 +130,16 @@ def main(
     ] = None,
 ) -> None:
     """Run a retrieval workflow selected by the mode option."""
+    race = _RaceOptions(race_datetime, jyo_code, kaiji, nichiji, race_number)
+    odds_options = bool(plan_only or recover or confirm_provider_missing or data_spec)
+    retrieval_options = odds_options or race.specified
     if ctx.invoked_subcommand is not None:
-        if (
-            retrieve
-            or mode is not None
-            or plan_only
-            or recover
-            or confirm_provider_missing
-            or data_spec
-            or any(
-                value is not None
-                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
-            )
-        ):
+        if retrieve or mode is not None or retrieval_options:
             raise typer.BadParameter("retrieval options cannot be used with a subcommand")
         return
 
     if not retrieve and mode is None:
-        if (
-            plan_only
-            or recover
-            or confirm_provider_missing
-            or data_spec
-            or any(
-                value is not None
-                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
-            )
-        ):
+        if retrieval_options:
             raise typer.BadParameter("retrieval options require --retrieve --mode")
         return
     if plan_only and recover:
@@ -129,65 +150,30 @@ def main(
         )
     if not retrieve:
         raise typer.BadParameter("--mode requires --retrieve")
-    if mode == "historical-basic":
-        if (
-            plan_only
-            or recover
-            or confirm_provider_missing
-            or data_spec
-            or any(
-                value is not None
-                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
-            )
-        ):
+    if mode in {"historical-basic", "latest"}:
+        if retrieval_options:
             raise typer.BadParameter("odds-only options require --mode historical-odds")
-        retrieve_historical_basic(data_config, jvlink_config)
+        if mode == "historical-basic":
+            retrieve_historical_basic(data_config, jvlink_config)
+        else:
+            retrieve_latest(data_config, jvlink_config)
         return
     if mode == "historical-odds":
         if confirm_provider_missing:
-            race_key = _require_provider_missing_race(
-                race_datetime, jyo_code, kaiji, nichiji, race_number
-            )
+            race_key = _require_provider_missing_race(race)
             specs = _provider_missing_specs(data_spec)
             confirm_historical_odds_provider_missing(race_key, specs, data_config, jvlink_config)
             return
-        if (
-            any(
-                value is not None
-                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
-            )
-            or data_spec
-        ):
+        if race.specified or data_spec:
             raise typer.BadParameter(
                 "race options and --data-spec require --confirm-provider-missing"
             )
         retrieve_historical_odds(data_config, jvlink_config, plan_only=plan_only, recover=recover)
         return
-    if mode == "latest":
-        if (
-            plan_only
-            or recover
-            or confirm_provider_missing
-            or data_spec
-            or any(
-                value is not None
-                for value in (race_datetime, jyo_code, kaiji, nichiji, race_number)
-            )
-        ):
-            raise typer.BadParameter("odds-only options require --mode historical-odds")
-        retrieve_latest(data_config, jvlink_config)
-        return
     if mode == "realtime":
-        if plan_only or recover or confirm_provider_missing or data_spec:
+        if odds_options:
             raise typer.BadParameter("odds-only options require --mode historical-odds")
-        race_key = _resolve_realtime_race(
-            jvlink_config,
-            race_datetime,
-            jyo_code,
-            kaiji,
-            nichiji,
-            race_number,
-        )
+        race_key = _resolve_realtime_race(jvlink_config, race)
         retrieve_realtime(race_key, data_config, jvlink_config)
         return
     raise typer.BadParameter(
@@ -212,24 +198,12 @@ def _preprocesser(data_config: Path) -> DataPreprocesser:
 
 def _resolve_realtime_race(
     jvlink_config: Path,
-    race_datetime: datetime | None,
-    jyo_code: str | None,
-    kaiji: str | None,
-    nichiji: str | None,
-    race_number: str | None,
+    race: _RaceOptions,
 ) -> RaceKey:
-    values = (race_datetime, jyo_code, kaiji, nichiji, race_number)
-    if any(value is not None for value in values):
-        if any(value is None for value in values):
-            raise typer.BadParameter(
-                "realtime CLI options must include --date, --jyo, --kaiji, --nichiji, and --race"
-            )
-        assert race_datetime is not None
-        assert jyo_code is not None
-        assert kaiji is not None
-        assert nichiji is not None
-        assert race_number is not None
-        return RaceKey(race_datetime.date(), jyo_code, kaiji, nichiji, race_number)
+    if race.specified:
+        return race.require_complete(
+            "realtime CLI options must include --date, --jyo, --kaiji, --nichiji, and --race"
+        )
 
     configured_race = JVLinkConfig.from_toml(jvlink_config).realtime_race
     if configured_race is None:
@@ -239,26 +213,12 @@ def _resolve_realtime_race(
     return configured_race
 
 
-def _require_provider_missing_race(
-    race_datetime: datetime | None,
-    jyo_code: str | None,
-    kaiji: str | None,
-    nichiji: str | None,
-    race_number: str | None,
-) -> RaceKey:
+def _require_provider_missing_race(race: _RaceOptions) -> RaceKey:
     """Require an explicit complete RaceKey for a provider-gap confirmation."""
-    values = (race_datetime, jyo_code, kaiji, nichiji, race_number)
-    if any(value is None for value in values):
-        raise typer.BadParameter(
+    try:
+        return race.require_complete(
             "--confirm-provider-missing requires --date, --jyo, --kaiji, --nichiji, and --race"
         )
-    assert race_datetime is not None
-    assert jyo_code is not None
-    assert kaiji is not None
-    assert nichiji is not None
-    assert race_number is not None
-    try:
-        return RaceKey(race_datetime.date(), jyo_code, kaiji, nichiji, race_number)
     except ValueError as exc:
         raise typer.BadParameter(f"invalid provider-missing RaceKey: {exc}") from exc
 
@@ -383,7 +343,6 @@ def retrieve_realtime(
     typer.echo(f"realtime Parquet published: {sum(tables.values())} rows")
 
 
-@preprocess_app.command("rebuild")
 def preprocess_rebuild(
     data_config: DataConfigOption = Path("config/data.toml"),
 ) -> None:
@@ -392,7 +351,68 @@ def preprocess_rebuild(
     typer.echo(f"processed snapshot published: {len(tables)} tables")
 
 
-@model_app.command("walk-forward")
+def register_feature_commands(model_app: typer.Typer) -> None:
+    """Register the audit, features, and explanatory-variables commands."""
+    model_app.command("audit")(model_audit)
+    model_app.command("features")(model_features)
+    model_app.command("explanatory-variables")(model_explanatory_variables)
+
+
+def model_audit(
+    input_path: Annotated[Path, typer.Option("--input", help="Feature input JSON path.")],
+    output_path: Annotated[Path, typer.Option("--output", help="Audit output JSON path.")],
+) -> None:
+    """Audit feature availability at each row's freeze time."""
+    schema, records = read_feature_inputs_or_exit(input_path, output_path)
+    audit = audit_feature_availability(records, feature_schema=schema)
+    write_json(output_path, model_audit_payload(schema, records, audit))
+    if not audit.valid:
+        raise typer.Exit(code=1)
+
+
+def model_features(
+    input_path: Annotated[Path, typer.Option("--input", help="Feature input JSON path.")],
+    output_path: Annotated[Path, typer.Option("--output", help="Generated feature JSON path.")],
+) -> None:
+    """Generate validated feature rows without imputing missing values."""
+    schema, records = read_feature_inputs_or_exit(input_path, output_path)
+    try:
+        result = build_features(records, feature_schema=schema)
+    except FeatureGenerationError as exc:
+        _exit_input_error(
+            output_path, exc, schema_id=schema.schema_id, audit=audit_payload(exc.audit)
+        )
+    except ValueError as exc:
+        _exit_input_error(output_path, exc, schema_id=schema.schema_id)
+    write_json(output_path, model_features_payload(schema, result))
+
+
+def model_explanatory_variables(
+    input_path: Annotated[Path, typer.Option("--input", help="Feature input JSON path.")],
+    output_path: Annotated[Path, typer.Option("--output", help="Feature output JSON path.")],
+    features_config: Annotated[
+        Path, typer.Option("--features-config", help="Feature registration TOML path.")
+    ] = Path("config/features.toml"),
+) -> None:
+    """Validate F01-F21 feature values without using the model schema."""
+    try:
+        registry = create_feature_registry(load_feature_definitions(features_config))
+        records = _read_explanatory_inputs(input_path)
+        result = build_explanatory_variables(records, registry=registry)
+    except typer.BadParameter as exc:
+        _exit_input_error(output_path, exc)
+    except FeatureBuildError as exc:
+        _exit_input_error(
+            output_path,
+            exc,
+            feature_ids=list(registry.feature_ids),
+            audit=feature_audit_payload(exc.audit),
+        )
+    except (OSError, TypeError, ValueError) as exc:
+        _exit_input_error(output_path, exc)
+    write_json(output_path, explanatory_payload(result, feature_ids=registry.feature_ids))
+
+
 def model_walk_forward(
     input_path: Annotated[Path, typer.Option("--input", help="Labeled feature input JSON path.")],
     output_path: Annotated[Path, typer.Option("--output", help="Evaluation output JSON path.")],
@@ -421,64 +441,74 @@ def model_walk_forward(
             ),
         )
     except FeatureGenerationError as exc:
-        write_json(
-            output_path,
-            {
-                "schema_id": schema.schema_id,
-                "audit": audit_payload(exc.audit),
-                "error": input_error_payload(exc),
-            },
+        _exit_input_error(
+            output_path, exc, schema_id=schema.schema_id, audit=audit_payload(exc.audit)
         )
-        raise typer.Exit(code=1) from exc
     except ValueError as exc:
-        write_json(
-            output_path,
-            {"schema_id": schema.schema_id, "error": input_error_payload(exc)},
-        )
-        raise typer.Exit(code=1) from exc
+        _exit_input_error(output_path, exc, schema_id=schema.schema_id)
     write_json(
         output_path,
-        {
-            "schema_id": schema.schema_id,
-            "feature_names": list(schema.feature_names),
-            "audit": audit_payload(audit_feature_availability(records, feature_schema=schema)),
-            "evaluation": _walk_forward_payload(evaluation),
-        },
+        model_evaluation_payload(
+            schema, audit_feature_availability(records, feature_schema=schema), evaluation
+        ),
     )
 
 
-def _walk_forward_payload(evaluation: WalkForwardEvaluation) -> dict[str, object]:
-    return {
-        "metrics": _metrics_payload(evaluation.metrics),
-        "folds": [
-            {
-                "fold_index": result.fold.fold_index,
-                "train_race_ids": list(result.fold.train_race_ids),
-                "validation_race_ids": list(result.fold.validation_race_ids),
-                "test_race_ids": list(result.fold.test_race_ids),
-                "train_freeze_at": [
-                    freeze_at.isoformat() for freeze_at in result.fold.train_freeze_at
-                ],
-                "validation_freeze_at": [
-                    freeze_at.isoformat() for freeze_at in result.fold.validation_freeze_at
-                ],
-                "test_freeze_at": [
-                    freeze_at.isoformat() for freeze_at in result.fold.test_freeze_at
-                ],
-                "metrics": _metrics_payload(result.metrics),
-            }
-            for result in evaluation.fold_results
-        ],
-    }
+def read_feature_inputs_or_exit(
+    input_path: Path,
+    output_path: Path,
+) -> tuple[FeatureSchema, tuple[FeatureInput, ...]]:
+    """Read feature inputs, or write the input error and exit with code 1."""
+    try:
+        return _read_feature_inputs(input_path)
+    except typer.BadParameter as exc:
+        _exit_input_error(output_path, exc)
 
 
-def _metrics_payload(metrics: RankingMetrics) -> dict[str, float]:
-    value = metrics
-    return {
-        "ndcg_at_3": value.ndcg_at_3,
-        "top1_accuracy": value.top1_accuracy,
-        "top3_overlap": value.top3_overlap,
-    }
+def _read_feature_inputs(path: Path) -> tuple[FeatureSchema, tuple[FeatureInput, ...]]:
+    return _parse_inputs(path, parse_feature_inputs)
+
+
+def _read_explanatory_inputs(path: Path) -> tuple[FeatureBatchInput, ...]:
+    return _parse_inputs(path, parse_explanatory_inputs)
+
+
+def _parse_inputs[T](path: Path, parser: Callable[[dict[str, object]], T]) -> T:
+    payload = _read_json_object(path)
+    try:
+        return parser(payload)
+    except (TypeError, ValueError) as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def _read_json_object(path: Path) -> dict[str, object]:
+    try:
+        return read_json(path)
+    except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise typer.BadParameter(f"cannot read input JSON: {exc}") from exc
+    except ValueError as exc:
+        raise typer.BadParameter(str(exc)) from exc
+
+
+def input_error_payload(error: Exception) -> dict[str, str]:
+    """Return the structured input error used by model commands."""
+    return {"type": "input", "message": str(error)}
+
+
+def _exit_input_error(output_path: Path, error: Exception, **context: object) -> NoReturn:
+    write_json(output_path, {**context, "error": input_error_payload(error)})
+    raise typer.Exit(code=1) from error
+
+
+app = typer.Typer(no_args_is_help=True)
+preprocess_app = typer.Typer(no_args_is_help=True, help="Publish processed Parquet data.")
+model_app = typer.Typer(no_args_is_help=True, help="Build features and evaluate ranking models.")
+app.add_typer(preprocess_app, name="preprocess")
+app.add_typer(model_app, name="model")
+app.callback(invoke_without_command=True)(main)
+preprocess_app.command("rebuild")(preprocess_rebuild)
+model_app.command("walk-forward")(model_walk_forward)
+register_feature_commands(model_app)
 
 
 if __name__ == "__main__":

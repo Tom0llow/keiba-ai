@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable, Sequence
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 
@@ -9,15 +10,18 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from features.common.feature_table import write_feature_table
+import make_datamart as datamart_api
+from features.contracts.rows import FeatureTableRow
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
 from features.previous_race_result import PreviousRaceResultInput, build_previous_race_result
+from features.tables.build import build_feature_table
+from features.tables.parquet import write_feature_table
+from make_datamart import builder as builder_api
 from make_datamart.builder import (
     join_feature_tables,
     make_datamart,
-    read_datamart,
-    write_datamart,
 )
+from make_datamart.tables.parquet import read_datamart, write_datamart
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)
@@ -96,6 +100,23 @@ def test_datamart_rejects_duplicate_feature_name() -> None:
         join_feature_tables([_base_table(), _base_table()])
 
 
+@pytest.mark.parametrize("first_column", ["past_value", "second_feature__available_at"])
+def test_datamart_rejects_value_and_availability_column_collisions(first_column: str) -> None:
+    names = ("first_feature", "second_feature")
+    tables = [
+        build_feature_table(
+            name,
+            [FeatureTableRow("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, {column: 1})],
+            column_types={column: pa.int64()},
+            registered_names=names,
+        )
+        for name, column in zip(names, (first_column, "past_value"), strict=True)
+    ]
+
+    with pytest.raises(ValueError, match="feature column collision"):
+        join_feature_tables(tables, registered_names=names)
+
+
 def test_datamart_rejects_incomplete_saved_schema(tmp_path: Path) -> None:
     table = join_feature_tables([_base_table(), _odds_table()])
     invalid = table.drop(["odds_ratio"])
@@ -133,4 +154,51 @@ def test_datamart_round_trips_through_parquet(tmp_path: Path) -> None:
     datamart_path = tmp_path / "datamart.parquet"
     write_datamart(table, datamart_path)
 
-    assert read_datamart(datamart_path).equals(table)
+    assert read_datamart(datamart_path).equals(table, check_metadata=True)
+
+
+@pytest.mark.parametrize(
+    ("build", "make", "join", "write", "read"),
+    [
+        pytest.param(
+            datamart_api.build_datamart,
+            datamart_api.make_datamart,
+            datamart_api.join_feature_tables,
+            datamart_api.write_datamart,
+            datamart_api.read_datamart,
+            id="package",
+        ),
+        pytest.param(
+            builder_api.build_datamart,
+            builder_api.make_datamart,
+            builder_api.join_feature_tables,
+            builder_api.write_datamart,
+            builder_api.read_datamart,
+            id="builder",
+        ),
+    ],
+)
+def test_existing_public_datamart_functions_preserve_round_trip(
+    tmp_path: Path,
+    build: Callable[[Sequence[str | Path]], pa.Table],
+    make: Callable[[Sequence[str | Path]], pa.Table],
+    join: Callable[[Sequence[pa.Table]], pa.Table],
+    write: Callable[[pa.Table, str | Path], None],
+    read: Callable[[str | Path], pa.Table],
+) -> None:
+    tables = [_base_table(), _odds_table()]
+    paths = [tmp_path / "previous.parquet", tmp_path / "odds.parquet"]
+    for table, path in zip(tables, paths, strict=True):
+        write_feature_table(table, path)
+    expected = join(tables)
+
+    assert build(paths).equals(expected, check_metadata=True)
+    assert make(paths).equals(expected, check_metadata=True)
+    destination = tmp_path / "datamart.parquet"
+    write(expected, destination)
+    assert read_datamart(destination).equals(expected, check_metadata=True)
+    assert read(destination).equals(expected, check_metadata=True)
+
+    canonical_destination = tmp_path / "canonical.parquet"
+    write_datamart(expected, canonical_destination)
+    assert read(canonical_destination).equals(expected, check_metadata=True)

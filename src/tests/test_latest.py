@@ -3,8 +3,8 @@
 from pathlib import Path
 from unittest.mock import Mock
 
-from data.retriever.latest import LatestRetriever
-from data.retriever.setting import JVLinkProfile
+from retriever.latest import LatestRetriever
+from retriever.setting import JVLinkProfile
 
 
 def test_latest_reuses_persistent_runtime_setting(tmp_path: Path) -> None:

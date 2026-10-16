@@ -96,34 +96,41 @@ and literal argv integration remain separate manual installation checks.
 ```text
 config/
 ├─ data.toml
-└─ jvlink.toml
+├─ jvlink.toml
+└─ features.toml
 
 src/
-├─ main.py
-├─ data/
-│  ├─ config.py
-│  ├─ data_retriever.py
-│  ├─ data_preprocesser.py
-│  ├─ data_loader.py
-│  ├─ race_key.py
-│  ├─ retriever/
-│  │  ├─ historical.py
-│  │  ├─ jvlinktosqlite.py
-│  │  ├─ latest.py
-│  │  ├─ odds_archive.py
-│  │  ├─ acquisition_lock.py
-│  │  ├─ progress.py
-│  │  ├─ realtime.py
-│  │  ├─ setting.py
-│  │  └─ weekly.py
-│  ├─ preprocesser/
-│  │  ├─ __init__.py
-│  │  ├─ read_sqlite.py
-│  │  └─ snapshot.py
-│  └─ loader/
-│     ├─ __init__.py
-│     ├─ read_json.py
-│     └─ read_parquet.py
+├─ main.py                       # CLI定義・実行制御・エラー処理
+├─ retriever/                    # JV-Link取得と台帳・ロック
+│  ├─ raw_snapshot.py             # 接続を閉じて返すraw観測
+│  ├─ progress.py                 # 台帳・移行・取得証拠の永続化
+│  ├─ progress_state.py           # 進捗の値型・純粋な突合
+│  └─ progress_output.py          # 台帳確定後の派生レポート
+├─ preprocesser/                 # raw SQLiteからParquetへの公開
+├─ utils/
+│  ├─ data_loader.py              # 処理済みデータ読込API
+│  ├─ json_output.py              # 汎用JSON出力・NaNのnull変換
+│  └─ loader/                     # Parquet・JSON読込
+├─ settings/data_paths.py         # 共有パス設定
+├─ domain/race_key.py             # 共有レース識別型
+├─ features/
+│  ├─ catalog/                    # TOML読込・実装登録
+│  ├─ contracts/                  # 入力・中間行・結果の型
+│  ├─ serialization/              # 特徴量入力・結果の純粋なJSON変換
+│  ├─ validation/                 # 入力・時点・テーブル検証
+│  ├─ generation/                 # 共通生成手順・正規化
+│  ├─ tables/                     # スキーマ・構築・Parquet保存
+│  └─ ...                         # 説明変数固有の入力・生成
+├─ make_datamart/
+│  ├─ builder.py                  # 中間テーブル読込・純粋な結合
+│  ├─ validation/table.py         # 結合後のスキーマ・行検証
+│  └─ tables/                    # 列・metadata契約とParquet保存
+├─ models/                        # モデル入力・学習・評価
+│  ├─ ranker.py                    # 推論とレース内順位
+│  ├─ artifacts.py                 # native成果物の公開・検証・復旧
+│  ├─ lightgbm_backend.py          # 遅延読込とLightGBM接続
+│  ├─ ranking_rules.py             # 固定学習契約・共通順位規則
+│  └─ serialization/              # モデル入力・結果の純粋なJSON変換
 └─ tests/
    └─ ...
 ```
@@ -146,25 +153,29 @@ This boundary is recorded in ADR-008.
 
 ## Retrieval boundary
 
-`src/main.py` is the user-facing Typer entry point for historical-basic,
-historical-odds, latest, and
-prediction-time realtime retrieval, standalone preprocessing, and the model
-commands `model audit`, `model features`, `model explanatory-variables`, and
-`model walk-forward`. `src/features/make_features.py` registers and executes
-the feature audit/generation commands; `main.py` retains retrieval,
-preprocessing, and walk-forward orchestration. XML
-transformation, feature validation, and model evaluation remain below the CLI
-boundary.
+`src/main.py` defines all Typer applications, command registration, options and
+handlers. It validates CLI options, creates configured dependencies only during
+execution, composes acquisition/publication and feature/evaluation calls, and
+handles console output, structured CLI errors and exit codes. Its `__main__`
+guard invokes the app; importing the module or requesting help does not read
+configuration or inputs or start a workflow. Lower-level code does not import
+`main` or Typer. ADR-022 records this boundary and removes `src/run/`.
+Within `main.py`, `_RaceOptions` groups optional race arguments without reading
+configuration or validating a race before its selected mode requires it.
+Shared option predicates preserve validation priority; input parsing and JSON
+error exits share small boundary functions. Complete success documents are
+assembled by feature/model serializers, while main owns auditing, execution,
+writing and exit decisions. ADR-023 records these refinements.
 
-`src/data/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
+`src/retriever/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
 and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
 `JVLinkSettingBuilder`, and one `OddsArchive`.
-`src/data/retriever/jvlinktosqlite.py` owns the local subprocess boundary to
+`src/retriever/jvlinktosqlite.py` owns the local subprocess boundary to
 `JVLinkToSQLite.exe`, passes arguments without a shell, and does not own JRA-VAN
 credentials or parse JV-Data directly. This external process boundary is
 recorded in ADR-005.
 
-`src/data/retriever/setting.py` validates `config/jvlink.toml` and translates
+`src/retriever/setting.py` validates `config/jvlink.toml` and translates
 semantic retrieval profiles into JVLinkToSQLite XML. The installed `setting.xml`
 is treated as a seed and is not modified by keiba-ai. Normal, setup, and realtime
 section enablement plus DataSpec allow-lists are applied explicitly; configured
@@ -218,6 +229,17 @@ automatically when an older v1 ledger is first updated. An older
 `provider_missing/jvopen_no_data` row without API evidence is migrated to
 `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data`
 rows require the captured `JVOpen`/`JVRTOpen = -1` result.
+`progress.py` owns ledger transactions, migrations, ownership checks and API
+evidence. `progress_state.py` owns progress/result values and pure reconciliation;
+`raw_snapshot.py` observes raw data and closes readers before external writes.
+Historical presence checks and yearly-batch period/schema checks remain distinct.
+`odds_contract.py` shares only raw table mappings and complete key columns.
+`progress_output.py` writes derived JSON/TOML after ledger commits; these files
+do not decide acquisition or recovery state. Its ledger type dependency is
+limited to type checking. Weekly acquisition retains the lock and ordered
+request/quarantine/reset/commit steps, separating request classification from
+batch metrics. Existing progress helper imports and `weekly.WeeklyBatchResult`
+remain available through re-exports.
 Historical-basic, historical-odds, latest, and realtime writes share the raw DB OS lock and
 reject unresolved historical-odds requests. The API return-code mapping is defined by
 the [JRA-VAN JV-Link API error-code list](https://developer.jra-van.jp/t/topic/822).
@@ -248,13 +270,13 @@ contract. The staging/archive boundary is recorded in ADR-007.
 
 ## Preprocessing boundary
 
-`src/data/data_preprocesser.py` is the public raw-to-processed orchestration
-facade. `src/data/preprocesser/read_sqlite.py` exclusively owns read-only access
+`src/preprocesser/data_preprocesser.py` is the public raw-to-processed orchestration
+facade. `src/preprocesser/read_sqlite.py` exclusively owns read-only access
 to `race.db`; it opens a consistent SQLite snapshot, streams bounded batches,
 preserves source column names/order/text/NULLs, writes Parquet, and validates the
 resulting schema and row count.
 
-`src/data/preprocesser/snapshot.py` owns publication. Complete historical/latest
+`src/preprocesser/snapshot.py` owns publication. Complete historical/latest
 processed datasets are immutable directories under:
 
 ```text
@@ -281,6 +303,9 @@ venue, meeting, meeting day, and race number. It writes both O1/O2 files to a
 new version and atomically switches the race-local `CURRENT` pointer only after
 both files validate. Realtime preprocessing therefore stays race-scoped rather
 than rebuilding the complete historical dataset for each prediction refresh.
+`SnapshotPublisher` uses one internal publication procedure for staging,
+export, version publication and pointer switching, with explicit table/filter
+selection for complete and race-scoped snapshots.
 
 Historical-basic retrieval automatically calls a complete `rebuild` after base
 data retrieval. Historical-odds retrieval defers that complete `rebuild` until
@@ -294,8 +319,8 @@ ADR-008 supersedes ADR-003 for this preprocessing/publication contract.
 
 ## Loader boundary
 
-`src/data/data_loader.py` is the public processed-data facade.
-`src/data/loader/read_parquet.py` is the concrete Parquet reader. Loader modules
+`src/utils/data_loader.py` is the public processed-data facade.
+`src/utils/loader/read_parquet.py` is the concrete Parquet reader. Loader modules
 never open raw SQLite.
 
 The loader can:
@@ -308,14 +333,29 @@ The loader can:
 This means model code has one storage contract—Parquet—regardless of whether the
 source data arrived through historical, latest, or realtime retrieval.
 
-`src/data/loader/read_json.py` separately reads explicit UTF-8 JSON object
+`src/utils/loader/read_json.py` separately reads explicit UTF-8 JSON object
 inputs for CLI workflows. It preserves decoded values and does not depend on
-Typer, feature contracts, or the Parquet `DataLoader` facade. Feature input
-conversion, structured CLI errors, and JSON output remain in
-`src/features/make_features.py`. ADR-019 records this placement; no `src/run`
-package is introduced.
+Typer, feature contracts, or the Parquet `DataLoader` facade.
+`features/serialization/inputs.py` converts already-decoded objects to
+`FeatureBatchInput` and `FeatureGroupInput`; its `outputs.py` converts feature
+audits and results to JSON-ready dictionaries. `models/serialization/` owns the
+distinct model schema/input and availability/evaluation result conversions.
+Output serializers also assemble complete success documents from existing
+schemas, records, audits and evaluations; they never execute an audit themselves.
+These pure converters perform no I/O and raise ordinary validation exceptions.
+`main.py` translates input errors to the existing CLI JSON and exit code.
+`utils/json_output.py` writes generic UTF-8 JSON, creates parent directories and
+converts nested NaN values to null without mutating input values. It does not
+depend on feature/model contracts or Typer. ADR-022 replaces only ADR-020's CLI
+placement decision; ADR-021's shared and datamart boundaries remain in effect.
 
 ## Configuration and persisted state
+
+`settings/data_paths.py` owns explicit `DataPaths` TOML loading and path
+resolution; it has no global instance or implicit default settings.
+`domain/race_key.py` owns the immutable `RaceKey` shared by retrieval,
+preprocessing and loading. `retriever/race_key_parser.py` converts raw
+race-key rows without I/O. ADR-021 records this placement.
 
 `config/data.toml` owns the raw SQLite path, processed directory, and JVLink
 runtime directory. `config/jvlink.toml` owns the local executable/seed paths,
@@ -348,6 +388,16 @@ feature rows from its caller. ADR-010 records this model boundary and artifact
 contract. Missing feature values, including unavailable odds history, remain
 missing and are passed through without final-odds fallback or imputation. Equal
 scores are ordered by horse ID, independently of input row order.
+`models/ranker.py` owns the booster wrapper and prediction. Its existing
+`RankingModel.save/load` delegate to `NativeModelArtifact` in `artifacts.py`,
+which owns native/metadata/ready/publishing files, hashes and publication recovery.
+The artifact boundary validates booster/schema agreement before publishing and
+returns loaded booster/schema metadata without importing `RankingModel`.
+`lightgbm_backend.py` owns public backend protocols, delayed imports, fit and
+native loading. `ranking_rules.py` shares fixed objective/gain and race ordering
+between datasets, training, inference and evaluation. Combined evaluation
+validates and orders scores once; standalone metric and prediction APIs retain
+their input validation. ADR-023 preserves ADR-010's artifact format and API.
 `src/models/dataset_builder.py` validates explicit numeric model inputs and their
 timezone-aware availability against `freeze_at`, projects the approved schema,
 and builds `RankingDataset`. It does not own intermediate table schemas.
@@ -360,35 +410,69 @@ source evidence; no unapproved business formulas are introduced. The thin
 `explanatory_variables.py` facade combines their individual row-generation APIs.
 F01-F21 identifiers are `feature_id`, not candidate identifiers, and remain
 independent of numeric model adoption.
+F01-F21 use `RegisteredFeatureBuilder`, a specialization requiring an explicit
+definition and dedicated input type. Public single-feature generation audits
+inputs before feature-owned normalization. Batch generation runs the shared
+audit once, delegates additional checks to registered builders, then uses an
+internal audited-row path through each owning module. Market-specific checks
+belong to `MarketCharacteristicsBuilder`; batch orchestration does not import
+that implementation. The original three builders retain their existing base
+and optional definition contract. Single-market generation stops on shared
+audit failures; batch auditing still appends market violations in the existing
+order. No public validation-skip option or business formula is introduced.
 
-Shared feature responsibilities are located under `src/features/common/`:
+Shared feature responsibilities are grouped by their contracts:
 
-| Module | Responsibility |
+| Directory / module | Responsibility |
 | --- | --- |
-| `base.py` | Common row-generation and table-building procedure, with a batch hook for feature-owned calculations. |
-| `rows.py` | The sole intermediate row contract, `FeatureTableRow`. |
-| `types.py` | Explicit source-input types and structured audit/build results, not another middle-row type. |
-| `availability.py` | UTC timestamp parsing and `freeze_at` / `available_at` / `source_event_at` limits. |
-| `leakage.py` | Target-result, future-data, result-column, and historical-source checks. |
-| `validation.py` | Scalar values, missingness, confirmation status, and group-level audit composition. |
-| `audit.py` | Row keys, race shape, freeze-time consistency, and batch audits. |
-| `normalization.py` | Audited explicit inputs to common middle rows without imputation. |
-| `registry.py` | F01-F21 specification, input-type, and individual-builder registration. |
-| `feature_table.py` | Arrow schemas, table validation, and explicit Parquet persistence. |
+| `catalog/loader.py` | Explicit `tomllib` reading and validation of ordered ID/name definitions; no implementation imports. |
+| `catalog/registry.py` | Bind definitions to explicitly named input and builder types; require complete implementation coverage. |
+| `contracts/types.py`, `contracts/rows.py` | Immutable definitions, explicit inputs, audit/build results, and the sole `FeatureTableRow`. |
+| `validation/availability.py`, `leakage.py` | UTC timestamps, target-result and future-data checks. |
+| `validation/groups.py`, `values.py`, `audit.py` | Group evidence, scalar/missingness rules, keys and race consistency. |
+| `validation/table.py` | Table schemas, registered names, keys and availability. |
+| `generation/base.py`, `normalization.py` | Shared build procedure and audited source normalization. |
+| `tables/schema.py`, `build.py`, `parquet.py` | Arrow contracts, construction and explicit persistence. |
+
+`config/features.toml` is the sole source of feature-group IDs, names and order.
+The runtime boundary loads it once, constructs an immutable `FeatureRegistry`,
+and passes that registry to batch auditing and generation. Each individual
+builder/build function receives its `FeatureDefinition` explicitly. No `SPEC`
+constants, derived numbering lists, or hidden catalog singleton remain.
+Python registers only implementation names and types; config never names
+arbitrary Python modules or classes. Unknown names, missing implementations,
+duplicate IDs/names and malformed definitions fail at this boundary.
+
+Table and datamart APIs receive metadata-only `registered_names` explicitly;
+they do not import the registry or individual implementations. Fixed schemas
+for the original three features remain available without that argument, while
+other names require explicit registration. Saved metadata remains subject to
+the same registered-name checks. Package `features` no longer imports/re-exports
+implementations; consumers import the owning modules directly, including
+`features.explanatory_variables` and `features.tables.parquet`.
 
 The three original value-column schemas and saved metadata are unchanged.
 F01-F21 tables require caller-declared scalar column types; ordered type metadata
-is validated when saved and reloaded. `src/make_datamart/` reads the same common
-tables and performs an ordered, validated left join while retaining each
-feature's availability timestamp. It does not generate feature values. Mixed
-tables carry explicit type metadata; existing three-feature datamarts retain
-their original metadata and remain readable. ADR-019 records these boundaries
-and the candidate API/CLI migration, extending the table contract of ADR-012.
+is validated when saved and reloaded. `src/make_datamart/builder.py` reads
+intermediate Parquet inputs and delegates to its pure ordered left join,
+retaining each feature's availability timestamp. It does not generate feature
+values. `make_datamart/tables/schema.py` shares ordered columns, collision
+checks and metadata generation/decoding between construction and validation.
+`make_datamart/validation/table.py` validates schemas, keys, timestamps,
+missingness and finite values. `make_datamart/tables/parquet.py` validates
+before writing and after reading, forwarding explicit `registered_names`.
+Schema and validation do not import the builder. The five existing public
+functions remain available from `make_datamart` and `make_datamart.builder`.
+Mixed tables carry explicit type metadata; existing three-feature datamarts
+retain their original metadata and remain readable. ADR-021 records the shared
+placement and datamart split. ADR-020 retains the feature catalog contract,
+inheriting generation, audit, storage and candidate API/CLI migration from
+ADR-019 and extending the table contract of ADR-012.
 
 `src/models/walk_forward.py`
 performs expanding race-level train/validation/test splits. The model CLI uses
-JSON input at this boundary through `features/make_features.py` and the
-independent JSON reader, and does not start data retrieval implicitly. These
+JSON input at this boundary through `main.py`, the independent JSON reader and
+`models/serialization/inputs.py`, and does not start data retrieval implicitly. These
 modules do not yet interpret raw JRA-VAN business codes or build historical
 aggregates; those transformations remain a separate feature-source
 implementation.

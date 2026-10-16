@@ -7,12 +7,11 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
-from features.common.base import FeatureBuilder
-from features.common.feature_table import FeatureTableRow, IntermediateFeatureTable
-from features.common.normalization import normalize_feature_inputs
-from features.common.types import FeatureGroupSpec, FeatureValuesInput
-
-SPEC = FeatureGroupSpec("F01", "recent_performance")
+from features.contracts.rows import FeatureTableRow
+from features.contracts.types import FeatureDefinition, FeatureValuesInput
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
+from features.tables.schema import IntermediateFeatureTable
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -20,23 +19,27 @@ class RecentPerformanceInput(FeatureValuesInput):
     """Provide explicit recent performance values and source evidence."""
 
 
-class RecentPerformanceBuilder(FeatureBuilder[FeatureValuesInput]):
+class RecentPerformanceBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
-    feature_name = SPEC.label
+    feature_name = "recent_performance"
+    input_type = RecentPerformanceInput
 
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
         return _normalize_recent_performance(records)
 
 
 def build_recent_performance(
-    records: Sequence[RecentPerformanceInput], *, column_types: Mapping[str, pa.DataType]
+    records: Sequence[RecentPerformanceInput],
+    *,
+    definition: FeatureDefinition,
+    column_types: Mapping[str, pa.DataType],
 ) -> IntermediateFeatureTable:
     """Build a table using caller-declared column types without inferring rules."""
-    return RecentPerformanceBuilder().build(records, column_types=column_types)
+    return RecentPerformanceBuilder(definition).build(records, column_types=column_types)
 
 
 def _normalize_recent_performance(
     records: Sequence[FeatureValuesInput],
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, SPEC.feature_id, RecentPerformanceInput)
+    return normalize_audited_feature_inputs(records)
