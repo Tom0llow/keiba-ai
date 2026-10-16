@@ -2,11 +2,55 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
-from models.dataset_builder import AvailabilityAudit, FeatureGenerationResult, TimestampInput
+from models.dataset_builder import (
+    AvailabilityAudit,
+    FeatureGenerationResult,
+    FeatureInput,
+    TimestampInput,
+)
 from models.evaluate_model import RankingMetrics
+from models.ranking_dataset import FeatureSchema
 from models.walk_forward import WalkForwardEvaluation
+
+
+def model_audit_payload(
+    schema: FeatureSchema, records: Sequence[FeatureInput], audit: AvailabilityAudit
+) -> dict[str, object]:
+    """Return a complete audit document, including original freeze times."""
+    return {
+        **_schema_payload(schema),
+        "freeze_at": [freeze_at_payload(record.freeze_at) for record in records],
+        "audit": audit_payload(audit),
+    }
+
+
+def model_features_payload(
+    schema: FeatureSchema, result: FeatureGenerationResult
+) -> dict[str, object]:
+    """Return a complete generated model-feature document."""
+    return {
+        **_schema_payload(schema),
+        "records": generated_records(result),
+        "audit": audit_payload(result.audit),
+    }
+
+
+def model_evaluation_payload(
+    schema: FeatureSchema, audit: AvailabilityAudit, evaluation: WalkForwardEvaluation
+) -> dict[str, object]:
+    """Return a complete walk-forward document from an existing audit and evaluation."""
+    return {
+        **_schema_payload(schema),
+        "audit": audit_payload(audit),
+        "evaluation": walk_forward_payload(evaluation),
+    }
+
+
+def _schema_payload(schema: FeatureSchema) -> dict[str, object]:
+    return {"schema_id": schema.schema_id, "feature_names": list(schema.feature_names)}
 
 
 def freeze_at_payload(value: TimestampInput) -> str:

@@ -1,26 +1,44 @@
-"""Persist weekly acquisition state separately from the raw acquisition store."""
+"""Persist and validate the authoritative historical odds progress ledger."""
 
 from __future__ import annotations
 
-import hashlib
 import json
-import os
 import sqlite3
-import tempfile
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
-from dataclasses import dataclass
 from datetime import date, datetime
 from pathlib import Path
 
 from domain.race_key import RaceKey
 from retriever.acquisition_lock import AcquisitionBlocked, canonical_path
-from retriever.race_key_parser import race_key_from_row
+from retriever.odds_contract import ARCHIVE_TABLES as ARCHIVE_TABLES
+from retriever.odds_contract import KEY_COLUMNS as KEY_COLUMNS
+from retriever.progress_output import atomic_write as atomic_write
+from retriever.progress_state import (
+    RawSnapshot as RawSnapshot,
+)
+from retriever.progress_state import (
+    SpecState as SpecState,
+)
+from retriever.progress_state import (
+    _legacy_policy_hash as _legacy_policy_hash,
+)
+from retriever.progress_state import (
+    candidate_hash as candidate_hash,
+)
+from retriever.progress_state import (
+    policy_hash as policy_hash,
+)
+from retriever.progress_state import (
+    race_key_from_id as race_key_from_id,
+)
+from retriever.progress_state import (
+    reconcile_states as reconcile_states,
+)
+from retriever.raw_snapshot import read_raw_snapshot as read_raw_snapshot
 from retriever.setting import HistoricalOddsBatch, JVLinkProfile
 
 LEDGER_FILENAME = "historical-odds-progress.db"
-ARCHIVE_TABLES = {"0B41": "ARCHIVE_O1_ODDS_TANFUKUWAKU", "0B42": "ARCHIVE_O2_ODDS_UMAREN"}
-KEY_COLUMNS = ("idYear", "idMonthDay", "idJyoCD", "idKaiji", "idNichiji", "idRaceNum")
 TERMINAL_STATES = {"acquired", "provider_missing"}
 API_NAMES = frozenset({"JVOpen", "JVRTOpen", "JVStatus", "JVRead", "JVGets"})
 NO_DATA_API_NAMES = frozenset({"JVOpen", "JVRTOpen"})
@@ -56,108 +74,8 @@ STATE_REASONS = {
 }
 
 
-@dataclass(frozen=True)
-class RawSnapshot:
-    """Represent one consistent read-only snapshot of candidates and archive counts."""
-
-    races: tuple[RaceKey, ...]
-    counts: dict[tuple[str, str], int]
-    schemas: dict[str, str]
-
-
-@dataclass(frozen=True)
-class SpecState:
-    """Represent a ledger entry for one race and one odds DataSpec."""
-
-    race_id: str
-    data_spec: str
-    state: str
-    reason: str
-    before_rows: int
-    after_rows: int
-    attempts: int = 0
-
-
-def race_key_from_id(race_id: str) -> RaceKey:
-    """Validate and restore the complete persisted race key."""
-    if len(race_id) != 16 or not race_id.isdigit():
-        raise AcquisitionBlocked("invalid race_id in progress ledger")
-    return race_key_from_row(
-        (race_id[:4], race_id[4:8], race_id[8:10], race_id[10:12], race_id[12:14], race_id[14:16])
-    )
-
-
-def policy_hash(profile: JVLinkProfile, batch: HistoricalOddsBatch) -> str:
-    """Hash fixed policy without treating generated execution settings as policy."""
-    payload = {
-        "first_year": batch.first_year,
-        "last_year": batch.last_year,
-        "years_per_run": batch.years_per_run,
-        "race_start_date": str(profile.race_start_date),
-        "data_specs": sorted(profile.realtime_data_specs),
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-
-
-def _legacy_policy_hash(
-    profile: JVLinkProfile, batch: HistoricalOddsBatch, frontier: RaceKey
-) -> str:
-    """Recreate the removed frontier policy hash for a one-time ledger migration."""
-    payload = {
-        "first_year": batch.first_year,
-        "last_year": batch.last_year,
-        "years_per_run": batch.years_per_run,
-        "frontier": str(frontier),
-        "race_start_date": str(profile.race_start_date),
-        "data_specs": sorted(profile.realtime_data_specs),
-    }
-    return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
-
-
-def read_raw_snapshot(
-    database_path: Path, profile: JVLinkProfile, batch: HistoricalOddsBatch, cutoff: date
-) -> RawSnapshot:
-    """Read every managed year once and close all readers before acquisition."""
-    if not database_path.is_file():
-        raise FileNotFoundError(f"raw race database does not exist: {database_path}")
-    assert profile.race_start_date is not None
-    lower = profile.race_start_date.strftime("%Y%m%d")
-    upper = min(cutoff, date(batch.last_year, 12, 31)).strftime("%Y%m%d")
-    columns = ", ".join(KEY_COLUMNS)
-    counts: dict[tuple[str, str], int] = {}
-    schemas: dict[str, str] = {}
-    with closing(
-        sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True)
-    ) as database:
-        database.execute("BEGIN")
-        rows = database.execute(
-            f"SELECT DISTINCT {columns} FROM NL_RA_RACE WHERE idYear || idMonthDay BETWEEN ? AND ? "
-            "AND idJyoCD IN ('01','02','03','04','05','06','07','08','09','10') "
-            f"ORDER BY {columns}",
-            (lower, upper),
-        ).fetchall()
-        races = tuple(race_key_from_row(row) for row in rows)
-        for spec in sorted(profile.realtime_data_specs):
-            table = ARCHIVE_TABLES[spec]
-            if not database.execute(
-                "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
-            ).fetchone():
-                continue
-            schema = [(row[1], row[2]) for row in database.execute(f'PRAGMA table_info("{table}")')]
-            if not set(KEY_COLUMNS) <= {name for name, _ in schema}:
-                raise AcquisitionBlocked(f"archive key schema is invalid: {table}")
-            schemas[spec] = hashlib.sha256(json.dumps(schema).encode()).hexdigest()
-            for row in database.execute(
-                f'SELECT {columns}, COUNT(*) FROM "{table}" WHERE idYear || idMonthDay BETWEEN ? AND ? GROUP BY {columns}',
-                (lower, upper),
-            ):
-                key = race_key_from_row(tuple(row[:6]))
-                counts[(key.race_id, spec)] = row[6]
-    return RawSnapshot(races, counts, schemas)
-
-
 class ProgressLedger:
-    """Own versioned weekly state, transactions, and reproducible derived reports."""
+    """Own versioned state, transactions, migrations and acquisition evidence."""
 
     def __init__(
         self, path: Path, raw_db: Path, profile: JVLinkProfile, batch: HistoricalOddsBatch
@@ -694,68 +612,6 @@ class ProgressLedger:
                 "UPDATE runs SET finished_at=?,status=?,report=? WHERE run_id=?",
                 (now.isoformat(), report["status"], json.dumps(report, sort_keys=True), run_id),
             )
-
-
-def reconcile_states(
-    states: dict[tuple[str, str], SpecState], snapshot: RawSnapshot, specs: frozenset[str]
-) -> tuple[dict[tuple[str, str], SpecState], set[int], dict[str, int]]:
-    """Compute reconciliation without writes, including previews."""
-    candidate_pairs = {(key.race_id, spec) for key in snapshot.races for spec in specs}
-    if states.keys() - candidate_pairs:
-        raise AcquisitionBlocked("previously managed race candidates disappeared")
-    proposed = dict(states)
-    changed_years: set[int] = set()
-    adopted = dict.fromkeys(sorted(specs), 0)
-    for key in snapshot.races:
-        for spec in specs:
-            pair = (key.race_id, spec)
-            prior = states.get(pair)
-            count = snapshot.counts.get(pair, 0)
-            if (
-                prior is not None
-                and prior.state == "acquired"
-                and (count == 0 or count < prior.after_rows)
-            ):
-                raise AcquisitionBlocked(f"acquired archive rows disappeared: {key}/{spec}")
-            if count and (prior is None or prior.state != "acquired" or count > prior.after_rows):
-                entry = SpecState(
-                    key.race_id,
-                    spec,
-                    "acquired",
-                    "external_archive_observed",
-                    count,
-                    count,
-                    prior.attempts if prior else 0,
-                )
-                adopted[spec] += 1
-            elif prior is None:
-                entry = SpecState(key.race_id, spec, "pending", "new_candidate", 0, 0)
-            else:
-                entry = prior
-            proposed[pair] = entry
-            if entry != prior:
-                changed_years.add(key.race_date.year)
-    return proposed, changed_years, adopted
-
-
-def candidate_hash(races: tuple[RaceKey, ...]) -> str:
-    """Identify the exact sorted candidate set fixed for a run."""
-    return hashlib.sha256("\n".join(key.race_id for key in races).encode()).hexdigest()
-
-
-def atomic_write(path: Path, content: str) -> None:
-    """Replace one derived artifact after its complete contents are durable."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}-", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as output:
-            output.write(content)
-            output.flush()
-            os.fsync(output.fileno())
-        os.replace(temporary, path)
-    finally:
-        temporary.unlink(missing_ok=True)
 
 
 def _ensure_api_result_columns(database: sqlite3.Connection) -> None:

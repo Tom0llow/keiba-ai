@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import sqlite3
 import tempfile
 from collections.abc import Iterator
-from contextlib import closing
 from dataclasses import replace
 from datetime import date
 from pathlib import Path
@@ -13,14 +11,8 @@ from pathlib import Path
 from domain.race_key import RaceKey
 from retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
 from retriever.odds_archive import OddsArchive
-from retriever.race_key_parser import race_key_from_row
+from retriever.raw_snapshot import iter_historical_race_keys, read_archived_race_keys
 from retriever.setting import JVLinkProfile, JVLinkSettingBuilder
-
-_JRA_JYO_CODES = tuple(f"{code:02d}" for code in range(1, 11))
-_ODDS_ARCHIVE_TABLES = {
-    "0B41": "ARCHIVE_O1_ODDS_TANFUKUWAKU",
-    "0B42": "ARCHIVE_O2_ODDS_UMAREN",
-}
 
 
 class HistoricalRetriever:
@@ -108,42 +100,8 @@ class HistoricalRetriever:
         self._runner.execute(base_setting, skip_last_modified_update=True)
 
     def iter_race_keys(self, *, start_date: date) -> Iterator[RaceKey]:
-        """Yield a snapshot of race keys after closing the SQLite reader connection."""
-        if not self._database.is_file():
-            raise FileNotFoundError(f"raw race database does not exist: {self._database}")
-
-        placeholders = ", ".join("?" for _ in _JRA_JYO_CODES)
-        query = f"""
-            SELECT idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum
-            FROM NL_RA_RACE
-            WHERE idYear || idMonthDay >= ?
-              AND idJyoCD IN ({placeholders})
-            ORDER BY idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum
-        """
-        with closing(sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True)) as database:
-            rows = database.execute(
-                query,
-                (start_date.strftime("%Y%m%d"), *_JRA_JYO_CODES),
-            ).fetchall()
-
-        for row in rows:
-            yield race_key_from_row(row)
+        """Yield race keys after closing the raw SQLite reader connection."""
+        yield from iter_historical_race_keys(self._database, start_date=start_date)
 
     def _archived_race_keys(self) -> dict[str, set[RaceKey]]:
-        archived_races: dict[str, set[RaceKey]] = {}
-        with closing(sqlite3.connect(f"{self._database.as_uri()}?mode=ro", uri=True)) as database:
-            database.execute("BEGIN")
-            for data_spec, table in _ODDS_ARCHIVE_TABLES.items():
-                if data_spec not in self._odds_profile.realtime_data_specs:
-                    continue
-                exists = database.execute(
-                    "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
-                ).fetchone()
-                if exists is None:
-                    continue
-                rows = database.execute(
-                    f"SELECT DISTINCT idYear, idMonthDay, idJyoCD, idKaiji, idNichiji, idRaceNum "
-                    f'FROM "{table}"'
-                ).fetchall()
-                archived_races[data_spec] = {race_key_from_row(row) for row in rows}
-        return archived_races
+        return read_archived_race_keys(self._database, self._odds_profile.realtime_data_specs)

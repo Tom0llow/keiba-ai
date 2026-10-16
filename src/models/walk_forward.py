@@ -173,6 +173,7 @@ def evaluate_walk_forward(
     results: list[WalkForwardFoldResult] = []
     for fold in folds:
         model = train(fold.train)
+        test_dataset = fold.test
         test_rows = tuple(
             FeatureRow(
                 race_id=row.race_id,
@@ -180,14 +181,14 @@ def evaluate_walk_forward(
                 features=row.features,
                 freeze_at=row.freeze_at,
             )
-            for row in fold.test.rows
+            for row in test_dataset.rows
         )
         scores = tuple(model.predict_scores(test_rows))
         results.append(
             WalkForwardFoldResult(
                 fold=fold,
                 scores=scores,
-                metrics=evaluate_ranking(fold.test, scores),
+                metrics=evaluate_ranking(test_dataset, scores),
             )
         )
     return WalkForwardEvaluation(

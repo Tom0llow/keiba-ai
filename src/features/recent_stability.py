@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class RecentStabilityInput(FeatureValuesInput):
     """Provide explicit recent stability values and source evidence."""
 
 
-class RecentStabilityBuilder(FeatureBuilder[FeatureValuesInput]):
+class RecentStabilityBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "recent_stability"
-    definition: FeatureDefinition
+    input_type = RecentStabilityInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_recent_stability(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_recent_stability(records)
 
 
 def build_recent_stability(
@@ -45,6 +41,5 @@ def build_recent_stability(
 
 def _normalize_recent_stability(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, RecentStabilityInput)
+    return normalize_audited_feature_inputs(records)

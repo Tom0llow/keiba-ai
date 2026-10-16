@@ -15,6 +15,7 @@ from features.catalog.loader import load_feature_definitions
 from features.catalog.registry import create_feature_registry
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureBuildError, FeatureValuesInput
+from features.generation.normalization import normalize_feature_inputs
 from features.odds_ratio import OddsRatioInput, build_odds_ratio
 from features.past_racing_ability import PastRacingAbilityBuilder
 from features.tables.build import build_feature_table
@@ -366,9 +367,54 @@ def test_intermediate_table_rejects_result_aliases_with_valid_available_at(
         )
 
 
-def test_individual_builder_rejects_another_features_input_type() -> None:
-    with pytest.raises(TypeError, match="RecentPerformanceInput"):
-        FEATURE_BUILDERS["F01"].build_rows([_input("F02")])
+@pytest.mark.parametrize("feature_id", FEATURE_GROUP_IDS)
+def test_individual_builder_rejects_another_features_input_type(feature_id: str) -> None:
+    other_id = "F02" if feature_id == "F01" else "F01"
+    with pytest.raises(TypeError, match=FEATURE_INPUT_TYPES[feature_id].__name__):
+        FEATURE_BUILDERS[feature_id].build_rows([_input(other_id)])
+
+
+@pytest.mark.parametrize("feature_id", FEATURE_GROUP_IDS)
+def test_individual_builder_preserves_empty_rows_and_explicit_table_schema(feature_id: str) -> None:
+    field_name = next(iter(_input(feature_id).values))
+    builder = FEATURE_BUILDERS[feature_id]
+
+    assert builder.build_rows([]) == []
+    table = builder.build([], column_types={field_name: pa.float64()})
+
+    assert table.num_rows == 0
+    assert table.schema.field(field_name).type == pa.float64()
+    assert table.schema.field("freeze_at").type == pa.timestamp("us", tz="UTC")
+
+
+def test_shared_public_normalization_still_audits_explicit_inputs() -> None:
+    record = _input("F01")
+    rows = normalize_feature_inputs([record], "F01", FEATURE_INPUT_TYPES["F01"])
+
+    assert len(rows) == 1
+    assert rows[0].race_id == record.race_id
+    assert rows[0].horse_id == record.horse_id
+    assert rows[0].freeze_at == FREEZE_AT
+    assert rows[0].available_at == AVAILABLE_AT
+    assert rows[0].values == record.values
+    with pytest.raises(FeatureBuildError):
+        normalize_feature_inputs(
+            [replace(record, contains_future_data=True)], "F01", FEATURE_INPUT_TYPES["F01"]
+        )
+
+
+def test_individual_market_builder_stops_at_shared_audit_failure() -> None:
+    record = replace(_input("F19"), contains_future_data=True, values={"market_unknown": 1.0})
+
+    with pytest.raises(FeatureBuildError) as error:
+        FEATURE_BUILDERS["F19"].build_rows([record])
+
+    assert error.value.audit.records_checked == 1
+    assert error.value.audit.groups_checked == 1
+    assert error.value.audit.non_missing_values == 1
+    assert [violation.reason for violation in error.value.audit.violations] == [
+        "future data is not allowed"
+    ]
 
 
 def test_individual_market_builder_enforces_shared_race_totals() -> None:

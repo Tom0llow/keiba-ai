@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class HistoryVolumeAndMissingnessInput(FeatureValuesInput):
     """Provide explicit history volume and missingness values and source evidence."""
 
 
-class HistoryVolumeAndMissingnessBuilder(FeatureBuilder[FeatureValuesInput]):
+class HistoryVolumeAndMissingnessBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "history_volume_and_missingness"
-    definition: FeatureDefinition
+    input_type = HistoryVolumeAndMissingnessInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_history_volume_and_missingness(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_history_volume_and_missingness(records)
 
 
 def build_history_volume_and_missingness(
@@ -45,8 +41,5 @@ def build_history_volume_and_missingness(
 
 def _normalize_history_volume_and_missingness(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(
-        records, definition.feature_id, HistoryVolumeAndMissingnessInput
-    )
+    return normalize_audited_feature_inputs(records)

@@ -186,6 +186,33 @@ def test_execute_translates_timeout(tmp_path: Path) -> None:
             runner.execute(setting)
 
 
+@pytest.mark.parametrize("streaming", [False, True])
+def test_execute_keeps_api_evidence_on_process_failure(tmp_path: Path, streaming: bool) -> None:
+    executable, setting, database = _create_runner_files(tmp_path)
+    runner = JVLinkToSQLiteRunner(executable, database)
+    output = "[JVRTOpen] RC=-504 (0B41, 2008012701010801)\n"
+
+    class Process:
+        stdout = io.StringIO(output)
+
+        def wait(self) -> int:
+            return 7
+
+    with (
+        patch.object(sys.stdout, "isatty", return_value=streaming),
+        patch("retriever.jvlinktosqlite.subprocess.Popen", return_value=Process()),
+        patch("retriever.jvlinktosqlite.subprocess.run") as run,
+    ):
+        run.side_effect = subprocess.CalledProcessError(7, [str(executable)], output=output)
+        with pytest.raises(JVLinkToSQLiteError, match="status 7") as exc_info:
+            runner.execute(setting)
+
+    assert exc_info.value.returncode == 7
+    assert exc_info.value.api_results == {"0B41": ("JVRTOpen", -504)}
+    assert exc_info.value.api_returncodes == {"0B41": -504}
+    assert exc_info.value.fatal_returncodes == {"0B41": -504}
+
+
 def test_missing_setting_is_rejected_before_process_start(tmp_path: Path) -> None:
     executable, _, database = _create_runner_files(tmp_path)
     runner = JVLinkToSQLiteRunner(executable, database)

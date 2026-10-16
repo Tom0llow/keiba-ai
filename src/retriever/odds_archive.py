@@ -13,12 +13,8 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from domain.race_key import RaceKey
-
-KEY_COLUMNS = ("idYear", "idMonthDay", "idJyoCD", "idKaiji", "idNichiji", "idRaceNum")
-ODDS_TABLES = {
-    "0B41": ("RT_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O1_ODDS_TANFUKUWAKU"),
-    "0B42": ("RT_O2_ODDS_UMAREN", "ARCHIVE_O2_ODDS_UMAREN"),
-}
+from retriever.odds_contract import KEY_COLUMNS as KEY_COLUMNS
+from retriever.odds_contract import ODDS_TABLES as ODDS_TABLES
 
 
 @dataclass(frozen=True)
@@ -31,10 +27,7 @@ class RequestedArchiveResult:
     reason: str
 
 
-_REALTIME_ODDS_TABLES = (
-    ("RT_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O1_ODDS_TANFUKUWAKU"),
-    ("RT_O2_ODDS_UMAREN", "ARCHIVE_O2_ODDS_UMAREN"),
-)
+_REALTIME_ODDS_TABLES = tuple(ODDS_TABLES.values())
 
 
 class OddsArchive:

@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class SameGateAndTrainerRelativeInput(FeatureValuesInput):
     """Provide explicit same gate and trainer relative values and source evidence."""
 
 
-class SameGateAndTrainerRelativeBuilder(FeatureBuilder[FeatureValuesInput]):
+class SameGateAndTrainerRelativeBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "same_gate_and_trainer_relative"
-    definition: FeatureDefinition
+    input_type = SameGateAndTrainerRelativeInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_same_gate_and_trainer_relative(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_same_gate_and_trainer_relative(records)
 
 
 def build_same_gate_and_trainer_relative(
@@ -45,6 +41,5 @@ def build_same_gate_and_trainer_relative(
 
 def _normalize_same_gate_and_trainer_relative(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, SameGateAndTrainerRelativeInput)
+    return normalize_audited_feature_inputs(records)

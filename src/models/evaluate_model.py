@@ -2,12 +2,13 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from dataclasses import dataclass
 from math import isfinite, log2
 from numbers import Real
 
-from models.ranking_dataset import DEFAULT_LABEL_GAIN, RankingDataset
+from models.ranking_dataset import RankingDataset
+from models.ranking_rules import DEFAULT_LABEL_GAIN, race_ranges, score_order
 
 
 @dataclass(frozen=True)
@@ -22,46 +23,37 @@ class RankingMetrics:
 def evaluate_ranking(dataset: RankingDataset, scores: Sequence[float]) -> RankingMetrics:
     """Calculate NDCG@3, Top1, and Top3 overlap for every race."""
     validated_scores = _validate_scores(dataset, scores)
+    ndcg_values: list[float] = []
+    top1_values: list[bool] = []
+    overlap_values: list[float] = []
+    for predicted, actual in _race_orders(dataset, validated_scores):
+        ndcg_values.append(_race_ndcg(dataset.labels, predicted, actual))
+        top1_values.append(_race_top1(dataset.labels, predicted, actual))
+        overlap_values.append(_race_top3_overlap(predicted, actual))
+    race_count = len(dataset.groups)
     return RankingMetrics(
-        ndcg_at_3=ndcg_at_3(dataset, validated_scores),
-        top1_accuracy=top1_accuracy(dataset, validated_scores),
-        top3_overlap=top3_overlap(dataset, validated_scores),
+        ndcg_at_3=sum(ndcg_values) / race_count,
+        top1_accuracy=sum(top1_values) / race_count,
+        top3_overlap=sum(overlap_values) / race_count,
     )
 
 
 def ndcg_at_3(dataset: RankingDataset, scores: Sequence[float]) -> float:
     """Return the mean race-level NDCG@3 using the default LightGBM gains."""
     validated_scores = _validate_scores(dataset, scores)
-    values: list[float] = []
-    for start, stop in _race_ranges(dataset.groups):
-        predicted_order = _score_order(
-            validated_scores,
-            start,
-            stop,
-            tuple(dataset.rows[index].horse_id for index in range(start, stop)),
-        )
-        ideal_order = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
-        predicted_dcg = _dcg(dataset.labels, predicted_order[:3])
-        ideal_dcg = _dcg(dataset.labels, ideal_order[:3])
-        values.append(predicted_dcg / ideal_dcg if ideal_dcg else 0.0)
-    return sum(values) / len(values)
+    return sum(
+        _race_ndcg(dataset.labels, predicted, actual)
+        for predicted, actual in _race_orders(dataset, validated_scores)
+    ) / len(dataset.groups)
 
 
 def top1_accuracy(dataset: RankingDataset, scores: Sequence[float]) -> float:
     """Return the fraction of races whose predicted first row is the winner."""
     validated_scores = _validate_scores(dataset, scores)
-    correct = 0
-    for start, stop in _race_ranges(dataset.groups):
-        predicted_winner = _score_order(
-            validated_scores,
-            start,
-            stop,
-            tuple(dataset.rows[index].horse_id for index in range(start, stop)),
-        )[0]
-        actual_order = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
-        if dataset.labels[actual_order[0]] == 3 and predicted_winner == actual_order[0]:
-            correct += 1
-    return correct / len(dataset.groups)
+    return sum(
+        _race_top1(dataset.labels, predicted, actual)
+        for predicted, actual in _race_orders(dataset, validated_scores)
+    ) / len(dataset.groups)
 
 
 def top3_overlap(dataset: RankingDataset, scores: Sequence[float]) -> float:
@@ -70,20 +62,34 @@ def top3_overlap(dataset: RankingDataset, scores: Sequence[float]) -> float:
     The denominator is three, matching the ADR-009 MVP definition.
     """
     validated_scores = _validate_scores(dataset, scores)
-    overlaps: list[float] = []
-    for start, stop in _race_ranges(dataset.groups):
-        predicted = set(
-            _score_order(
-                validated_scores,
-                start,
-                stop,
-                tuple(dataset.rows[index].horse_id for index in range(start, stop)),
-            )[:3]
-        )
-        actual_order = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
-        actual = set(actual_order[:3])
-        overlaps.append(len(predicted & actual) / 3)
-    return sum(overlaps) / len(overlaps)
+    return sum(
+        _race_top3_overlap(predicted, actual)
+        for predicted, actual in _race_orders(dataset, validated_scores)
+    ) / len(dataset.groups)
+
+
+def _race_orders(
+    dataset: RankingDataset, scores: Sequence[float]
+) -> Iterator[tuple[list[int], list[int]]]:
+    horse_ids = tuple(row.horse_id for row in dataset.rows)
+    for start, stop in race_ranges(dataset.groups):
+        predicted = score_order(scores, horse_ids, start, stop)
+        actual = sorted(range(start, stop), key=lambda index: (-dataset.labels[index], index))
+        yield predicted, actual
+
+
+def _race_ndcg(labels: Sequence[int], predicted: Sequence[int], actual: Sequence[int]) -> float:
+    predicted_dcg = _dcg(labels, predicted[:3])
+    ideal_dcg = _dcg(labels, actual[:3])
+    return predicted_dcg / ideal_dcg if ideal_dcg else 0.0
+
+
+def _race_top1(labels: Sequence[int], predicted: Sequence[int], actual: Sequence[int]) -> bool:
+    return labels[actual[0]] == 3 and predicted[0] == actual[0]
+
+
+def _race_top3_overlap(predicted: Sequence[int], actual: Sequence[int]) -> float:
+    return len(set(predicted[:3]) & set(actual[:3])) / 3
 
 
 def _validate_scores(dataset: RankingDataset, scores: Sequence[float]) -> tuple[float, ...]:
@@ -99,28 +105,6 @@ def _validate_scores(dataset: RankingDataset, scores: Sequence[float]) -> tuple[
     if any(not isfinite(score) for score in validated):
         raise ValueError("scores must be finite")
     return validated
-
-
-def _race_ranges(groups: Sequence[int]) -> tuple[tuple[int, int], ...]:
-    ranges: list[tuple[int, int]] = []
-    start = 0
-    for group in groups:
-        stop = start + group
-        ranges.append((start, stop))
-        start = stop
-    return tuple(ranges)
-
-
-def _score_order(
-    scores: Sequence[float],
-    start: int,
-    stop: int,
-    horse_ids: Sequence[str],
-) -> list[int]:
-    return sorted(
-        range(start, stop),
-        key=lambda index: (-scores[index], horse_ids[index - start]),
-    )
 
 
 def _dcg(labels: Sequence[int], order: Sequence[int]) -> float:

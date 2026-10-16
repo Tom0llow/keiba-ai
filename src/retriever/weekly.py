@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import json
 import tempfile
 import uuid
 from collections.abc import Callable
@@ -14,39 +13,94 @@ from zoneinfo import ZoneInfo
 
 from domain.race_key import RaceKey
 from retriever.acquisition_lock import AcquisitionBlocked, AcquisitionLock
-from retriever.jvlinktosqlite import JVLinkToSQLiteError, JVLinkToSQLiteRunner
-from retriever.odds_archive import OddsArchive
-from retriever.progress import (
-    LEDGER_FILENAME,
-    ProgressLedger,
+from retriever.jvlinktosqlite import (
+    JVLinkExecutionResult,
+    JVLinkToSQLiteError,
+    JVLinkToSQLiteRunner,
+)
+from retriever.odds_archive import OddsArchive, RequestedArchiveResult
+from retriever.progress import LEDGER_FILENAME, ProgressLedger
+from retriever.progress_output import result_payload, write_summary
+from retriever.progress_state import (
     RawSnapshot,
     SpecState,
-    atomic_write,
     race_key_from_id,
-    read_raw_snapshot,
     reconcile_states,
 )
+from retriever.progress_state import (
+    WeeklyBatchResult as WeeklyBatchResult,
+)
+from retriever.raw_snapshot import read_raw_snapshot
 from retriever.setting import HistoricalOddsBatch, JVLinkProfile, JVLinkSettingBuilder
 
 T = TypeVar("T")
 
 
 @dataclass(frozen=True)
-class WeeklyBatchResult:
-    """Summarize one invocation without conflating requests and saved rows."""
+class _RequestOutcome:
+    results: dict[str, tuple[str, str, int]]
+    returncode: int | None
+    api_results: dict[str, tuple[str, int]]
+    inserted_rows: dict[str, int] = field(default_factory=dict)
 
-    status: str
-    year: int | None
-    run_id: str | None
-    requested_races: int
-    requested_specs: int
-    failed_specs: int
-    pending_after: int
-    adopted_races: dict[str, int]
-    plan_only: bool = False
-    new_rows: dict[str, int] = field(default_factory=dict)
-    new_races: dict[str, int] = field(default_factory=dict)
-    new_provider_missing: dict[str, int] = field(default_factory=dict)
+    @property
+    def failed_specs(self) -> frozenset[str]:
+        return frozenset(spec for spec, (state, _, _) in self.results.items() if state == "failed")
+
+
+@dataclass
+class _BatchMetrics:
+    new_rows: dict[str, int]
+    new_races: dict[str, int]
+    new_provider_missing: dict[str, int]
+    requested_races: int = 0
+    requested_specs: int = 0
+    failed_specs: int = 0
+
+    @classmethod
+    def for_specs(cls, specs: frozenset[str]) -> _BatchMetrics:
+        return cls(dict.fromkeys(specs, 0), dict.fromkeys(specs, 0), dict.fromkeys(specs, 0))
+
+    def record(self, specs: frozenset[str], outcome: _RequestOutcome) -> None:
+        self.requested_races += 1
+        self.requested_specs += len(specs)
+        self.failed_specs += len(outcome.failed_specs)
+        for spec, (state, _, _) in outcome.results.items():
+            if state == "acquired":
+                self.new_rows[spec] += outcome.inserted_rows[spec]
+                self.new_races[spec] += 1
+            elif state == "provider_missing":
+                self.new_provider_missing[spec] += 1
+
+
+def _classify_request(
+    execution: JVLinkExecutionResult | None,
+    archived: dict[str, RequestedArchiveResult],
+) -> _RequestOutcome:
+    """Classify saved rows without inferring provider gaps from empty staging."""
+    api_results: dict[str, tuple[str, int]] = getattr(execution, "api_results", {})
+    no_data_specs: frozenset[str] = getattr(execution, "no_data_specs", frozenset())
+    fatal_specs: frozenset[str] = getattr(execution, "fatal_specs", frozenset())
+    results: dict[str, tuple[str, str, int]] = {}
+    inserted_rows: dict[str, int] = {}
+    for spec, value in archived.items():
+        if spec in fatal_specs:
+            results[spec] = ("failed", "jvlink_error", value.after_rows)
+        elif value.acquired:
+            results[spec] = ("acquired", value.reason, value.after_rows)
+            inserted_rows[spec] = value.inserted_rows
+        elif value.reason == "jvopen_no_data" and spec in no_data_specs:
+            results[spec] = ("provider_missing", value.reason, 0)
+        elif value.reason == "jvopen_no_data":
+            results[spec] = ("failed", "empty_response_unverified", 0)
+        else:
+            results[spec] = ("failed", value.reason, value.after_rows)
+    return _RequestOutcome(
+        results,
+        getattr(execution, "process_returncode", None),
+        {spec: api_results[spec] for spec in archived if spec in api_results},
+        inserted_rows,
+    )
 
 
 class WeeklyHistoricalOddsRetriever:
@@ -159,14 +213,7 @@ class WeeklyHistoricalOddsRetriever:
             races = self._races_for_year(states, snapshot.races, year)
             run_id = uuid.uuid4().hex
             ledger.start_run(run_id, year, effective_cutoff, now, races, {"status": "running"})
-            requested_races = 0
-            requested_specs = 0
-            failed_specs = 0
-            new_rows: dict[str, int] = dict.fromkeys(self._odds_profile.realtime_data_specs, 0)
-            new_races: dict[str, int] = dict.fromkeys(self._odds_profile.realtime_data_specs, 0)
-            new_provider_missing: dict[str, int] = dict.fromkeys(
-                self._odds_profile.realtime_data_specs, 0
-            )
+            metrics = _BatchMetrics.for_specs(self._odds_profile.realtime_data_specs)
             with tempfile.TemporaryDirectory(prefix="keiba-ai-weekly-") as temporary_directory:
                 setting_path = Path(temporary_directory) / "historical-odds.xml"
                 for key in races:
@@ -177,81 +224,12 @@ class WeeklyHistoricalOddsRetriever:
                     )
                     if not specs:
                         continue
-                    requested_races += 1
-                    requested_specs += len(specs)
                     counts = {spec: snapshot.counts.get((key.race_id, spec), 0) for spec in specs}
-                    ledger.request(run_id, key, specs, counts, now)
-                    self._quarantine_and_reset(ledger, run_id, key, specs)
-                    profile = replace(self._odds_profile, realtime_data_specs=specs)
-                    self._setting_builder.build(profile, setting_path, race_key=key)
-                    results: dict[str, tuple[str, str, int]] = {}
-                    process_returncode: int | None = None
-                    api_results: dict[str, tuple[str, int]] = {}
-                    try:
-                        execution = self._runner.execute(
-                            setting_path, skip_last_modified_update=True
-                        )
-                        process_returncode = getattr(execution, "process_returncode", None)
-                        execution_api_results: dict[str, tuple[str, int]] = getattr(
-                            execution, "api_results", {}
-                        )
-                        no_data_specs: frozenset[str] = getattr(
-                            execution, "no_data_specs", frozenset()
-                        )
-                        fatal_specs: frozenset[str] = getattr(execution, "fatal_specs", frozenset())
-                        archived = self._archive.archive_request(key, specs)
-                        for spec, value in archived.items():
-                            if spec in fatal_specs:
-                                results[spec] = ("failed", "jvlink_error", value.after_rows)
-                                if spec in execution_api_results:
-                                    api_results[spec] = execution_api_results[spec]
-                            elif value.acquired:
-                                results[spec] = ("acquired", value.reason, value.after_rows)
-                                new_rows[spec] += value.inserted_rows
-                                new_races[spec] += 1
-                                if spec in execution_api_results:
-                                    api_results[spec] = execution_api_results[spec]
-                            elif value.reason == "jvopen_no_data" and spec in no_data_specs:
-                                results[spec] = ("provider_missing", value.reason, 0)
-                                new_provider_missing[spec] += 1
-                                if spec in execution_api_results:
-                                    api_results[spec] = execution_api_results[spec]
-                            elif value.reason == "jvopen_no_data":
-                                results[spec] = ("failed", "empty_response_unverified", 0)
-                                if spec in execution_api_results:
-                                    api_results[spec] = execution_api_results[spec]
-                            else:
-                                results[spec] = ("failed", value.reason, value.after_rows)
-                                if spec in execution_api_results:
-                                    api_results[spec] = execution_api_results[spec]
-                    except JVLinkToSQLiteError as exc:
-                        process_returncode = exc.returncode
-                        api_results = exc.api_results
-                        results = {spec: ("failed", "jvlink_error", counts[spec]) for spec in specs}
-                    except BaseException:
-                        # Keep running rows unresolved so the common lock refuses
-                        # another writer until the operator has inspected staging.
-                        raise
-                    failed = frozenset(
-                        spec for spec, (state, _, _) in results.items() if state == "failed"
+                    outcome = self._run_request(
+                        ledger, run_id, key, specs, counts, now, setting_path
                     )
-                    if failed:
-                        self._quarantine_and_reset(
-                            ledger, run_id, key, failed, label=f"{run_id}-{key.race_id}"
-                        )
-                    successful = specs - failed
-                    if successful:
-                        self._archive.reset_staging(successful)
-                    failed_specs += sum(state == "failed" for state, _, _ in results.values())
-                    ledger.finish_request(
-                        key,
-                        results,
-                        now,
-                        recovered=True,
-                        returncode=process_returncode,
-                        api_results=api_results,
-                    )
-                    for spec, (state, reason, after_rows) in results.items():
+                    metrics.record(specs, outcome)
+                    for spec, (state, reason, after_rows) in outcome.results.items():
                         prior = states[(key.race_id, spec)]
                         states[(key.race_id, spec)] = SpecState(
                             key.race_id,
@@ -262,7 +240,7 @@ class WeeklyHistoricalOddsRetriever:
                             after_rows,
                             prior.attempts + 1,
                         )
-                    if failed:
+                    if outcome.failed_specs:
                         break
 
             states, _, _ = ledger.read()
@@ -274,7 +252,7 @@ class WeeklyHistoricalOddsRetriever:
             )
             status = (
                 "failed"
-                if failed_specs
+                if metrics.failed_specs
                 else (
                     "completed"
                     if pending_after == 0 and year < effective_cutoff.year
@@ -285,19 +263,70 @@ class WeeklyHistoricalOddsRetriever:
                 status,
                 year,
                 run_id,
-                requested_races,
-                requested_specs,
-                failed_specs,
+                metrics.requested_races,
+                metrics.requested_specs,
+                metrics.failed_specs,
                 pending_after,
                 adopted_races,
                 False,
-                new_rows,
-                new_races,
-                new_provider_missing,
+                metrics.new_rows,
+                metrics.new_races,
+                metrics.new_provider_missing,
             )
-            ledger.finish_run(run_id, self._result_payload(result), self._clock())
+            ledger.finish_run(run_id, result_payload(result), self._clock())
             self._write_summary(result, ledger)
             return result
+
+    def _run_request(
+        self,
+        ledger: ProgressLedger,
+        run_id: str,
+        key: RaceKey,
+        specs: frozenset[str],
+        counts: dict[str, int],
+        now: datetime,
+        setting_path: Path,
+    ) -> _RequestOutcome:
+        ledger.request(run_id, key, specs, counts, now)
+        self._quarantine_and_reset(ledger, run_id, key, specs)
+        profile = replace(self._odds_profile, realtime_data_specs=specs)
+        self._setting_builder.build(profile, setting_path, race_key=key)
+        outcome = self._execute_request(key, specs, counts, setting_path)
+        failed = outcome.failed_specs
+        if failed:
+            self._quarantine_and_reset(ledger, run_id, key, failed, label=f"{run_id}-{key.race_id}")
+        successful = specs - failed
+        if successful:
+            self._archive.reset_staging(successful)
+        ledger.finish_request(
+            key,
+            outcome.results,
+            now,
+            recovered=True,
+            returncode=outcome.returncode,
+            api_results=outcome.api_results,
+        )
+        return outcome
+
+    def _execute_request(
+        self,
+        key: RaceKey,
+        specs: frozenset[str],
+        counts: dict[str, int],
+        setting_path: Path,
+    ) -> _RequestOutcome:
+        try:
+            execution = self._runner.execute(setting_path, skip_last_modified_update=True)
+            archived = self._archive.archive_request(key, specs)
+            return _classify_request(execution, archived)
+        except JVLinkToSQLiteError as exc:
+            return _RequestOutcome(
+                {spec: ("failed", "jvlink_error", counts[spec]) for spec in specs},
+                exc.returncode,
+                exc.api_results,
+            )
+        # Other failures leave running rows unresolved. The common lock blocks
+        # another writer until recovery preserves and inspects staging evidence.
 
     def prepare_publication(self, *, cutoff: date | None = None) -> WeeklyBatchResult:
         """Reconcile raw additions and plan the next complete-Parquet publication."""
@@ -558,21 +587,6 @@ class WeeklyHistoricalOddsRetriever:
             )
         )
 
-    def _result_payload(self, result: WeeklyBatchResult) -> dict[str, object]:
-        return {
-            "status": result.status,
-            "year": result.year,
-            "run_id": result.run_id,
-            "requested_races": result.requested_races,
-            "requested_specs": result.requested_specs,
-            "failed_specs": result.failed_specs,
-            "pending_after": result.pending_after,
-            "adopted_races": result.adopted_races,
-            "new_rows": result.new_rows,
-            "new_races": result.new_races,
-            "new_provider_missing": result.new_provider_missing,
-        }
-
     def _write_summary(
         self,
         result: WeeklyBatchResult,
@@ -582,56 +596,13 @@ class WeeklyHistoricalOddsRetriever:
         phase: str | None = None,
         publication_state: str | None = None,
     ) -> None:
-        _, publications, state_revision = ledger.read()
-        progress_path = self._runtime_dir / "historical-odds-progress.json"
-        if not result.plan_only and result.run_id is None and result.year is not None:
-            try:
-                existing = json.loads(progress_path.read_text(encoding="utf-8"))
-            except (FileNotFoundError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-                existing = None
-            if isinstance(existing, dict) and existing.get("year") == result.year:
-                payload = existing
-                payload["publication"] = publication_state or publications.get(result.year)
-                payload["state_revision"] = state_revision
-            else:
-                payload = self._result_payload(result) | {
-                    "ledger": str(ledger.path),
-                    "plan_only": result.plan_only,
-                    "state_revision": state_revision,
-                }
-        else:
-            payload = self._result_payload(result) | {
-                "ledger": str(ledger.path),
-                "plan_only": result.plan_only,
-                "state_revision": state_revision,
-            }
-        if publication_state is not None:
-            payload["publication"] = publication_state
-        elif result.year is not None:
-            payload["publication"] = publications.get(result.year)
-        atomic_write(
-            progress_path,
-            json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
+        write_summary(
+            result,
+            ledger,
+            runtime_dir=self._runtime_dir,
+            last_year=self._batch.last_year,
+            data_specs=self._odds_profile.realtime_data_specs,
+            effective_year=effective_year,
+            phase=phase,
+            publication_state=publication_state,
         )
-        if not result.plan_only:
-            effective = self._runtime_dir / "historical-odds-effective.toml"
-            year = effective_year or result.year or self._batch.last_year
-            effective_phase = phase or result.status
-            atomic_write(
-                effective,
-                "[execution]\n"
-                "schema_version = 1\n"
-                f"state_revision = {state_revision}\n"
-                f"year = {year}\n"
-                f"start_date = {year:04d}-01-01\n"
-                f"end_date_exclusive = {year + 1:04d}-01-01\n"
-                f'phase = "{effective_phase}"\n'
-                "skip_acquired = true\n"
-                "skip_provider_missing = true\n"
-                f"data_specs = {json.dumps(sorted(self._odds_profile.realtime_data_specs))}\n",
-            )
-            if result.run_id is not None:
-                atomic_write(
-                    self._runtime_dir / "historical-odds-runs" / f"{result.run_id}.json",
-                    json.dumps(payload, ensure_ascii=False, indent=2) + "\n",
-                )

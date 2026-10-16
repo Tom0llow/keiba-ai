@@ -21,17 +21,17 @@ from features.contracts.types import (
     FeatureScalar,
     FeatureViolation,
 )
-from features.market_characteristics import validate_market_batches
 
 
 def audit_feature_inputs(
     records: Sequence[FeatureBatchInput], *, registry: FeatureRegistry
 ) -> FeatureAudit:
-    """Combine shared auditing with feature-owned market validation."""
+    """Combine shared auditing with each registered feature's own validation."""
     audit = _audit_feature_inputs(records, required_feature_ids=registry.feature_ids)
-    return validate_market_batches(
-        records, audit, feature_id=registry.by_name("market_characteristics").definition.feature_id
-    )
+    for registration in registry.features:
+        builder = registration.builder_type(registration.definition)
+        audit = builder.audit_batches(records, audit)
+    return audit
 
 
 def build_explanatory_variables(
@@ -68,7 +68,7 @@ def build_explanatory_variables(
             )
             for record in inputs
         ]
-        rows[feature_id] = tuple(builder.build_rows(feature_inputs))
+        rows[feature_id] = tuple(builder._build_audited_rows(feature_inputs))
     return FeatureBuildResult(inputs=inputs, rows=MappingProxyType(rows), audit=audit)
 
 

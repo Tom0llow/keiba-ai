@@ -2,9 +2,21 @@
 
 from __future__ import annotations
 
+from collections.abc import Sequence
 from datetime import datetime
 
 from features.contracts.types import FeatureAudit, FeatureBuildResult
+
+
+def explanatory_payload(
+    result: FeatureBuildResult, *, feature_ids: Sequence[str]
+) -> dict[str, object]:
+    """Return a complete generated-feature document in registration order."""
+    return {
+        "feature_ids": list(feature_ids),
+        "records": explanatory_records(result),
+        "audit": feature_audit_payload(result.audit),
+    }
 
 
 def feature_audit_payload(audit: FeatureAudit) -> dict[str, object]:

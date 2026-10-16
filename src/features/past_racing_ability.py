@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class PastRacingAbilityInput(FeatureValuesInput):
     """Provide explicit past racing ability values and source evidence."""
 
 
-class PastRacingAbilityBuilder(FeatureBuilder[FeatureValuesInput]):
+class PastRacingAbilityBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "past_racing_ability"
-    definition: FeatureDefinition
+    input_type = PastRacingAbilityInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_past_racing_ability(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_past_racing_ability(records)
 
 
 def build_past_racing_ability(
@@ -45,6 +41,5 @@ def build_past_racing_ability(
 
 def _normalize_past_racing_ability(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, PastRacingAbilityInput)
+    return normalize_audited_feature_inputs(records)

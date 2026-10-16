@@ -30,19 +30,33 @@ def input_batches(
     )
 
 
+def require_feature_input_type(
+    records: Sequence[FeatureValuesInput], input_type: type[FeatureValuesInput]
+) -> None:
+    """Reject inputs belonging to another feature before accessing their fields."""
+    if any(not isinstance(record, input_type) for record in records):
+        raise TypeError(f"records must contain {input_type.__name__} values")
+
+
 def normalize_feature_inputs(
     records: Sequence[FeatureValuesInput],
     feature_id: str,
     input_type: type[FeatureValuesInput],
 ) -> list[FeatureTableRow]:
     """Validate explicit inputs and preserve unavailable values as null."""
-    if any(not isinstance(record, input_type) for record in records):
-        raise TypeError(f"records must contain {input_type.__name__} values")
+    require_feature_input_type(records, input_type)
     audit = audit_feature_inputs(
         input_batches(records, feature_id), required_feature_ids=(feature_id,)
     )
     if not audit.valid:
         raise FeatureBuildError(audit)
+    return normalize_audited_feature_inputs(records)
+
+
+def normalize_audited_feature_inputs(
+    records: Sequence[FeatureValuesInput],
+) -> list[FeatureTableRow]:
+    """Copy audited inputs into UTC middle rows, preserving missing values as null."""
     rows = []
     for record in records:
         available_at, _ = parse_timestamp(record.available_at)

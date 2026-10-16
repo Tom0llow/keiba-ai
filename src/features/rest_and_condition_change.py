@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class RestAndConditionChangeInput(FeatureValuesInput):
     """Provide explicit rest and condition change values and source evidence."""
 
 
-class RestAndConditionChangeBuilder(FeatureBuilder[FeatureValuesInput]):
+class RestAndConditionChangeBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "rest_and_condition_change"
-    definition: FeatureDefinition
+    input_type = RestAndConditionChangeInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_rest_and_condition_change(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_rest_and_condition_change(records)
 
 
 def build_rest_and_condition_change(
@@ -45,6 +41,5 @@ def build_rest_and_condition_change(
 
 def _normalize_rest_and_condition_change(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, RestAndConditionChangeInput)
+    return normalize_audited_feature_inputs(records)

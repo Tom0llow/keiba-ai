@@ -13,10 +13,17 @@ import pytest
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureAudit, FeatureBuildResult
 from features.serialization.inputs import parse_explanatory_inputs
-from features.serialization.outputs import explanatory_records
+from features.serialization.outputs import explanatory_payload, explanatory_records
 from models.dataset_builder import build_features
+from models.evaluate_model import RankingMetrics
 from models.serialization.inputs import parse_feature_inputs
-from models.serialization.outputs import generated_records
+from models.serialization.outputs import (
+    generated_records,
+    model_audit_payload,
+    model_evaluation_payload,
+    model_features_payload,
+)
+from models.walk_forward import WalkForwardEvaluation
 
 
 def _group() -> dict[str, object]:
@@ -152,6 +159,81 @@ def test_model_parser_raises_plain_validation_errors(
         parse_feature_inputs(payload)
     assert type(error.value) is ValueError
     assert str(error.value) == message
+
+
+def test_explanatory_document_preserves_explicit_registration_order_without_rows() -> None:
+    feature_ids = ("custom-z", "custom-a")
+    result = FeatureBuildResult((), MappingProxyType({}), FeatureAudit(0, 0, 0, 0, ()))
+
+    payload = explanatory_payload(result, feature_ids=feature_ids)
+
+    assert list(payload) == ["feature_ids", "records", "audit"]
+    assert payload == {
+        "feature_ids": ["custom-z", "custom-a"],
+        "records": [],
+        "audit": {
+            "records_checked": 0,
+            "groups_checked": 0,
+            "non_missing_values": 0,
+            "missing_values": 0,
+            "valid": True,
+            "violations": [],
+        },
+    }
+
+
+def test_model_documents_preserve_schema_order_missing_values_and_timezone_offsets() -> None:
+    schema, records = parse_feature_inputs(
+        {
+            "schema_id": "document-v1",
+            "feature_names": ["historical_odds", "ability"],
+            "records": [
+                {
+                    "race_id": "race-1",
+                    "horse_id": f"horse-{position}",
+                    "freeze_at": "2026-01-01T21:00:00+09:00",
+                    "features": {"ability": 2.0, "historical_odds": None},
+                    "available_at": {"ability": "2025-12-31T21:00:00+09:00"},
+                }
+                for position in range(1, 4)
+            ],
+        }
+    )
+    result = build_features(records, feature_schema=schema)
+    audit = model_audit_payload(schema, records, result.audit)
+    generated = model_features_payload(schema, result)
+    evaluated = model_evaluation_payload(
+        schema, result.audit, WalkForwardEvaluation((), RankingMetrics(0.75, 0.5, 1.0))
+    )
+
+    assert list(audit) == ["schema_id", "feature_names", "freeze_at", "audit"]
+    assert list(generated) == ["schema_id", "feature_names", "records", "audit"]
+    assert list(evaluated) == ["schema_id", "feature_names", "audit", "evaluation"]
+    for payload in (audit, generated, evaluated):
+        assert payload["schema_id"] == "document-v1"
+        assert payload["feature_names"] == ["historical_odds", "ability"]
+        assert payload["audit"] == {
+            "records_checked": 3,
+            "non_missing_values": 3,
+            "missing_values": 3,
+            "valid": True,
+            "violations": [],
+        }
+    assert audit["freeze_at"] == ["2026-01-01T21:00:00+09:00"] * 3
+    assert generated["records"] == [
+        {
+            "race_id": "race-1",
+            "horse_id": f"horse-{position}",
+            "freeze_at": "2026-01-01T21:00:00+09:00",
+            "available_at": {"historical_odds": None, "ability": "2025-12-31T21:00:00+09:00"},
+            "features": {"historical_odds": None, "ability": 2.0},
+        }
+        for position in range(1, 4)
+    ]
+    assert evaluated["evaluation"] == {
+        "metrics": {"ndcg_at_3": 0.75, "top1_accuracy": 0.5, "top3_overlap": 1.0},
+        "folds": [],
+    }
 
 
 def test_serializers_are_usable_without_typer_or_entry_point() -> None:

@@ -17,6 +17,7 @@ from features.explanatory_variables import (
     FeatureBatchInput,
     FeatureBuildError,
     FeatureGroupInput,
+    audit_feature_inputs,
     build_explanatory_variables,
 )
 from models.ranking_dataset import FeatureSchema
@@ -109,6 +110,81 @@ def test_build_variables_keeps_all_21_groups_outside_model_schema() -> None:
     assert result.rows["F01"][0].values == {"feature_value": 1.0}
     assert result.rows["F01"][0].freeze_at == FREEZE_AT
     assert result.audit.valid
+
+
+def test_batch_rows_match_individual_builders_with_utc_and_missing_values() -> None:
+    first = _record(horse_id="horse-1")
+    second = _record(horse_id="horse-2")
+    records = [
+        replace(
+            first,
+            freeze_at="2026-01-01T21:00:00+09:00",
+            groups={
+                feature_id: replace(
+                    group,
+                    available_at="2025-12-31T21:00:00+09:00",
+                    source_event_at="2025-12-31T21:00:00+09:00",
+                )
+                for feature_id, group in first.groups.items()
+            },
+        ),
+        replace(
+            second,
+            groups={
+                feature_id: replace(
+                    group,
+                    values=dict.fromkeys(group.values, float("nan")),
+                    available_at=None,
+                    source_event_at=None,
+                    status="missing",
+                )
+                for feature_id, group in second.groups.items()
+            },
+        ),
+    ]
+
+    result = build_explanatory_variables(records, registry=REGISTRY)
+
+    for registration in REGISTRY.features:
+        feature_id = registration.definition.feature_id
+        individual_inputs = [
+            registration.input_type(
+                feature_id=feature_id,
+                race_id=record.race_id,
+                horse_id=record.horse_id,
+                freeze_at=record.freeze_at,
+                values=record.groups[feature_id].values,
+                available_at=record.groups[feature_id].available_at,
+                source_event_at=record.groups[feature_id].source_event_at,
+                source_scope=record.groups[feature_id].source_scope,
+                status=record.groups[feature_id].status,
+                source_race_ids=record.groups[feature_id].source_race_ids,
+                contains_target_result=False,
+                contains_future_data=False,
+            )
+            for record in records
+        ]
+        builder = registration.builder_type(registration.definition)
+        individual_rows = builder.build_rows(individual_inputs)
+        for batch_row, individual_row in zip(result.rows[feature_id], individual_rows, strict=True):
+            assert batch_row.race_id == individual_row.race_id
+            assert batch_row.horse_id == individual_row.horse_id
+            assert batch_row.freeze_at == individual_row.freeze_at
+            assert batch_row.available_at == individual_row.available_at
+            assert batch_row.values == individual_row.values
+        assert result.rows[feature_id][0].freeze_at == FREEZE_AT
+        assert result.rows[feature_id][0].available_at == AVAILABLE_AT
+        assert result.rows[feature_id][1].available_at is None
+        assert set(result.rows[feature_id][1].values.values()) == {None}
+    assert result.audit.records_checked == 2
+    assert result.audit.groups_checked == 42
+    assert result.audit.non_missing_values == 21
+    assert result.audit.missing_values == 21
+
+
+def test_batch_generation_rejects_empty_inputs() -> None:
+    with pytest.raises(ValueError, match="requires at least one record"):
+        build_explanatory_variables([], registry=REGISTRY)
 
 
 def test_feature_groups_are_not_added_to_feature_schema_allow_list() -> None:
@@ -472,6 +548,35 @@ def test_f19_rejects_undocumented_market_fields(field_name: str) -> None:
         violation.field_name == field_name and violation.reason == "F19 market field is not allowed"
         for violation in error.value.audit.violations
     )
+
+
+def test_batch_audit_appends_market_violations_after_shared_failures() -> None:
+    record = _record()
+    record = replace(
+        record,
+        groups={
+            **record.groups,
+            "F19": replace(
+                record.groups["F19"],
+                contains_future_data=True,
+                values={"market_unknown": 1.0},
+            ),
+        },
+    )
+
+    audit = audit_feature_inputs([record], registry=REGISTRY)
+    with pytest.raises(FeatureBuildError) as error:
+        build_explanatory_variables([record], registry=REGISTRY)
+
+    assert error.value.audit == audit
+    assert audit.records_checked == 1
+    assert audit.groups_checked == 21
+    assert audit.non_missing_values == 21
+    assert [violation.reason for violation in audit.violations] == [
+        "future data is not allowed",
+        "F19 market field is not allowed",
+    ]
+    assert [violation.feature_id for violation in audit.violations] == ["F19", "F19"]
 
 
 def test_f19_ticket_totals_must_be_shared_within_a_race() -> None:

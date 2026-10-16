@@ -108,6 +108,28 @@ def test_realtime_update_publishes_only_target_race_parquet(tmp_path: Path) -> N
     assert o2.column("idRaceNum").to_pylist() == ["11"]
 
 
+def test_realtime_update_keeps_previous_version_when_second_export_fails(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    _create_source(paths.raw_db)
+    race_key = RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
+    preprocesser = DataPreprocesser(paths)
+    preprocesser.update_race(race_key)
+    race_root = paths.processed_dir / "realtime" / race_key.race_id
+    current_before = (race_root / "CURRENT").read_text(encoding="utf-8")
+    versions_before = set((race_root / "versions").iterdir())
+    with closing(sqlite3.connect(paths.raw_db)) as database, database:
+        database.execute("ALTER TABLE ARCHIVE_O2_ODDS_UMAREN ADD COLUMN Invalid INTEGER")
+
+    with pytest.raises(ValueError, match="unsupported declared type"):
+        preprocesser.update_race(race_key)
+
+    assert (race_root / "CURRENT").read_text(encoding="utf-8") == current_before
+    assert set((race_root / "versions").iterdir()) == versions_before
+    loader = DataLoader(paths)
+    for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
+        assert loader.read_realtime_table(race_key, table).num_rows == 1
+
+
 def test_data_paths_resolve_all_shared_locations(tmp_path: Path) -> None:
     config_dir = tmp_path / "config"
     config_dir.mkdir()

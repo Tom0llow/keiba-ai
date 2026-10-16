@@ -20,7 +20,7 @@ from features.expected_race_development import (
     ExpectedRaceDevelopmentBuilder,
     ExpectedRaceDevelopmentInput,
 )
-from features.generation.base import FeatureBuilder
+from features.generation.base import RegisteredFeatureBuilder
 from features.hill_and_wood_workouts import HillAndWoodWorkoutsBuilder, HillAndWoodWorkoutsInput
 from features.history_volume_and_missingness import (
     HistoryVolumeAndMissingnessBuilder,
@@ -60,7 +60,7 @@ class FeatureRegistration:
     """Associate a declarative definition with its implementation types."""
 
     definition: FeatureDefinition
-    builder_type: type[FeatureBuilder[FeatureValuesInput]]
+    builder_type: type[RegisteredFeatureBuilder]
     input_type: type[FeatureValuesInput]
 
 
@@ -121,7 +121,7 @@ def create_feature_registry(definitions: Sequence[FeatureDefinition]) -> Feature
 
 
 _IMPLEMENTATIONS = MappingProxyType[
-    str, tuple[type[FeatureBuilder[FeatureValuesInput]], type[FeatureValuesInput]]
+    str, tuple[type[RegisteredFeatureBuilder], type[FeatureValuesInput]]
 ](
     {
         "basic_conditions_and_weight": (

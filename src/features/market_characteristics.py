@@ -11,17 +11,15 @@ from features.contracts.rows import FeatureTableRow
 from features.contracts.types import (
     FeatureAudit,
     FeatureBatchInput,
-    FeatureBuildError,
     FeatureDefinition,
     FeatureGroupInput,
     FeatureScalar,
     FeatureValuesInput,
     _violation,
 )
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import input_batches, normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
-from features.validation.audit import audit_feature_inputs
 from features.validation.values import feature_values_equal
 
 
@@ -30,18 +28,20 @@ class MarketCharacteristicsInput(FeatureValuesInput):
     """Provide explicit market characteristics values and source evidence."""
 
 
-class MarketCharacteristicsBuilder(FeatureBuilder[FeatureValuesInput]):
+class MarketCharacteristicsBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "market_characteristics"
-    definition: FeatureDefinition
+    input_type = MarketCharacteristicsInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
+    def audit_batches(
+        self, records: Sequence[FeatureBatchInput], audit: FeatureAudit
+    ) -> FeatureAudit:
+        """Append market-field and race-wide ticket-total checks."""
+        return validate_market_batches(records, audit, feature_id=self.definition.feature_id)
 
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_market_characteristics(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_market_characteristics(records)
 
 
 def build_market_characteristics(
@@ -56,18 +56,8 @@ def build_market_characteristics(
 
 def _normalize_market_characteristics(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    rows = normalize_feature_inputs(records, definition.feature_id, MarketCharacteristicsInput)
-    batches = input_batches(records, definition.feature_id)
-    audit = validate_market_batches(
-        batches,
-        audit_feature_inputs(batches, required_feature_ids=(definition.feature_id,)),
-        feature_id=definition.feature_id,
-    )
-    if not audit.valid:
-        raise FeatureBuildError(audit)
-    return rows
+    return normalize_audited_feature_inputs(records)
 
 
 _ALLOWED_MARKET_FIELD_NAMES = frozenset(

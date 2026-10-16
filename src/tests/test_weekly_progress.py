@@ -2,10 +2,11 @@
 
 import json
 import sqlite3
+from contextlib import closing
 from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import cast
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 import pytest
 
@@ -761,3 +762,93 @@ def test_weekly_run_stops_after_jvlink_error_without_requesting_next_race(
     assert result.requested_specs == 2
     assert result.failed_specs == 2
     assert result.pending_after == 4
+
+
+def _retriever_with_staging_rows(
+    tmp_path: Path, execution: JVLinkExecutionResult
+) -> tuple[WeeklyHistoricalOddsRetriever, Mock]:
+    raw = tmp_path / "raw.db"
+    columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
+    with closing(sqlite3.connect(raw)) as database, database:
+        database.execute(f"CREATE TABLE NL_RA_RACE ({columns})")
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08','01')")
+        for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns},HappyoTime TEXT)")
+
+    def execute(setting: Path, *, skip_last_modified_update: bool) -> JVLinkExecutionResult:
+        with closing(sqlite3.connect(raw, timeout=0)) as database, database:
+            database.execute("BEGIN EXCLUSIVE")
+            for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+                database.execute(
+                    f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','01','120000')"
+                )
+        return execution
+
+    runner = Mock(spec=JVLinkToSQLiteRunner)
+    runner.execute.side_effect = execute
+    retriever = WeeklyHistoricalOddsRetriever(
+        runner,
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        BATCH,
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    return retriever, runner
+
+
+def test_weekly_run_counts_acquired_and_fatal_specs_separately(tmp_path: Path) -> None:
+    execution = JVLinkExecutionResult(
+        {"0B41": 0, "0B42": -504},
+        fatal_specs=frozenset({"0B42"}),
+        api_results={"0B41": ("JVRTOpen", 0), "0B42": ("JVRTOpen", -504)},
+        fatal_returncodes={"0B42": -504},
+        process_returncode=0,
+    )
+    retriever, runner = _retriever_with_staging_rows(tmp_path, execution)
+
+    result = retriever.run(cutoff=date(2026, 10, 5))
+
+    runner.execute.assert_called_once()
+    assert result.status == "failed"
+    assert result.requested_specs == 2
+    assert result.failed_specs == 1
+    assert result.new_rows == {"0B41": 1, "0B42": 0}
+    assert result.new_races == {"0B41": 1, "0B42": 0}
+    assert result.new_provider_missing == {"0B41": 0, "0B42": 0}
+    states, _, _ = retriever.ledger.read()
+    assert states[("2008012701010801", "0B41")].state == "acquired"
+    assert states[("2008012701010801", "0B42")].reason == "jvlink_error"
+    with closing(sqlite3.connect(retriever.ledger_path)) as database:
+        rows = database.execute(
+            "SELECT data_spec,returncode,api_name,api_returncode FROM race_specs ORDER BY data_spec"
+        ).fetchall()
+    assert rows == [("0B41", 0, "JVRTOpen", 0), ("0B42", 0, "JVRTOpen", -504)]
+
+
+def test_weekly_run_resumes_from_committed_ledger_after_report_write_failure(
+    tmp_path: Path,
+) -> None:
+    retriever, runner = _retriever_with_staging_rows(tmp_path, JVLinkExecutionResult({}))
+    with (
+        patch("retriever.progress_output.atomic_write", side_effect=OSError("report failed")),
+        pytest.raises(OSError, match="report failed"),
+    ):
+        retriever.run(cutoff=date(2026, 10, 5), raw_only=True)
+
+    states, _, revision = retriever.ledger.read()
+    assert all(state.state == "acquired" for state in states.values())
+    with closing(sqlite3.connect(retriever.ledger_path)) as database:
+        assert database.execute("SELECT status FROM runs").fetchall() == [("completed",)]
+
+    result = retriever.run(cutoff=date(2026, 10, 5), raw_only=True)
+
+    assert result.status == "up_to_date"
+    runner.execute.assert_called_once()
+    progress = json.loads(
+        (tmp_path / "runtime" / "historical-odds-progress.json").read_text(encoding="utf-8")
+    )
+    assert progress["state_revision"] >= revision
+    assert progress["status"] == "up_to_date"

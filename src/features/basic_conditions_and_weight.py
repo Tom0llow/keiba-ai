@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class BasicConditionsAndWeightInput(FeatureValuesInput):
     """Provide explicit basic conditions and weight values and source evidence."""
 
 
-class BasicConditionsAndWeightBuilder(FeatureBuilder[FeatureValuesInput]):
+class BasicConditionsAndWeightBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "basic_conditions_and_weight"
-    definition: FeatureDefinition
+    input_type = BasicConditionsAndWeightInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_basic_conditions_and_weight(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_basic_conditions_and_weight(records)
 
 
 def build_basic_conditions_and_weight(
@@ -45,6 +41,5 @@ def build_basic_conditions_and_weight(
 
 def _normalize_basic_conditions_and_weight(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, BasicConditionsAndWeightInput)
+    return normalize_audited_feature_inputs(records)

@@ -102,6 +102,10 @@ config/
 src/
 ├─ main.py                       # CLI定義・実行制御・エラー処理
 ├─ retriever/                    # JV-Link取得と台帳・ロック
+│  ├─ raw_snapshot.py             # 接続を閉じて返すraw観測
+│  ├─ progress.py                 # 台帳・移行・取得証拠の永続化
+│  ├─ progress_state.py           # 進捗の値型・純粋な突合
+│  └─ progress_output.py          # 台帳確定後の派生レポート
 ├─ preprocesser/                 # raw SQLiteからParquetへの公開
 ├─ utils/
 │  ├─ data_loader.py              # 処理済みデータ読込API
@@ -122,6 +126,10 @@ src/
 │  ├─ validation/table.py         # 結合後のスキーマ・行検証
 │  └─ tables/                    # 列・metadata契約とParquet保存
 ├─ models/                        # モデル入力・学習・評価
+│  ├─ ranker.py                    # 推論とレース内順位
+│  ├─ artifacts.py                 # native成果物の公開・検証・復旧
+│  ├─ lightgbm_backend.py          # 遅延読込とLightGBM接続
+│  ├─ ranking_rules.py             # 固定学習契約・共通順位規則
 │  └─ serialization/              # モデル入力・結果の純粋なJSON変換
 └─ tests/
    └─ ...
@@ -152,6 +160,12 @@ handles console output, structured CLI errors and exit codes. Its `__main__`
 guard invokes the app; importing the module or requesting help does not read
 configuration or inputs or start a workflow. Lower-level code does not import
 `main` or Typer. ADR-022 records this boundary and removes `src/run/`.
+Within `main.py`, `_RaceOptions` groups optional race arguments without reading
+configuration or validating a race before its selected mode requires it.
+Shared option predicates preserve validation priority; input parsing and JSON
+error exits share small boundary functions. Complete success documents are
+assembled by feature/model serializers, while main owns auditing, execution,
+writing and exit decisions. ADR-023 records these refinements.
 
 `src/retriever/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
 and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
@@ -215,6 +229,17 @@ automatically when an older v1 ledger is first updated. An older
 `provider_missing/jvopen_no_data` row without API evidence is migrated to
 `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data`
 rows require the captured `JVOpen`/`JVRTOpen = -1` result.
+`progress.py` owns ledger transactions, migrations, ownership checks and API
+evidence. `progress_state.py` owns progress/result values and pure reconciliation;
+`raw_snapshot.py` observes raw data and closes readers before external writes.
+Historical presence checks and yearly-batch period/schema checks remain distinct.
+`odds_contract.py` shares only raw table mappings and complete key columns.
+`progress_output.py` writes derived JSON/TOML after ledger commits; these files
+do not decide acquisition or recovery state. Its ledger type dependency is
+limited to type checking. Weekly acquisition retains the lock and ordered
+request/quarantine/reset/commit steps, separating request classification from
+batch metrics. Existing progress helper imports and `weekly.WeeklyBatchResult`
+remain available through re-exports.
 Historical-basic, historical-odds, latest, and realtime writes share the raw DB OS lock and
 reject unresolved historical-odds requests. The API return-code mapping is defined by
 the [JRA-VAN JV-Link API error-code list](https://developer.jra-van.jp/t/topic/822).
@@ -278,6 +303,9 @@ venue, meeting, meeting day, and race number. It writes both O1/O2 files to a
 new version and atomically switches the race-local `CURRENT` pointer only after
 both files validate. Realtime preprocessing therefore stays race-scoped rather
 than rebuilding the complete historical dataset for each prediction refresh.
+`SnapshotPublisher` uses one internal publication procedure for staging,
+export, version publication and pointer switching, with explicit table/filter
+selection for complete and race-scoped snapshots.
 
 Historical-basic retrieval automatically calls a complete `rebuild` after base
 data retrieval. Historical-odds retrieval defers that complete `rebuild` until
@@ -312,6 +340,8 @@ Typer, feature contracts, or the Parquet `DataLoader` facade.
 `FeatureBatchInput` and `FeatureGroupInput`; its `outputs.py` converts feature
 audits and results to JSON-ready dictionaries. `models/serialization/` owns the
 distinct model schema/input and availability/evaluation result conversions.
+Output serializers also assemble complete success documents from existing
+schemas, records, audits and evaluations; they never execute an audit themselves.
 These pure converters perform no I/O and raise ordinary validation exceptions.
 `main.py` translates input errors to the existing CLI JSON and exit code.
 `utils/json_output.py` writes generic UTF-8 JSON, creates parent directories and
@@ -358,6 +388,16 @@ feature rows from its caller. ADR-010 records this model boundary and artifact
 contract. Missing feature values, including unavailable odds history, remain
 missing and are passed through without final-odds fallback or imputation. Equal
 scores are ordered by horse ID, independently of input row order.
+`models/ranker.py` owns the booster wrapper and prediction. Its existing
+`RankingModel.save/load` delegate to `NativeModelArtifact` in `artifacts.py`,
+which owns native/metadata/ready/publishing files, hashes and publication recovery.
+The artifact boundary validates booster/schema agreement before publishing and
+returns loaded booster/schema metadata without importing `RankingModel`.
+`lightgbm_backend.py` owns public backend protocols, delayed imports, fit and
+native loading. `ranking_rules.py` shares fixed objective/gain and race ordering
+between datasets, training, inference and evaluation. Combined evaluation
+validates and orders scores once; standalone metric and prediction APIs retain
+their input validation. ADR-023 preserves ADR-010's artifact format and API.
 `src/models/dataset_builder.py` validates explicit numeric model inputs and their
 timezone-aware availability against `freeze_at`, projects the approved schema,
 and builds `RankingDataset`. It does not own intermediate table schemas.
@@ -370,6 +410,16 @@ source evidence; no unapproved business formulas are introduced. The thin
 `explanatory_variables.py` facade combines their individual row-generation APIs.
 F01-F21 identifiers are `feature_id`, not candidate identifiers, and remain
 independent of numeric model adoption.
+F01-F21 use `RegisteredFeatureBuilder`, a specialization requiring an explicit
+definition and dedicated input type. Public single-feature generation audits
+inputs before feature-owned normalization. Batch generation runs the shared
+audit once, delegates additional checks to registered builders, then uses an
+internal audited-row path through each owning module. Market-specific checks
+belong to `MarketCharacteristicsBuilder`; batch orchestration does not import
+that implementation. The original three builders retain their existing base
+and optional definition contract. Single-market generation stops on shared
+audit failures; batch auditing still appends market violations in the existing
+order. No public validation-skip option or business formula is introduced.
 
 Shared feature responsibilities are grouped by their contracts:
 

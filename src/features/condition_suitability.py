@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class ConditionSuitabilityInput(FeatureValuesInput):
     """Provide explicit condition suitability values and source evidence."""
 
 
-class ConditionSuitabilityBuilder(FeatureBuilder[FeatureValuesInput]):
+class ConditionSuitabilityBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "condition_suitability"
-    definition: FeatureDefinition
+    input_type = ConditionSuitabilityInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_condition_suitability(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_condition_suitability(records)
 
 
 def build_condition_suitability(
@@ -45,6 +41,5 @@ def build_condition_suitability(
 
 def _normalize_condition_suitability(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, ConditionSuitabilityInput)
+    return normalize_audited_feature_inputs(records)

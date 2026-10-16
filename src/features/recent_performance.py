@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class RecentPerformanceInput(FeatureValuesInput):
     """Provide explicit recent performance values and source evidence."""
 
 
-class RecentPerformanceBuilder(FeatureBuilder[FeatureValuesInput]):
+class RecentPerformanceBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "recent_performance"
-    definition: FeatureDefinition
+    input_type = RecentPerformanceInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_recent_performance(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_recent_performance(records)
 
 
 def build_recent_performance(
@@ -45,6 +41,5 @@ def build_recent_performance(
 
 def _normalize_recent_performance(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, RecentPerformanceInput)
+    return normalize_audited_feature_inputs(records)

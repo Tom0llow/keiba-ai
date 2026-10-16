@@ -2,16 +2,15 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Mapping
-from typing import cast
+from collections.abc import Mapping
 
-from models.ranker import (
+from models.lightgbm_backend import (
     LightGBMUnavailableError,
-    RankingModel,
-    _LightGBMRanker,
-    _load_lightgbm,
+    fit_native_ranker,
 )
-from models.ranking_dataset import DEFAULT_LABEL_GAIN, RankingDataset
+from models.ranker import RankingModel
+from models.ranking_dataset import RankingDataset
+from models.ranking_rules import LABEL_GAIN, OBJECTIVE
 
 _DEFAULT_PARAMETERS: Mapping[str, object] = {
     "deterministic": True,
@@ -42,25 +41,13 @@ def train_lambdarank(
     """
     if not dataset.rows:
         raise ValueError("ranking dataset must contain at least one row")
-    module = _load_lightgbm()
-    ranker_constructor = cast(Callable[..., object], module.__dict__["LGBMRanker"])
     ranker_parameters = dict(_DEFAULT_PARAMETERS)
     if parameters is not None:
         ranker_parameters.update(parameters)
-    ranker_parameters["objective"] = "lambdarank"
-    ranker_parameters["label_gain"] = list(DEFAULT_LABEL_GAIN.values())
-    ranker = cast(_LightGBMRanker, ranker_constructor(**ranker_parameters))
-    ranker.fit(
-        dataset.feature_matrix(),
-        list(dataset.labels),
-        group=list(dataset.groups),
-        feature_name=list(dataset.feature_names),
-    )
-    if not hasattr(ranker, "booster_"):
-        raise ValueError("LightGBM did not expose a trained booster")
-    return RankingModel.from_native_booster(
-        ranker.booster_, dataset.feature_names, dataset.feature_schema
-    )
+    ranker_parameters["objective"] = OBJECTIVE
+    ranker_parameters["label_gain"] = list(LABEL_GAIN)
+    booster = fit_native_ranker(dataset, ranker_parameters)
+    return RankingModel.from_native_booster(booster, dataset.feature_names, dataset.feature_schema)
 
 
 __all__ = ["LightGBMUnavailableError", "train_lambdarank"]

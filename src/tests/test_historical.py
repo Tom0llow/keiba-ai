@@ -329,7 +329,7 @@ def test_retrieve_closes_readers_before_subprocess_writes(
             writer.execute("BEGIN EXCLUSIVE")
             writer.rollback()
 
-    monkeypatch.setattr("retriever.historical.sqlite3.connect", open_reader)
+    monkeypatch.setattr("retriever.raw_snapshot.sqlite3.connect", open_reader)
     runner.execute.side_effect = execute_with_writer
 
     assert retriever.retrieve() == 2

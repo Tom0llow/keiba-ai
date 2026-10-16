@@ -9,13 +9,24 @@ from math import isfinite, isnan
 from types import MappingProxyType
 from typing import Literal
 
+from models.ranking_rules import (
+    DEFAULT_LABEL_GAIN as DEFAULT_LABEL_GAIN,
+)
+from models.ranking_rules import (
+    TIE_BREAK_RULE as TIE_BREAK_RULE,
+)
+from models.ranking_rules import (
+    TieBreakRule as TieBreakRule,
+)
+from models.ranking_rules import (
+    race_group_sizes,
+    race_ranges,
+)
+
 type FeatureValue = int | float | None
-type TieBreakRule = Literal["score_desc_then_horse_id"]
 type FeatureValueType = Literal["numeric"]
 type MissingValuePolicy = Literal["preserve_native_missing"]
 
-TIE_BREAK_RULE: TieBreakRule = "score_desc_then_horse_id"
-DEFAULT_LABEL_GAIN: Mapping[int, int] = MappingProxyType({0: 0, 1: 1, 2: 3, 3: 7})
 _RESERVED_RESULT_FEATURE_NAME_ALIASES = frozenset(
     {
         "confirmed_time",
@@ -136,7 +147,7 @@ class FeatureSchema:
         if not self.features:
             raise ValueError("feature schema must contain at least one feature")
         names = tuple(feature.name for feature in self.features)
-        _validate_feature_names(names)
+        validate_feature_names(names)
         for feature in self.features:
             if _APPROVED_FEATURE_SPECS.get(feature.name) != feature:
                 raise ValueError(
@@ -158,7 +169,7 @@ class FeatureSchema:
     ) -> FeatureSchema:
         """Create a schema from the approved feature allow-list."""
         names = tuple(feature_names)
-        _validate_feature_names(names)
+        validate_feature_names(names)
         specs = tuple(_APPROVED_FEATURE_SPECS[name] for name in names)
         if generation_rule is not None and any(
             spec.generation_rule != generation_rule for spec in specs
@@ -228,7 +239,7 @@ class RankingDataset:
         """Validate all row, label, feature, and group invariants."""
         if not self.rows:
             raise ValueError("ranking dataset must contain at least one row")
-        _validate_feature_names(self.feature_names)
+        validate_feature_names(self.feature_names)
         if self.feature_schema.feature_names != self.feature_names:
             raise ValueError("feature_schema names must match feature_names")
         _validate_race_rows(self.rows)
@@ -236,7 +247,7 @@ class RankingDataset:
         expected_labels = tuple(label_for_finish_position(row.finish_position) for row in self.rows)
         if self.labels != expected_labels:
             raise ValueError("labels must match finish_position values")
-        expected_groups = _race_groups(self.rows)
+        expected_groups = race_group_sizes(row.race_id for row in self.rows)
         self.validate_groups(self.groups, len(self.rows))
         if self.groups != expected_groups:
             raise ValueError("groups must match the contiguous race rows")
@@ -270,7 +281,7 @@ class RankingDataset:
         if not normalized_rows:
             raise ValueError("ranking dataset must contain at least one row")
         names = tuple(feature_names)
-        _validate_feature_names(names)
+        validate_feature_names(names)
         if feature_schema.feature_names != names:
             raise ValueError("feature_schema names must match feature_names")
         allowed = set(names)
@@ -287,7 +298,7 @@ class RankingDataset:
             feature_names=names,
             feature_schema=feature_schema,
             labels=labels,
-            groups=_race_groups(normalized_rows),
+            groups=race_group_sizes(row.race_id for row in normalized_rows),
         )
 
     def feature_matrix(self) -> list[list[FeatureValue]]:
@@ -319,7 +330,7 @@ def validate_feature_rows(
     if not normalized_rows:
         raise ValueError("prediction requires at least one row")
     names = tuple(feature_names)
-    _validate_feature_names(names)
+    validate_feature_names(names)
     allowed = set(names)
     unexpected = sorted(
         {name for row in normalized_rows for name in row.features if name not in allowed}
@@ -370,7 +381,8 @@ def _normalize_feature_row(row: FeatureRow) -> FeatureRow:
     )
 
 
-def _validate_feature_names(feature_names: Sequence[str]) -> None:
+def validate_feature_names(feature_names: Sequence[str]) -> None:
+    """Validate ordered model feature names against the approved numeric allow-list."""
     if not feature_names:
         raise ValueError("at least one feature is required")
     if any(not isinstance(name, str) or not name for name in feature_names):
@@ -434,9 +446,10 @@ def _validate_race_rows(rows: Sequence[RankingRow]) -> None:
 
 
 def _validate_finish_positions(rows: Sequence[RankingRow]) -> None:
-    start = 0
-    for group_size in _race_groups(rows):
-        race_rows = rows[start : start + group_size]
+    groups = race_group_sizes(row.race_id for row in rows)
+    for start, stop in race_ranges(groups):
+        race_rows = rows[start:stop]
+        group_size = stop - start
         for row in race_rows:
             _validate_finish_position(row.finish_position)
             if row.finish_position > group_size:
@@ -444,7 +457,6 @@ def _validate_finish_positions(rows: Sequence[RankingRow]) -> None:
         positions = [row.finish_position for row in race_rows]
         if set(positions) != set(range(1, group_size + 1)):
             raise ValueError("finish_position values must be unique and contiguous within a race")
-        start += group_size
 
 
 def _validate_finish_position(finish_position: int) -> None:
@@ -494,15 +506,3 @@ def _validate_feature_row_races(rows: Sequence[FeatureRow]) -> None:
         current_group_size += 1
     if current_group_size < 3:
         raise ValueError("prediction race groups must contain at least 3 rows")
-
-
-def _race_groups(rows: Sequence[RankingRow]) -> tuple[int, ...]:
-    groups: list[int] = []
-    current_race: str | None = None
-    for row in rows:
-        if row.race_id != current_race:
-            groups.append(1)
-            current_race = row.race_id
-        else:
-            groups[-1] += 1
-    return tuple(groups)

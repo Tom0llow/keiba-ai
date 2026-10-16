@@ -9,8 +9,8 @@ import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
 from features.contracts.types import FeatureDefinition, FeatureValuesInput
-from features.generation.base import FeatureBuilder
-from features.generation.normalization import normalize_feature_inputs
+from features.generation.base import RegisteredFeatureBuilder
+from features.generation.normalization import normalize_audited_feature_inputs
 from features.tables.schema import IntermediateFeatureTable
 
 
@@ -19,18 +19,14 @@ class RunningStyleAndPositionInput(FeatureValuesInput):
     """Provide explicit running style and position values and source evidence."""
 
 
-class RunningStyleAndPositionBuilder(FeatureBuilder[FeatureValuesInput]):
+class RunningStyleAndPositionBuilder(RegisteredFeatureBuilder):
     """Build this feature using its own normalization and shared table contract."""
 
     feature_name = "running_style_and_position"
-    definition: FeatureDefinition
+    input_type = RunningStyleAndPositionInput
 
-    def __init__(self, definition: FeatureDefinition) -> None:
-        super().__init__(definition)
-        self.definition = definition
-
-    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
-        return _normalize_running_style_and_position(records, self.definition)
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        return _normalize_running_style_and_position(records)
 
 
 def build_running_style_and_position(
@@ -45,6 +41,5 @@ def build_running_style_and_position(
 
 def _normalize_running_style_and_position(
     records: Sequence[FeatureValuesInput],
-    definition: FeatureDefinition,
 ) -> list[FeatureTableRow]:
-    return normalize_feature_inputs(records, definition.feature_id, RunningStyleAndPositionInput)
+    return normalize_audited_feature_inputs(records)

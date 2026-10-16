@@ -8,9 +8,17 @@ from collections.abc import Mapping, Sequence
 import pyarrow as pa
 
 from features.contracts.rows import FeatureTableRow
-from features.contracts.types import FeatureDefinition
+from features.contracts.types import (
+    FeatureAudit,
+    FeatureBatchInput,
+    FeatureBuildError,
+    FeatureDefinition,
+    FeatureValuesInput,
+)
+from features.generation.normalization import input_batches, require_feature_input_type
 from features.tables.build import build_feature_table
 from features.tables.schema import IntermediateFeatureTable
+from features.validation.audit import audit_feature_inputs
 
 
 class FeatureBuilder[InputT](ABC):
@@ -45,3 +53,39 @@ class FeatureBuilder[InputT](ABC):
     @abstractmethod
     def _build_rows(self, records: Sequence[InputT]) -> list[FeatureTableRow]:
         """Normalize feature-specific inputs and calculate their value rows."""
+
+
+class RegisteredFeatureBuilder(FeatureBuilder[FeatureValuesInput]):
+    """Audit configured feature inputs before delegating their row normalization."""
+
+    definition: FeatureDefinition
+    input_type: type[FeatureValuesInput]
+
+    def __init__(self, definition: FeatureDefinition) -> None:
+        super().__init__(definition)
+        self.definition = definition
+
+    def audit_batches(
+        self, records: Sequence[FeatureBatchInput], audit: FeatureAudit
+    ) -> FeatureAudit:
+        """Append feature-owned checks to the shared batch audit."""
+        return audit
+
+    def _build_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        require_feature_input_type(records, self.input_type)
+        batches = input_batches(records, self.definition.feature_id)
+        audit = audit_feature_inputs(batches, required_feature_ids=(self.definition.feature_id,))
+        if not audit.valid:
+            raise FeatureBuildError(audit)
+        audit = self.audit_batches(batches, audit)
+        if not audit.valid:
+            raise FeatureBuildError(audit)
+        return self._build_audited_rows(records)
+
+    def _build_audited_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        require_feature_input_type(records, self.input_type)
+        return self._normalize_rows(records)
+
+    @abstractmethod
+    def _normalize_rows(self, records: Sequence[FeatureValuesInput]) -> list[FeatureTableRow]:
+        """Normalize inputs whose shared and feature-owned audits have succeeded."""
