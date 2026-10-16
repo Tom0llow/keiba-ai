@@ -7,6 +7,7 @@ from typing import cast
 from unittest.mock import Mock, patch
 
 import pytest
+from rich.text import Text
 from typer import Typer
 from typer.testing import CliRunner
 
@@ -28,6 +29,15 @@ FEATURE_BUILDERS = {
 FEATURE_INPUT_TYPES = {entry.definition.feature_id: entry.input_type for entry in REGISTRY.features}
 
 runner = CliRunner()
+
+
+@pytest.fixture(params=[False, True], ids=["default-color", "forced-color"])
+def cli_color_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPatch) -> None:
+    if request.param:
+        monkeypatch.setenv("FORCE_COLOR", "1")
+        monkeypatch.setenv("TERM", "xterm-256color")
+        monkeypatch.delenv("NO_COLOR", raising=False)
+        monkeypatch.delenv("TTY_COMPATIBLE", raising=False)
 
 
 @pytest.mark.parametrize(
@@ -295,6 +305,7 @@ def test_legacy_historical_mode_names_are_rejected() -> None:
         ),
     ],
 )
+@pytest.mark.usefixtures("cli_color_mode")
 def test_retrieval_option_errors_preserve_validation_priority(
     arguments: list[str], message: str
 ) -> None:
@@ -306,7 +317,8 @@ def test_retrieval_option_errors_preserve_validation_priority(
         result = runner.invoke(app, arguments)
 
     assert result.exit_code == 2
-    assert message in " ".join(result.output.replace("│", "").split())
+    output = Text.from_ansi(result.output).plain
+    assert message in " ".join(output.replace("│", "").split())
     retriever.assert_not_called()
     preprocesser.assert_not_called()
     config.assert_not_called()
@@ -339,6 +351,7 @@ def test_realtime_partial_race_never_falls_back_to_configuration(race_option: st
     retriever.assert_not_called()
 
 
+@pytest.mark.usefixtures("cli_color_mode")
 def test_provider_confirmation_requires_explicit_race_before_validating_specs() -> None:
     with (
         patch("main.JVLinkConfig.from_toml") as config,
@@ -355,7 +368,7 @@ def test_provider_confirmation_requires_explicit_race_before_validating_specs() 
         )
 
     assert result.exit_code == 2
-    assert "--confirm-provider-missing requires" in result.output
+    assert "--confirm-provider-missing requires" in Text.from_ansi(result.output).plain
     config.assert_not_called()
     retriever.assert_not_called()
 
