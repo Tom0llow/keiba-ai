@@ -10,16 +10,15 @@ data loading, feature generation, and ranking-model evaluation. Its current
 source boundary is:
 
 ```text
-src/main.py      # launches run.app.app
-src/run/         # command registration and execution boundaries
+src/main.py      # all CLI definitions, validation and execution orchestration
 src/retriever/   # retrieval
 src/preprocesser/ # raw-to-Parquet processing and publication
-src/utils/       # processed-data and JSON readers only
+src/utils/       # processed-data/JSON readers and generic JSON output
 src/settings/    # explicit shared path settings
 src/domain/      # shared race identity
 src/make_datamart/ # ordered join, validation and persistence
-src/features/    # catalogs, contracts, validation, generation and tables
-src/models/      # model inputs, ranking and evaluation
+src/features/    # catalogs, contracts, validation, generation, tables and serialization
+src/models/      # model inputs, ranking, evaluation and serialization
 src/tests/       # application and environment tests
 ```
 
@@ -54,8 +53,14 @@ coherent responsibility and have a name that describes that responsibility.
   code must not import an entry point merely to share behavior.
 - Pass important dependencies explicitly instead of constructing hidden global
   clients deep in the package.
-- Keep `utils/` limited to the authorized processed-data and JSON readers.
-  Do not add unrelated feature validation, generation or retrieval there.
+- Keep `utils/` limited to the authorized processed-data and JSON readers and
+  generic JSON writing in `json_output.py`. Keep feature/model contract
+  conversion in each owning `serialization/` package; these pure converters
+  must not perform I/O or depend on Typer or `main`.
+- Keep all CLI applications, registration, option validation, orchestration,
+  console messages and error/exit handling in `main.py`. Lower-level modules
+  must not import `main` or Typer. Do not add feature validation, generation or
+  retrieval to `utils/`.
 - Keep shared `DataPaths` in `settings/` and `RaceKey` in `domain/`; raw
   race-key conversion belongs to `retriever/race_key_parser.py`.
 - Keep datamart schema contracts independent of its builder and validation;

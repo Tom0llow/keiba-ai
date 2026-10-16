@@ -316,12 +316,14 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 ## 17. Architecture
 
-The current repository launches `src/run/` from `src/main.py`. Application
+The current repository defines and executes its CLI in `src/main.py`. Application
 modules live under `src/retriever/`, `src/preprocesser/`, `src/utils/`,
 `src/settings/`, `src/domain/`, `src/features/`, `src/make_datamart/`,
 and `src/models/`; tests remain under `src/tests/`.
 It is not installed as a Python distribution. `ARCHITECTURE.md` describes the
-implemented module boundaries.
+implemented module boundaries. Feature/model JSON contract conversion belongs
+in each owning `serialization/` package; generic JSON writing belongs in
+`utils/json_output.py`. These lower modules do not depend on Typer or `main`.
 
 - Add modules only for responsibilities required by the current task.
 - Keep imports free of runtime side effects and avoid circular dependencies.

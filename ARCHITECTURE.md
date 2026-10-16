@@ -100,18 +100,19 @@ config/
 └─ features.toml
 
 src/
-├─ main.py                       # run.app.appの起動
-├─ run/                          # CLI登録・実行・入力変換・JSON出力
+├─ main.py                       # CLI定義・実行制御・エラー処理
 ├─ retriever/                    # JV-Link取得と台帳・ロック
 ├─ preprocesser/                 # raw SQLiteからParquetへの公開
 ├─ utils/
 │  ├─ data_loader.py              # 処理済みデータ読込API
+│  ├─ json_output.py              # 汎用JSON出力・NaNのnull変換
 │  └─ loader/                     # Parquet・JSON読込
 ├─ settings/data_paths.py         # 共有パス設定
 ├─ domain/race_key.py             # 共有レース識別型
 ├─ features/
 │  ├─ catalog/                    # TOML読込・実装登録
 │  ├─ contracts/                  # 入力・中間行・結果の型
+│  ├─ serialization/              # 特徴量入力・結果の純粋なJSON変換
 │  ├─ validation/                 # 入力・時点・テーブル検証
 │  ├─ generation/                 # 共通生成手順・正規化
 │  ├─ tables/                     # スキーマ・構築・Parquet保存
@@ -121,6 +122,7 @@ src/
 │  ├─ validation/table.py         # 結合後のスキーマ・行検証
 │  └─ tables/                    # 列・metadata契約とParquet保存
 ├─ models/                        # モデル入力・学習・評価
+│  └─ serialization/              # モデル入力・結果の純粋なJSON変換
 └─ tests/
    └─ ...
 ```
@@ -143,13 +145,13 @@ This boundary is recorded in ADR-008.
 
 ## Retrieval boundary
 
-`src/main.py` only launches `run.app.app`. `src/run/app.py` registers the
-Typer commands. `run/retrieval.py` owns retrieval argument validation and the
-acquisition/publication sequence, `run/preprocess.py` owns standalone publication,
-`run/features.py` owns feature commands, and `run/models.py` owns walk-forward
-evaluation. `run/feature_inputs.py` converts JSON input to contracts;
-`run/json_output.py` writes results and structured errors, preserving NaN-to-null
-conversion. Lower-level code does not import `run/`.
+`src/main.py` defines all Typer applications, command registration, options and
+handlers. It validates CLI options, creates configured dependencies only during
+execution, composes acquisition/publication and feature/evaluation calls, and
+handles console output, structured CLI errors and exit codes. Its `__main__`
+guard invokes the app; importing the module or requesting help does not read
+configuration or inputs or start a workflow. Lower-level code does not import
+`main` or Typer. ADR-022 records this boundary and removes `src/run/`.
 
 `src/retriever/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
 and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
@@ -305,9 +307,17 @@ source data arrived through historical, latest, or realtime retrieval.
 
 `src/utils/loader/read_json.py` separately reads explicit UTF-8 JSON object
 inputs for CLI workflows. It preserves decoded values and does not depend on
-Typer, feature contracts, or the Parquet `DataLoader` facade. Feature input
-conversion, structured CLI errors, and JSON output are owned by `src/run/`.
-ADR-020 replaces the earlier CLI and source placement decisions.
+Typer, feature contracts, or the Parquet `DataLoader` facade.
+`features/serialization/inputs.py` converts already-decoded objects to
+`FeatureBatchInput` and `FeatureGroupInput`; its `outputs.py` converts feature
+audits and results to JSON-ready dictionaries. `models/serialization/` owns the
+distinct model schema/input and availability/evaluation result conversions.
+These pure converters perform no I/O and raise ordinary validation exceptions.
+`main.py` translates input errors to the existing CLI JSON and exit code.
+`utils/json_output.py` writes generic UTF-8 JSON, creates parent directories and
+converts nested NaN values to null without mutating input values. It does not
+depend on feature/model contracts or Typer. ADR-022 replaces only ADR-020's CLI
+placement decision; ADR-021's shared and datamart boundaries remain in effect.
 
 ## Configuration and persisted state
 
@@ -411,8 +421,8 @@ ADR-019 and extending the table contract of ADR-012.
 
 `src/models/walk_forward.py`
 performs expanding race-level train/validation/test splits. The model CLI uses
-JSON input at this boundary through `run/feature_inputs.py` and the
-independent JSON reader, and does not start data retrieval implicitly. These
+JSON input at this boundary through `main.py`, the independent JSON reader and
+`models/serialization/inputs.py`, and does not start data retrieval implicitly. These
 modules do not yet interpret raw JRA-VAN business codes or build historical
 aggregates; those transformations remain a separate feature-source
 implementation.

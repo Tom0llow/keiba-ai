@@ -16,18 +16,19 @@ config/
 └─ features.toml
 
 src/
-├─ main.py                       # run.app.appの起動
-├─ run/                          # CLI登録・実行・入力変換・JSON出力
+├─ main.py                       # CLI定義・実行制御・エラー処理
 ├─ retriever/                    # JV-Link取得と台帳・ロック
 ├─ preprocesser/                 # raw SQLiteからParquetへの公開
 ├─ utils/
 │  ├─ data_loader.py              # 処理済みデータ読込API
+│  ├─ json_output.py              # 汎用JSON出力・NaNのnull変換
 │  └─ loader/                     # Parquet・JSON読込
 ├─ settings/data_paths.py         # 共有パス設定
 ├─ domain/race_key.py             # 共有レース識別型
 ├─ features/
 │  ├─ catalog/                    # TOML読込・実装登録
 │  ├─ contracts/                  # 入力・中間行・結果の型
+│  ├─ serialization/              # 特徴量入力・結果の純粋なJSON変換
 │  ├─ validation/                 # 入力・時点・テーブル検証
 │  ├─ generation/                 # 共通生成手順・正規化
 │  ├─ tables/                     # スキーマ・構築・Parquet保存
@@ -37,6 +38,7 @@ src/
 │  ├─ validation/table.py         # 結合後のスキーマ・行検証
 │  └─ tables/                    # 列・metadata契約とParquet保存
 ├─ models/                        # モデル入力・学習・評価
+│  └─ serialization/              # モデル入力・結果の純粋なJSON変換
 └─ tests/
    └─ ...
 ```
@@ -47,7 +49,10 @@ without installing this repository as a Python distribution.
 The active data boundaries are described by ADR-005 through ADR-008. ADR-008
 supersedes the earlier ADR-003 publication boundary and records the split between
 raw SQLite preprocessing and processed Parquet loading. ADR-020 records the
-current source placement, runtime boundary and declarative feature registration.
+declarative feature registration; ADR-021 records shared settings, race identity,
+and datamart placement. ADR-022 places CLI definitions and execution in
+`src/main.py`, pure contract conversion in each feature/model serialization
+package, and generic JSON writing in `utils/json_output.py`.
 
 ## Data flow
 
@@ -65,7 +70,8 @@ JV-Link
 
 `race.db` is the mutable raw acquisition store. Model-facing code does not read
 it directly. SQLite reads live under `src/preprocesser/`, while
-`src/utils/loader/` reads processed Parquet only.
+`src/utils/loader/read_parquet.py` reads processed Parquet only. The separate
+`read_json.py` reads explicit JSON inputs without feature or model validation.
 
 Storage paths are configured in `config/data.toml`:
 

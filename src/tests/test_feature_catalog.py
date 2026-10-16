@@ -27,9 +27,9 @@ from features.jockey_combination import (
 from features.tables.build import build_feature_table
 from features.tables.parquet import read_feature_table, write_feature_table
 from features.validation.table import validate_feature_table
+from main import app
 from make_datamart.builder import join_feature_tables
 from make_datamart.tables.parquet import read_datamart, write_datamart
-from run.app import app
 
 CONFIG = Path(__file__).resolve().parents[2] / "config/features.toml"
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
@@ -284,7 +284,7 @@ assert 'features.odds_ratio' not in sys.modules
 @pytest.mark.parametrize("command", [[], ["model"], ["model", "explanatory-variables"]])
 def test_help_never_loads_feature_config(command: list[str]) -> None:
     with patch(
-        "run.features.load_feature_definitions",
+        "main.load_feature_definitions",
         side_effect=AssertionError("unexpected config read"),
     ) as loader:
         result = CliRunner().invoke(app, [*command, "--help"])
@@ -340,7 +340,7 @@ def test_cli_reads_custom_catalog_once_and_preserves_output_order(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    with patch("run.features.load_feature_definitions", wraps=load_feature_definitions) as loader:
+    with patch("main.load_feature_definitions", wraps=load_feature_definitions) as loader:
         result = CliRunner().invoke(
             app,
             [
