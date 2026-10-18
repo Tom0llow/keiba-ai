@@ -5,8 +5,8 @@ from __future__ import annotations
 from collections.abc import Sequence
 from pathlib import Path
 
-from data_loader.read_parquet import read_parquet
-from data_saver.write_parquet import write_parquet
+from data.loader.read_parquet import read_parquet
+from data.saver.write_parquet import write_parquet
 from make_features.tables.schema import (
     FEATURE_COLUMNS,
     IntermediateFeatureTable,

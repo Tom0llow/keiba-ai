@@ -13,18 +13,19 @@ Parquet-only loader boundary. It remains a non-distributed Python project.
 config/                         # 既存3 TOMLの値・キーを維持
 src/
 ├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # 機能別の引数・表示・終了処理
+├─ cli/                         # options/json_ioと機能CLI5ファイル
 ├─ configuration/               # TOML物理読込・共通パス・DataPaths
-├─ data_loader/                 # JSON・Parquet・SQLite物理読込
-├─ data_saver/                  # JSON・Parquet物理保存
-├─ data_preprocessor/           # SQLite値からArrowへの純粋変換
-├─ storage/                     # snapshot生成・構造・CURRENT・原子的公開
+├─ data/                        # 共通データ基盤
+│  ├─ loader/                   # JSON・Parquet・SQLite物理読込
+│  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
+│  ├─ saver/                    # JSON・Parquet物理保存
+│  └─ storage/                  # snapshot生成・構造・CURRENT・原子的公開
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
 ├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
 ├─ domain/                      # 共有RaceKey
-└─ tests/                       # 既存22ファイルと追加回帰
+└─ tests/                       # 全既存ファイルと境界回帰
 ```
 
 The project has no build system. `uv sync` installs its locked dependencies
@@ -32,9 +33,11 @@ without installing this repository as a Python distribution.
 
 データ契約はADR-005〜008、特徴量登録はADR-020に従う。
 [ADR-024](docs/decisions/ADR-024-separate-functional-responsibilities.md)が
-ADR-008とADR-021〜023の配置判断を置き換え、共通設定、物理I/O、保存構造、機能CLIの所有者を分離する。
+ADR-008とADR-021〜023の配置判断を置き換えた責務分離を継承する。
+[ADR-025](docs/decisions/ADR-025-group-data-and-separate-cli-contracts.md)によりデータ基盤をdataへ集約し、CLI共通契約と登録の依存を整理した。
 全ファイルの最終構成、旧配置の対応表、責務と互換性は
-[PR #21リファクタリング記録](docs/refactoring-pr21.md)を参照する。
+[PR #21リファクタリング記録](docs/refactoring-pr21.md)と
+[今回のデータ基盤・CLI移行記録](docs/refactoring-pr21-data-cli.md)を参照する。
 
 ## Data flow
 
@@ -51,10 +54,10 @@ JV-Link
 ```
 
 `race.db` is the mutable raw acquisition store. Model-facing code does not read
-it directly. SQLiteの読取取引は`src/data_loader/read_sqlite.py`、純粋変換は
-`src/data_preprocessor/sqlite_to_arrow.py`、生成と公開は`src/storage/`が所有する。
+it directly. SQLiteの読取取引は`src/data/loader/read_sqlite.py`、純粋変換は
+`src/data/preprocessor/sqlite_to_arrow.py`、生成と公開は`src/data/storage/`が所有する。
 
-`src/data_loader/read_parquet.py` reads processed Parquet only. The separate
+`src/data/loader/read_parquet.py` reads processed Parquet only. The separate
 `read_json.py` reads explicit JSON inputs without feature or model validation.
 
 Storage paths are configured in `config/data.toml`:
@@ -241,9 +244,9 @@ reproducibility until a separate retention policy is introduced.
 
 ## Data loader
 
-`src/data_loader/processed_data_loader.py` is the public loading facade.
-`src/data_loader/read_parquet.py` owns physical Parquet reads.
-`src/storage/snapshot_store.py` selects CURRENT versions; readers do not manage versions.
+`src/data/loader/processed_data_loader.py` is the public loading facade.
+`src/data/loader/read_parquet.py` owns physical Parquet reads.
+`src/data/storage/snapshot_store.py` selects CURRENT versions; readers do not manage versions.
 
 The loader can:
 
@@ -251,7 +254,7 @@ The loader can:
 - iterate large Parquet tables in bounded Arrow record batches;
 - read prediction-time O1/O2 Parquet for a specified `RaceKey`.
 
-汎用SQLite物理readerは`src/data_loader/read_sqlite.py`に置き、snapshot生成工程が利用する。
+汎用SQLite物理readerは`src/data/loader/read_sqlite.py`に置き、snapshot生成工程が利用する。
 公開DataLoader APIは引き続きprocessed Parquetだけを読み、raw `race.db`を開かない。
 Realtimeもレース別Parquet版を公開してから`read_parquet.py`で読む。
 
@@ -364,15 +367,15 @@ datamart APIs require `registered_names=registry.names` for those groups and
 retain fixed validation for the original three when omitted.
 
 Import `DataRetriever` from `jra_van_retriever.retriever`, `DataPreprocesser` from
-`storage.snapshot_builder`, `DataLoader` from `data_loader.processed_data_loader`,
+`data.storage.snapshot_builder`, `DataLoader` from `data.loader.processed_data_loader`,
 `DataPaths` from `configuration.data_paths`, and `RaceKey` from `domain.race_key`.
 Raw race-key rows are converted by `jra_van_retriever.parsing.race_key.race_key_from_row`.
 Import pure datamart joins from `make_datamart.builder`, file-based construction and persistence from
 `make_datamart.tables.parquet`, and validation from
 `make_datamart.validation.table`. All five existing public names remain available from `make_datamart`;
 file-based names previously imported from `make_datamart.builder` move to `make_datamart.tables.parquet`. The former
-`src/data/`, `features/common/`, `features/make_features.py` and module `SPEC`
-constants are removed. Acquired data and existing Parquet artifacts remain in
+the earlier combined data modules, `features/common/`, `features/make_features.py` and module `SPEC`
+constants are removed. The current `src/data/` groups the already separated data responsibilities. Acquired data and existing Parquet artifacts remain in
 their original locations and formats. `docs/GUARDED_WORKFLOW_REPAIR.md` remains
 available because removing its guarded workflow references requires a separate
 manual authorization.

@@ -1,6 +1,7 @@
 # PR #21 責務分離リファクタリング記録
 
-基準HEAD: `781cbcfdda0d1ec7377e70440e887562e89629dd`。実装日: 2026-10-18。
+前段階の基準HEAD: `781cbcfdda0d1ec7377e70440e887562e89629dd`。その実装は`8053ea8fa3027109c5082612b0689e169f5030c4`までに完了した。
+今回の構成変更の基準は8053ea8。以下の旧123ファイルの履歴は保持し、移設先・責務一覧・最終ツリーはADR-025の現行配置へ更新した。今回の差分と検証は[データ基盤・CLI移行記録](refactoring-pr21-data-cli.md)を参照する。
 [ADR-024](decisions/ADR-024-separate-functional-responsibilities.md)に従い、既存の計算、設定値、保存形式、ロック・台帳・復旧とCLIの契約を維持して所有者を分離した。
 
 ## 旧ファイルと新ファイルの全件対応
@@ -49,7 +50,7 @@
 |`src/features/serialization/outputs.py`|`make_features/serialization/outputs.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
 |`src/features/tables/__init__.py`|`make_features/tables/__init__.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
 |`src/features/tables/build.py`|`make_features/tables/build.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
-|`src/features/tables/parquet.py`|`make_features/tables/parquet.py`<br>`data_loader/read_parquet.py`<br>`data_saver/write_parquet.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
+|`src/features/tables/parquet.py`|`make_features/tables/parquet.py`<br>`data/loader/read_parquet.py`<br>`data/saver/write_parquet.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 |`src/features/tables/schema.py`|`make_features/tables/schema.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
 |`src/features/trainer_performance.py`|`make_features/trainer_performance.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
 |`src/features/validation/__init__.py`|`make_features/validation/__init__.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
@@ -60,11 +61,11 @@
 |`src/features/validation/table.py`|`make_features/validation/table.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
 |`src/features/validation/values.py`|`make_features/validation/values.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
 |`src/features/within_race_relative.py`|`make_features/within_race_relative.py`|make_featuresへ移設。個別の計算・監査・生成ロジックは変更しない。|
-|`src/main.py`|`main.py`<br>`cli/cli_common.py`<br>`cli/cli_jra_van_retriever.py`<br>`cli/cli_data_preprocessor.py`<br>`cli/cli_make_features.py`<br>`cli/cli_models.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
+|`src/main.py`|`main.py`<br>`cli/options.py`<br>`cli/json_io.py`<br>`cli/jra_van_retriever.py`<br>`cli/preprocessor.py`<br>`cli/make_features.py`<br>`cli/models.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 |`src/make_datamart/__init__.py`|`make_datamart/__init__.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
 |`src/make_datamart/builder.py`|`make_datamart/builder.py`<br>`make_datamart/tables/parquet.py`<br>`make_datamart/__init__.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 |`src/make_datamart/tables/__init__.py`|`make_datamart/tables/__init__.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
-|`src/make_datamart/tables/parquet.py`|`make_datamart/tables/parquet.py`<br>`data_loader/read_parquet.py`<br>`data_saver/write_parquet.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
+|`src/make_datamart/tables/parquet.py`|`make_datamart/tables/parquet.py`<br>`data/loader/read_parquet.py`<br>`data/saver/write_parquet.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 |`src/make_datamart/tables/schema.py`|`make_datamart/tables/schema.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
 |`src/make_datamart/validation/__init__.py`|`make_datamart/validation/__init__.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
 |`src/make_datamart/validation/table.py`|`make_datamart/validation/table.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
@@ -83,9 +84,9 @@
 |`src/models/train_model.py`|`models/training/train.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
 |`src/models/walk_forward.py`|`models/evaluation/walk_forward.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
 |`src/preprocesser/__init__.py`|該当する新packageの`__init__.py`へ統合|旧package宣言を削除。旧settings/utilsを含む旧配置は廃止し、実装を残さない。|
-|`src/preprocesser/data_preprocesser.py`|`storage/snapshot_builder.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
-|`src/preprocesser/read_sqlite.py`|`data_loader/read_sqlite.py`<br>`data_preprocessor/sqlite_to_arrow.py`<br>`data_saver/write_parquet.py`<br>`storage/snapshot_builder.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
-|`src/preprocesser/snapshot.py`|`storage/snapshot_builder.py`<br>`storage/snapshot_store.py`<br>`storage/snapshot_publisher.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
+|`src/preprocesser/data_preprocesser.py`|`data/storage/snapshot_builder.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
+|`src/preprocesser/read_sqlite.py`|`data/loader/read_sqlite.py`<br>`data/preprocessor/sqlite_to_arrow.py`<br>`data/saver/write_parquet.py`<br>`data/storage/snapshot_builder.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
+|`src/preprocesser/snapshot.py`|`data/storage/snapshot_builder.py`<br>`data/storage/snapshot_store.py`<br>`data/storage/snapshot_publisher.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 |`src/retriever/__init__.py`|該当する新packageの`__init__.py`へ統合|旧package宣言を削除。旧settings/utilsを含む旧配置は廃止し、実装を残さない。|
 |`src/retriever/acquisition_lock.py`|`jra_van_retriever/acquisition/acquisition_lock.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
 |`src/retriever/data_retriever.py`|`jra_van_retriever/retriever.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
@@ -127,11 +128,11 @@
 |`src/tests/test_walk_forward.py`|`tests/test_walk_forward.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
 |`src/tests/test_weekly_progress.py`|`tests/test_weekly_progress.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
 |`src/utils/__init__.py`|該当する新packageの`__init__.py`へ統合|旧package宣言を削除。旧settings/utilsを含む旧配置は廃止し、実装を残さない。|
-|`src/utils/data_loader.py`|`data_loader/processed_data_loader.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
-|`src/utils/json_output.py`|`data_saver/write_json.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
+|`src/utils/data_loader.py`|`data/loader/processed_data_loader.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
+|`src/utils/json_output.py`|`data/saver/write_json.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
 |`src/utils/loader/__init__.py`|該当する新packageの`__init__.py`へ統合|旧package宣言を削除。旧settings/utilsを含む旧配置は廃止し、実装を残さない。|
-|`src/utils/loader/read_json.py`|`data_loader/read_json.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
-|`src/utils/loader/read_parquet.py`|`data_loader/read_parquet.py`<br>`data_loader/processed_data_loader.py`<br>`storage/snapshot_store.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
+|`src/utils/loader/read_json.py`|`data/loader/read_json.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
+|`src/utils/loader/read_parquet.py`|`data/loader/read_parquet.py`<br>`data/loader/processed_data_loader.py`<br>`data/storage/snapshot_store.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 ## 実際に分離・共通化した処理
 
 - TOML物理読込と相対/絶対/ホームパスの解決をconfigurationに集約した。DataPathsは共有パス固有の必須値、JVLink configは取得固有の型・検証、feature catalogはID/名前/順序を所有する。共通基盤から機能への依存はない。
@@ -166,13 +167,13 @@ Storageをimportしない。バッチ読込は反復開始までCURRENTを解決
 |---|---|
 |`jra_van_retriever.retriever.DataRetriever`|READMEとtest_data_retrieverで利用する既存の公開取得API名。実クラスJraVanRetrieverの同一参照として維持する。|
 |`jra_van_retriever.retriever.HistoricalRetriever` / `retrieve_historical`|test_historicalと既存統合APIでbase→旧オッズ経路を利用する。retriever.pyの互換組立から専有workflowへ委譲し、元と同じ一時ディレクトリと順序を維持する。|
-|`storage.snapshot_builder.DataPreprocesser`|READMEとCLI/既存pipelineテストで使用するAPIの綴り。実クラスSnapshotBuilderの同一参照としてfrom_toml/rebuild/update/update_raceを維持する。|
-|`data_loader.processed_data_loader.DataLoader`|READMEと既存pipelineテストで利用。list/read/iter/realtimeの引数、結果と例外を維持する。|
+|`data.storage.snapshot_builder.DataPreprocesser`|READMEとCLI/既存pipelineテストで使用するAPIの綴り。実クラスSnapshotBuilderの同一参照としてfrom_toml/rebuild/update/update_raceを維持する。|
+|`data.loader.processed_data_loader.DataLoader`|READMEと既存pipelineテストで利用。list/read/iter/realtimeの引数、結果と例外を維持する。|
 |`models`の既存公開名|既存models/__init__.pyの公開リスト全体を新所有先から再公開する。保存形式や学習・推論仕様を変えない。|
 |`models.predict_model`のRankingModel/RankingPrediction|元から存在する5行のprediction互換入口であり、既存モデルテストが利用していた。新Facadeは作らず、既存入口から新rankerの同じ2名を再公開する。|
 |`RankingModel.save/load`|既存モデルテストの保存・再読込API。実処理はNativeModelArtifactに集約し、metadata検証・復旧を複製しない。|
 |`make_datamart`の5公開名|既存package APIとround-tripテストで利用。joinはbuilder、他4名はtables/parquetから再公開する。|
-|`main.register_feature_commands`|既存CLI登録テストとADR-022で公開する登録関数。新CLI所有先から同じ関数を再公開する。|
+|`main.register_feature_commands`|既存CLI登録テストとADR-022で公開する登録関数。mainの組立責務として同じ3コマンドを登録する関数を維持する。|
 |週次の公開メソッドとWeeklyBatchResult|既存取得統括・週次テストで利用。publicメソッドの署名を維持し、公開処理の所有者へ委譲する。|
 
 旧settings/utils/features/retriever/preprocesserのimportは上表の新所有先へ移行する。
@@ -197,26 +198,32 @@ package宣言も記録し、存在しない将来用model設定は含めない�
 |ファイル|責務|
 |---|---|
 |`src/cli/__init__.py`|Command-line boundaries grouped by functional responsibility.|
-|`src/cli/cli_common.py`|Share command-line option contracts, input parsing and error exits.|
-|`src/cli/cli_data_preprocessor.py`|Execute processed-data publication and report command results.|
-|`src/cli/cli_jra_van_retriever.py`|Validate retrieval options and execute acquisition commands.|
-|`src/cli/cli_make_datamart.py`|Build a datamart from explicitly ordered intermediate Parquet inputs.|
-|`src/cli/cli_make_features.py`|Execute explanatory-variable generation and register feature commands.|
-|`src/cli/cli_models.py`|Execute model input audits, projection and walk-forward evaluation.|
+|`src/cli/jra_van_retriever.py`|Validate retrieval options and execute acquisition commands.|
+|`src/cli/json_io.py`|Translate generic JSON input and output failures at the CLI boundary.|
+|`src/cli/make_datamart.py`|Build a datamart from explicitly ordered intermediate Parquet inputs.|
+|`src/cli/make_features.py`|Execute explanatory-variable generation at the command-line boundary.|
+|`src/cli/models.py`|Execute model input audits, projection and walk-forward evaluation.|
+|`src/cli/options.py`|Define option types shared by data retrieval and preprocessing CLIs.|
+|`src/cli/preprocessor.py`|Execute processed-data publication and report command results.|
 |`src/configuration/__init__.py`|Configuration responsibilities.|
 |`src/configuration/data_paths.py`|Load filesystem paths shared by race-data workflows.|
 |`src/configuration/loader.py`|Read TOML without applying feature-specific configuration contracts.|
 |`src/configuration/path_resolver.py`|Resolve explicitly configured paths beside their configuration file.|
-|`src/data_loader/__init__.py`|Data loader responsibilities.|
-|`src/data_loader/processed_data_loader.py`|Public processed-data loading facade.|
-|`src/data_loader/read_json.py`|Read UTF-8 JSON objects without CLI or feature-specific validation.|
-|`src/data_loader/read_parquet.py`|Read Parquet files and bounded batches without storage-version policy.|
-|`src/data_loader/read_sqlite.py`|Read raw SQLite tables through one read-only transaction.|
-|`src/data_preprocessor/__init__.py`|Pure transformations of raw source values.|
-|`src/data_preprocessor/sqlite_to_arrow.py`|Convert SQLite-derived values to the existing all-string Arrow contract.|
-|`src/data_saver/__init__.py`|Data saver responsibilities.|
-|`src/data_saver/write_json.py`|Write JSON-compatible values as standard UTF-8 JSON.|
-|`src/data_saver/write_parquet.py`|Write explicit Arrow tables or batches to Parquet files.|
+|`src/data/__init__.py`|Common data I/O, transformation and snapshot lifecycle boundaries.|
+|`src/data/loader/__init__.py`|Data loader responsibilities.|
+|`src/data/loader/processed_data_loader.py`|Public processed-data loading facade.|
+|`src/data/loader/read_json.py`|Read UTF-8 JSON objects without CLI or feature-specific validation.|
+|`src/data/loader/read_parquet.py`|Read Parquet files and bounded batches without storage-version policy.|
+|`src/data/loader/read_sqlite.py`|Read raw SQLite tables through one read-only transaction.|
+|`src/data/preprocessor/__init__.py`|Pure transformations of raw source values.|
+|`src/data/preprocessor/sqlite_to_arrow.py`|Convert SQLite-derived values to the existing all-string Arrow contract.|
+|`src/data/saver/__init__.py`|Data saver responsibilities.|
+|`src/data/saver/write_json.py`|Write JSON-compatible values as standard UTF-8 JSON.|
+|`src/data/saver/write_parquet.py`|Write explicit Arrow tables or batches to Parquet files.|
+|`src/data/storage/__init__.py`|Storage responsibilities.|
+|`src/data/storage/snapshot_builder.py`|Build processed snapshots from one consistent raw SQLite observation.|
+|`src/data/storage/snapshot_publisher.py`|Publish completed processed versions with an atomic CURRENT replacement.|
+|`src/data/storage/snapshot_store.py`|Own processed snapshot layout and CURRENT version resolution.|
 |`src/domain/__init__.py`|Shared domain values independent of data boundaries.|
 |`src/domain/race_key.py`|Shared race identity used across retrieval, preprocessing, and loading.|
 |`src/jra_van_retriever/__init__.py`|Jra van retriever responsibilities.|
@@ -329,10 +336,7 @@ package宣言も記録し、存在しない将来用model設定は含めない�
 |`src/models/serialization/outputs.py`|Convert model features, audits, and evaluations to JSON-ready values.|
 |`src/models/training/__init__.py`|Training responsibilities.|
 |`src/models/training/train.py`|Training entry point for the LambdaRank MVP.|
-|`src/storage/__init__.py`|Storage responsibilities.|
-|`src/storage/snapshot_builder.py`|Build processed snapshots from one consistent raw SQLite observation.|
-|`src/storage/snapshot_publisher.py`|Publish completed processed versions with an atomic CURRENT replacement.|
-|`src/storage/snapshot_store.py`|Own processed snapshot layout and CURRENT version resolution.|
+|`src/tests/test_cli_boundaries.py`|Tests for CLI composition, independent imports and shared input contracts.|
 |`src/tests/test_configuration.py`|Tests for shared physical TOML loading and path resolution.|
 |`src/tests/test_data_pipeline.py`|Tests for raw SQLite preprocessing and processed Parquet loading.|
 |`src/tests/test_data_retriever.py`|Tests for the public race-data retrieval facade.|
@@ -356,13 +360,13 @@ package宣言も記録し、存在しない将来用model設定は含めない�
 |`src/tests/test_setting.py`|Tests for declarative JVLinkToSQLite setting generation.|
 |`src/tests/test_walk_forward.py`|Tests for race-level chronological walk-forward evaluation.|
 |`src/tests/test_weekly_progress.py`|Tests for isolated weekly progress bootstrap and reconciliation.|
-|`config/data.toml`|raw/processed/runtimeの共有パス宣言。|
+|`config/data.toml`|共有raw/processed/runtimeパス宣言。|
 |`config/features.toml`|特徴量ID・名前・登録順の宣言。|
-|`config/jvlink.toml`|取得profile・DataSpec・期間・既定値の宣言。|
+|`config/jvlink.toml`|取得profile・DataSpec・期間の宣言。|
 
 ## 最終の対象ディレクトリ構成（全ファイル）
 
-対象はsrcとconfig。生成キャッシュ・仮想環境・取得データを含めない。各階層と全ファイルを省略せず示す。
+対象はsrcとconfig。生成キャッシュ・取得データ・仮想環境を除き全ファイルを示す。
 
 ```text
 config/
@@ -372,30 +376,38 @@ config/
 src/
 ├── cli/
 │   ├── __init__.py
-│   ├── cli_common.py
-│   ├── cli_data_preprocessor.py
-│   ├── cli_jra_van_retriever.py
-│   ├── cli_make_datamart.py
-│   ├── cli_make_features.py
-│   └── cli_models.py
+│   ├── jra_van_retriever.py
+│   ├── json_io.py
+│   ├── make_datamart.py
+│   ├── make_features.py
+│   ├── models.py
+│   ├── options.py
+│   └── preprocessor.py
 ├── configuration/
 │   ├── __init__.py
 │   ├── data_paths.py
 │   ├── loader.py
 │   └── path_resolver.py
-├── data_loader/
-│   ├── __init__.py
-│   ├── processed_data_loader.py
-│   ├── read_json.py
-│   ├── read_parquet.py
-│   └── read_sqlite.py
-├── data_preprocessor/
-│   ├── __init__.py
-│   └── sqlite_to_arrow.py
-├── data_saver/
-│   ├── __init__.py
-│   ├── write_json.py
-│   └── write_parquet.py
+├── data/
+│   ├── loader/
+│   │   ├── __init__.py
+│   │   ├── processed_data_loader.py
+│   │   ├── read_json.py
+│   │   ├── read_parquet.py
+│   │   └── read_sqlite.py
+│   ├── preprocessor/
+│   │   ├── __init__.py
+│   │   └── sqlite_to_arrow.py
+│   ├── saver/
+│   │   ├── __init__.py
+│   │   ├── write_json.py
+│   │   └── write_parquet.py
+│   ├── storage/
+│   │   ├── __init__.py
+│   │   ├── snapshot_builder.py
+│   │   ├── snapshot_publisher.py
+│   │   └── snapshot_store.py
+│   └── __init__.py
 ├── domain/
 │   ├── __init__.py
 │   └── race_key.py
@@ -533,12 +545,8 @@ src/
 │   │   └── train.py
 │   ├── __init__.py
 │   └── predict_model.py
-├── storage/
-│   ├── __init__.py
-│   ├── snapshot_builder.py
-│   ├── snapshot_publisher.py
-│   └── snapshot_store.py
 ├── tests/
+│   ├── test_cli_boundaries.py
 │   ├── test_configuration.py
 │   ├── test_data_pipeline.py
 │   ├── test_data_retriever.py
@@ -574,7 +582,7 @@ src/
 - ADR-024: 新しい配置・責務分離の判断。ADR-008/021/022/023は配置判断の置換先を状態欄へ記録。
 - docs/refactoring-pr21.md: 本記録。
 
-## 検証
+## 前段階の検証（8053ea8までの完了証跡）
 
 変更前はrootによりuv sync --locked、Ruff、mypy、pytest 5869件、native Codex 0.151.0のガード回帰が成功。
 変更後の最終実行は`uv run ruff format --check .`（160ファイル）、`uv run ruff check .`、`uv run mypy src`（160ファイル）、`uv run pytest -q`（5892件、32.93秒）が全て成功した。既存5869件に23件の回帰を追加し、途中の焦点検証も成功した。

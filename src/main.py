@@ -2,11 +2,19 @@
 
 import typer
 
-from cli.cli_data_preprocessor import preprocess_rebuild
-from cli.cli_jra_van_retriever import main
-from cli.cli_make_datamart import datamart_build
-from cli.cli_make_features import register_feature_commands as register_feature_commands
-from cli.cli_models import model_walk_forward
+from cli.jra_van_retriever import main
+from cli.make_datamart import datamart_build
+from cli.make_features import model_explanatory_variables
+from cli.models import model_audit, model_features, model_walk_forward
+from cli.preprocessor import preprocess_rebuild
+
+
+def register_feature_commands(model_app: typer.Typer) -> None:
+    """Register the audit, features, and explanatory-variables commands."""
+    model_app.command("audit")(model_audit)
+    model_app.command("features")(model_features)
+    model_app.command("explanatory-variables")(model_explanatory_variables)
+
 
 app = typer.Typer(no_args_is_help=True)
 preprocess_app = typer.Typer(no_args_is_help=True, help="Publish processed Parquet data.")

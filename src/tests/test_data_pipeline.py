@@ -10,12 +10,12 @@ import pyarrow as pa
 import pytest
 
 from configuration.data_paths import DataPaths
-from data_loader.processed_data_loader import DataLoader
-from data_saver.write_parquet import write_parquet_batches
+from data.loader.processed_data_loader import DataLoader
+from data.saver.write_parquet import write_parquet_batches
+from data.storage import snapshot_builder
+from data.storage.snapshot_builder import DataPreprocesser
+from data.storage.snapshot_store import SnapshotStore
 from domain.race_key import RaceKey
-from storage import snapshot_builder
-from storage.snapshot_builder import DataPreprocesser
-from storage.snapshot_store import SnapshotStore
 
 
 def _paths(tmp_path: Path) -> DataPaths:
@@ -191,7 +191,7 @@ def test_current_replacement_failure_keeps_readable_previous_version(
     def fail_replace(source: Path, destination: Path) -> None:
         raise OSError("CURRENT replacement failed")
 
-    monkeypatch.setattr("storage.snapshot_publisher.os.replace", fail_replace)
+    monkeypatch.setattr("data.storage.snapshot_publisher.os.replace", fail_replace)
     with pytest.raises(OSError, match="CURRENT replacement failed"):
         publish()
     assert store.current_snapshot(race) == current

@@ -4,7 +4,7 @@ import json
 from math import isnan
 from pathlib import Path
 
-from data_saver.write_json import write_json
+from data.saver.write_json import write_json
 
 
 def test_write_json_converts_nested_nan_without_mutating_inputs(tmp_path: Path) -> None:

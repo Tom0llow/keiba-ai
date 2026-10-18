@@ -152,11 +152,11 @@ def test_datamart_cli_rejects_unregistered_feature(tmp_path: Path) -> None:
 def test_datamart_cli_help_does_not_read_catalog_or_parquet() -> None:
     with (
         patch(
-            "cli.cli_make_datamart.load_feature_definitions",
+            "cli.make_datamart.load_feature_definitions",
             side_effect=AssertionError("catalog read"),
         ) as catalog,
         patch(
-            "cli.cli_make_datamart.make_datamart", side_effect=AssertionError("Parquet read")
+            "cli.make_datamart.make_datamart", side_effect=AssertionError("Parquet read")
         ) as build,
     ):
         result = CliRunner().invoke(app, ["datamart", "build", "--help"])

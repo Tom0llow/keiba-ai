@@ -13,18 +13,19 @@ source boundary is:
 config/                         # 既存3 TOMLの値・キーを維持
 src/
 ├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # 機能別の引数・表示・終了処理
+├─ cli/                         # options/json_ioと機能CLI5ファイル
 ├─ configuration/               # TOML物理読込・共通パス・DataPaths
-├─ data_loader/                 # JSON・Parquet・SQLite物理読込
-├─ data_saver/                  # JSON・Parquet物理保存
-├─ data_preprocessor/           # SQLite値からArrowへの純粋変換
-├─ storage/                     # snapshot生成・構造・CURRENT・原子的公開
+├─ data/                        # 共通データ基盤
+│  ├─ loader/                   # JSON・Parquet・SQLite物理読込
+│  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
+│  ├─ saver/                    # JSON・Parquet物理保存
+│  └─ storage/                  # snapshot生成・構造・CURRENT・原子的公開
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
 ├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
 ├─ domain/                      # 共有RaceKey
-└─ tests/                       # 既存22ファイルと追加回帰
+└─ tests/                       # 全既存ファイルと境界回帰
 ```
 
 `ARCHITECTURE.md` and Accepted ADRs describe implemented contracts. The project
@@ -60,12 +61,12 @@ coherent responsibility and have a name that describes that responsibility.
   clients deep in the package.
 - Common TOML reading and relative/user path resolution belong to `configuration/`.
   Feature configuration uses this foundation; the foundation never imports features.
-- Physical JSON/Parquet/SQLite I/O belongs to `data_loader/` and `data_saver/`.
+- Physical JSON/Parquet/SQLite I/O belongs to `data/loader/` and `data/saver/`.
   Feature/model contract conversion stays pure in each `serialization/` package.
-- Keep pure SQLite-to-Arrow conversion in `data_preprocessor/`; storage layout,
-  generation and atomic publication belong to `storage/`, with one transaction per snapshot.
+- Keep pure SQLite-to-Arrow conversion in `data/preprocessor/`; storage layout,
+  generation and atomic publication belong to `data/storage/`, with one transaction per snapshot.
 - Keep CLI options, validation, output and exits in feature-specific `cli/` modules.
-  `main.py` only assembles/registers/starts Typer; lower modules never import CLI or Typer.
+  `main.py` owns all registration and only assembles/registers/starts Typer; lower modules never import CLI or Typer.
 - Shared `DataPaths` belongs to `configuration/`, `RaceKey` to `domain/`, and raw
   race-key conversion to `jra_van_retriever/parsing/race_key.py`.
 - Datamart `builder.py` implements only pure joins. File-based building/read/write
@@ -73,7 +74,10 @@ coherent responsibility and have a name that describes that responsibility.
 - Dataset types, schema, validation, availability and construction have distinct owners.
   Model artifacts belong to `artifacts/native_model.py`, native LightGBM to `backends/`.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
-  See ADR-024 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
+  See ADR-025 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
+- Share option definitions through `cli/options.py` and generic CLI JSON handling
+  through the public functions in `cli/json_io.py`. Functional CLI modules must not
+  import siblings for private factories or command registration.
 - Keep public interfaces as small as the current callers require.
 
 Keep entry points responsible for boundary concerns and delegation rather than

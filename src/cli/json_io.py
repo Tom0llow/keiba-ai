@@ -1,38 +1,29 @@
-"""Share command-line option contracts, input parsing and error exits."""
+"""Translate generic JSON input and output failures at the CLI boundary."""
 
 from __future__ import annotations
 
 import json
 from collections.abc import Callable
 from pathlib import Path
-from typing import Annotated, NoReturn
+from typing import NoReturn
 
 import typer
 
-from data_loader.read_json import read_json
-from data_saver.write_json import write_json
-
-DataConfigOption = Annotated[
-    Path,
-    typer.Option("--data-config", help="Path to the shared data TOML configuration."),
-]
+from data.loader.read_json import read_json
+from data.saver.write_json import write_json
 
 
-JVLinkConfigOption = Annotated[
-    Path,
-    typer.Option("--jvlink-config", help="Path to the JVLink retrieval profile TOML."),
-]
-
-
-def _parse_inputs[T](path: Path, parser: Callable[[dict[str, object]], T]) -> T:
-    payload = _read_json_object(path)
+def parse_json_inputs[T](path: Path, parser: Callable[[dict[str, object]], T]) -> T:
+    """Parse JSON input and preserve the existing CLI validation error contract."""
+    payload = read_json_object(path)
     try:
         return parser(payload)
     except (TypeError, ValueError) as exc:
         raise typer.BadParameter(str(exc)) from exc
 
 
-def _read_json_object(path: Path) -> dict[str, object]:
+def read_json_object(path: Path) -> dict[str, object]:
+    """Read an object and translate physical or top-level JSON input errors."""
     try:
         return read_json(path)
     except (OSError, UnicodeDecodeError, json.JSONDecodeError) as exc:
@@ -46,6 +37,7 @@ def input_error_payload(error: Exception) -> dict[str, str]:
     return {"type": "input", "message": str(error)}
 
 
-def _exit_input_error(output_path: Path, error: Exception, **context: object) -> NoReturn:
+def exit_input_error(output_path: Path, error: Exception, **context: object) -> NoReturn:
+    """Write the existing structured input error and exit with code one."""
     write_json(output_path, {**context, "error": input_error_payload(error)})
     raise typer.Exit(code=1) from error

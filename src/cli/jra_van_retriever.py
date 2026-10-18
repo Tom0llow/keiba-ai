@@ -10,8 +10,8 @@ from typing import Annotated
 
 import typer
 
-from cli.cli_common import DataConfigOption, JVLinkConfigOption
-from cli.cli_data_preprocessor import _preprocesser
+from cli.options import DataConfigOption, JVLinkConfigOption
+from data.storage.snapshot_builder import SnapshotBuilder
 from domain.race_key import RaceKey
 from jra_van_retriever.config.profiles import JVLinkConfig
 from jra_van_retriever.retriever import DataRetriever
@@ -202,7 +202,7 @@ def retrieve_historical_basic(
     tables: dict[str, int] = {}
 
     def publish() -> None:
-        tables.update(_preprocesser(data_config).rebuild())
+        tables.update(SnapshotBuilder.from_toml(data_config).rebuild())
 
     _retriever(data_config, jvlink_config).retrieve_historical_basic(publish)
     typer.echo("historical basic data retrieved")
@@ -238,7 +238,7 @@ def retrieve_historical_odds(
             typer.echo("Starting complete Parquet rebuild after all historical odds are acquired.")
             try:
                 tables = retriever.publish_historical_odds(
-                    lambda: _preprocesser(data_config).rebuild()
+                    lambda: SnapshotBuilder.from_toml(data_config).rebuild()
                 )
             except BaseException:
                 typer.echo("Complete Parquet rebuild failed.", err=True)
@@ -283,7 +283,7 @@ def retrieve_latest(
 ) -> None:
     """Retrieve latest raw data and refresh the complete Parquet snapshot."""
     _retriever(data_config, jvlink_config).retrieve_latest()
-    tables = _preprocesser(data_config).update()
+    tables = SnapshotBuilder.from_toml(data_config).update()
     typer.echo("latest race data retrieved")
     typer.echo(f"processed snapshot published: {len(tables)} tables")
 
@@ -301,6 +301,6 @@ def retrieve_realtime(
         nichiji=race_key.nichiji,
         race_number=race_key.race_number,
     )
-    tables = _preprocesser(data_config).update_race(race_key)
+    tables = SnapshotBuilder.from_toml(data_config).update_race(race_key)
     typer.echo(f"realtime odds archived: {inserted} rows")
     typer.echo(f"realtime Parquet published: {sum(tables.values())} rows")

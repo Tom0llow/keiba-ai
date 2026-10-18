@@ -8,9 +8,9 @@ from pathlib import Path
 import pyarrow as pa
 
 from configuration.data_paths import DataPaths
-from data_loader.read_parquet import iter_parquet_batches, read_parquet
+from data.loader.read_parquet import iter_parquet_batches, read_parquet
+from data.storage.snapshot_store import SnapshotStore
 from domain.race_key import RaceKey
-from storage.snapshot_store import SnapshotStore
 
 
 class DataLoader:

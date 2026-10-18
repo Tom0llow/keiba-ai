@@ -7,8 +7,8 @@ from pathlib import Path
 
 import pyarrow as pa
 
-from data_loader.read_parquet import read_parquet
-from data_saver.write_parquet import write_parquet
+from data.loader.read_parquet import read_parquet
+from data.saver.write_parquet import write_parquet
 from make_datamart.builder import join_feature_tables
 from make_datamart.validation.table import validate_datamart
 from make_features.tables.parquet import read_feature_table

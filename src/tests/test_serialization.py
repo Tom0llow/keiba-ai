@@ -245,7 +245,7 @@ from make_features.serialization.inputs import parse_explanatory_inputs
 from make_features.serialization.outputs import feature_audit_payload
 from models.serialization.inputs import parse_feature_inputs
 from models.serialization.outputs import metrics_payload
-from data_saver.write_json import write_json
+from data.saver.write_json import write_json
 assert parse_explanatory_inputs({{'records': []}}) == ()
 assert 'main' not in sys.modules
 """

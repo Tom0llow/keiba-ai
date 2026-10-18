@@ -318,12 +318,15 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 The repository assembles its CLI in `src/main.py` and executes feature-specific
 CLI handling under `src/cli/`. `configuration/` owns shared settings, physical
-I/O belongs to `data_loader/` and `data_saver/`, pure conversion to
-`data_preprocessor/`, and snapshot lifecycle to `storage/`. Business modules are
+I/O belongs to `data/loader/` and `data/saver/`, pure conversion to
+`data/preprocessor/`, and snapshot lifecycle to `data/storage/`. Business modules are
 `jra_van_retriever/`, `make_features/`, `make_datamart/`, `models/`, and shared
-`domain/`; tests remain under `src/tests/`. ADR-024 records these boundaries.
+`domain/`; tests remain under `src/tests/`. ADR-025 records these boundaries.
+CLI option types belong to `cli/options.py`, JSON boundary handling to
+`cli/json_io.py`, and all command registration to `main.py`. Do not import
+private functions from sibling CLI modules.
 Feature/model JSON conversion stays pure in each `serialization/` package;
-generic JSON output belongs to `data_saver/write_json.py`. Lower modules do not
+generic JSON output belongs to `data/saver/write_json.py`. Lower modules do not
 depend on Typer, `cli` or `main`. The project is not a Python distribution.
 
 - Add modules only for responsibilities required by the current task.

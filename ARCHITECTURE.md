@@ -97,24 +97,27 @@ and literal argv integration remain separate manual installation checks.
 config/                         # 既存3 TOMLの値・キーを維持
 src/
 ├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # 機能別の引数・表示・終了処理
+├─ cli/                         # options/json_ioと機能CLI5ファイル
 ├─ configuration/               # TOML物理読込・共通パス・DataPaths
-├─ data_loader/                 # JSON・Parquet・SQLite物理読込
-├─ data_saver/                  # JSON・Parquet物理保存
-├─ data_preprocessor/           # SQLite値からArrowへの純粋変換
-├─ storage/                     # snapshot生成・構造・CURRENT・原子的公開
+├─ data/                        # 共通データ基盤
+│  ├─ loader/                   # JSON・Parquet・SQLite物理読込
+│  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
+│  ├─ saver/                    # JSON・Parquet物理保存
+│  └─ storage/                  # snapshot生成・構造・CURRENT・原子的公開
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
 ├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
 ├─ domain/                      # 共有RaceKey
-└─ tests/                       # 既存22ファイルと追加回帰
+└─ tests/                       # 全既存ファイルと境界回帰
 ```
 
 全ソースファイルの責務と移行対応、最終全ファイルツリーは
 [PR #21リファクタリング記録](docs/refactoring-pr21.md)に記録する。
 ADR-024はADR-008とADR-021〜023の配置判断を置換し、既存の計算・保存形式・CLIを維持する。
 旧settings/utils/retriever/preprocesser/featuresパッケージは廃止した。
+ADR-025がADR-024のデータ基盤とCLI共通処理・登録の配置判断を部分置換する。
+data内の4責務と既存保存契約は継承し、configurationは独立したまま維持する。
 
 ## 設定管理
 
@@ -140,15 +143,15 @@ configurationは業務機能へ依存しない。暗黙の設定読込、singlet
 
 | 所有者 | 責務 |
 | --- | --- |
-| data_loader/read_sqlite.py | read-only接続と単一取引、表・列の列挙、rowid順のバッチ読込。Arrowと保存を扱わない。 |
-| data_preprocessor/sqlite_to_arrow.py | TEXT/DATETIME宣言をnullable stringへ変換し、NULL・先頭ゼロ・列順を保持。I/Oを持たない。 |
-| data_saver/write_parquet.py | 明示Arrow schema/table/batchの物理保存。空表もschemaを保存する。 |
-| data_loader/read_parquet.py | 明示Parquetパスのtable/metadata/RecordBatchの物理読込。CURRENTを扱わない。 |
-| storage/snapshot_builder.py | 読込・変換・保存・保存結果照合・完成版公開を統括。DataPreprocesserのAPI名も維持する。 |
-| storage/snapshot_store.py | complete/race別保存構造、versionパス、CURRENT解決、表パスの所有。 |
-| storage/snapshot_publisher.py | stagingの完成版rename後、os.replaceでCURRENTを原子的に更新する。 |
-| data_loader/processed_data_loader.py | DataLoader公開API。Storageから選択パスを取得し、物理readerへ渡す。 |
-| data_loader/read_json.py / data_saver/write_json.py | UTF-8 JSON object読込と、NaNをnullへ変換する汎用JSON保存。 |
+| data/loader/read_sqlite.py | read-only接続と単一取引、表・列の列挙、rowid順のバッチ読込。Arrowと保存を扱わない。 |
+| data/preprocessor/sqlite_to_arrow.py | TEXT/DATETIME宣言をnullable stringへ変換し、NULL・先頭ゼロ・列順を保持。I/Oを持たない。 |
+| data/saver/write_parquet.py | 明示Arrow schema/table/batchの物理保存。空表もschemaを保存する。 |
+| data/loader/read_parquet.py | 明示Parquetパスのtable/metadata/RecordBatchの物理読込。CURRENTを扱わない。 |
+| data/storage/snapshot_builder.py | 読込・変換・保存・保存結果照合・完成版公開を統括。DataPreprocesserのAPI名も維持する。 |
+| data/storage/snapshot_store.py | complete/race別保存構造、versionパス、CURRENT解決、表パスの所有。 |
+| data/storage/snapshot_publisher.py | stagingの完成版rename後、os.replaceでCURRENTを原子的に更新する。 |
+| data/loader/processed_data_loader.py | DataLoader公開API。Storageから選択パスを取得し、物理readerへ渡す。 |
+| data/loader/read_json.py / data/saver/write_json.py | UTF-8 JSON object読込と、NaNをnullへ変換する汎用JSON保存。 |
 
 完全snapshotの全表を一つのSQLite読取取引内で処理する。バッチは最大65,536行、
 目安1,000,000セルを列数で割った従来の上限を維持する。保存後のrow countとschemaを照合する。
@@ -248,12 +251,17 @@ feature/model serializationはI/O・Typerへ依存せず、モデル設定の外
 
 ## CLI
 
-main.pyはTyperの組立・登録・起動だけを行う。cli_commonは共通option、JSON境界、構造化エラー、
-各cli_*は対応機能の引数検証、実行、表示と終了を所有する。下位機能はCLIやTyperをimportしない。
+main.pyはTyperの組立・登録・起動だけを行う。cli/options.pyとcli/json_io.pyは共通option、JSON境界、構造化エラー、
+各機能CLIは対応機能の引数検証、実行、表示と終了を所有する。下位機能はCLIやTyperをimportしない。
 importとhelpは設定や入力を読まず、取得資源を作らない。
 
 既存の取得flags、preprocess/modelコマンド、引数・文言・stdout/stderr・終了コードを維持する。
-main.register_feature_commandsは既存の公開登録APIとして所有先から再公開する。
+main.register_feature_commandsは既存の公開登録APIとしてmainで実装する。
+cli/options.pyがDataConfigOption/JVLinkConfigOption、cli/json_io.pyが公開のread_json_object/
+parse_json_inputs/input_error_payload/exit_input_errorを所有する。CLI固有スキーマは各機能に残す。
+取得・前処理CLIはSnapshotBuilder.from_tomlを直接呼び、他CLIのprivate factoryを参照しない。
+機能CLIはjra_van_retriever.py/preprocessor.py/make_features.py/make_datamart.py/models.pyとし、
+機能同士を登録のためにimportしない。Typer登録は全てmainが所有する。
 新規datamart buildはrepeatable --input、--output、既定config/features.tomlの--features-configを受け、
 定義名のみを読み、既存のファイル構築・保存APIへ渡す。失敗はstderr/終了1、成功は行数をstdoutへ出す。
 

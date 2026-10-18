@@ -284,7 +284,7 @@ assert 'make_features.odds_ratio' not in sys.modules
 @pytest.mark.parametrize("command", [[], ["model"], ["model", "explanatory-variables"]])
 def test_help_never_loads_feature_config(command: list[str]) -> None:
     with patch(
-        "cli.cli_make_features.load_feature_definitions",
+        "cli.make_features.load_feature_definitions",
         side_effect=AssertionError("unexpected config read"),
     ) as loader:
         result = CliRunner().invoke(app, [*command, "--help"])
@@ -341,7 +341,7 @@ def test_cli_reads_custom_catalog_once_and_preserves_output_order(tmp_path: Path
         encoding="utf-8",
     )
     with patch(
-        "cli.cli_make_features.load_feature_definitions", wraps=load_feature_definitions
+        "cli.make_features.load_feature_definitions", wraps=load_feature_definitions
     ) as loader:
         result = CliRunner().invoke(
             app,

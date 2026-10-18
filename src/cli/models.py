@@ -7,8 +7,8 @@ from typing import Annotated
 
 import typer
 
-from cli.cli_common import _exit_input_error, _parse_inputs
-from data_saver.write_json import write_json
+from cli.json_io import exit_input_error, parse_json_inputs
+from data.saver.write_json import write_json
 from models.dataset.availability import FeatureGenerationError, audit_feature_availability
 from models.dataset.builder import build_features, build_ranking_dataset
 from models.dataset.rows import FeatureInput
@@ -44,11 +44,11 @@ def model_features(
     try:
         result = build_features(records, feature_schema=schema)
     except FeatureGenerationError as exc:
-        _exit_input_error(
+        exit_input_error(
             output_path, exc, schema_id=schema.schema_id, audit=audit_payload(exc.audit)
         )
     except ValueError as exc:
-        _exit_input_error(output_path, exc, schema_id=schema.schema_id)
+        exit_input_error(output_path, exc, schema_id=schema.schema_id)
     write_json(output_path, model_features_payload(schema, result))
 
 
@@ -80,11 +80,11 @@ def model_walk_forward(
             ),
         )
     except FeatureGenerationError as exc:
-        _exit_input_error(
+        exit_input_error(
             output_path, exc, schema_id=schema.schema_id, audit=audit_payload(exc.audit)
         )
     except ValueError as exc:
-        _exit_input_error(output_path, exc, schema_id=schema.schema_id)
+        exit_input_error(output_path, exc, schema_id=schema.schema_id)
     write_json(
         output_path,
         model_evaluation_payload(
@@ -101,8 +101,8 @@ def read_feature_inputs_or_exit(
     try:
         return _read_feature_inputs(input_path)
     except typer.BadParameter as exc:
-        _exit_input_error(output_path, exc)
+        exit_input_error(output_path, exc)
 
 
 def _read_feature_inputs(path: Path) -> tuple[FeatureSchema, tuple[FeatureInput, ...]]:
-    return _parse_inputs(path, parse_feature_inputs)
+    return parse_json_inputs(path, parse_feature_inputs)

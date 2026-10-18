@@ -22,9 +22,9 @@ MVPの確定仕様は次の範囲とする。
 
 ## 2. 現行の到達点と追跡関係
 
-現行の責務分離は[ADR-024](decisions/ADR-024-separate-functional-responsibilities.md)に従う。
-共通TOML/パスはconfiguration、物理I/Oはdata_loader/data_saver、純粋Arrow変換はdata_preprocessor、
-保存構造と公開はstorageに集約する。CLIは機能別cli、Datamart結合は純粋builder、ファイル入力APIは
+現行の責務分離は[ADR-024](decisions/ADR-024-separate-functional-responsibilities.md)と、配置を部分置換した[ADR-025](decisions/ADR-025-group-data-and-separate-cli-contracts.md)に従う。
+共通TOML/パスはconfiguration、物理I/Oはdata/loaderとdata/saver、純粋Arrow変換はdata/preprocessor、
+保存構造と公開はdata/storageに集約する。CLIは機能別cli、Datamart結合は純粋builder、ファイル入力APIは
 tables/parquetへ移した。全旧ファイルの対応と責務は[移行記録](refactoring-pr21.md)を参照する。
 
 
@@ -129,11 +129,11 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 
 ## 5. モジュール責務と依存方向
 
-ADR-024の責務別配置で取得・加工・読込の契約を維持する。実装済みの配置と、今後の候補を次に示す。
+ADR-025の責務別配置で取得・加工・読込の契約を維持する。実装済みの配置と、今後の候補を次に示す。
 
 | 配置候補 | 責務 | 依存・境界 |
 | --- | --- | --- |
-| `src/data_loader/read_parquet.py`とfacade | 完全snapshot・race-local versionの固定読取契約を追加する候補。 | Parquetのみ。既存のCURRENT読取との互換性を設計する。 |
+| `src/data/loader/read_parquet.py`とfacade | 完全snapshot・race-local versionの固定読取契約を追加する候補。 | Parquetのみ。既存のCURRENT読取との互換性を設計する。 |
 | `src/models/dataset/builder.py`と`availability.py` | 前者が明示入力の投影・欠損保持・RankingDataset構築、後者が時点監査を所有する。 | `FeatureInput`のfreeze/available時刻を検証する。中間テーブルの生成・保存や取得処理を担当しない。 |
 | `src/make_features/previous_race_result.py` | 前レース結果の中間テーブル生成。 | 正規化済み入力のみを受け、Parquet保存は共通のテーブル契約へ委譲する。 |
 | `src/make_features/odds_ratio.py` | オッズ比率の中間テーブル生成。 | オッズ履歴不足はNULLで保持し、補完や最終オッズへの暗黙 fallback を行わない。 |
@@ -141,9 +141,9 @@ ADR-024の責務別配置で取得・加工・読込の契約を維持する。�
 | `src/make_features/recent_performance.py`〜`src/make_features/opponent_pagerank.py` | F01〜F21それぞれの専用Input、Builder、build、normalizeを所有する。 | 共通基底`FeatureBuilder`を利用し、明示値と証跡から`FeatureTableRow`と中間テーブルを生成する。業務式、履歴窓、閾値、JRA-VANコード解釈は承認後に個別実装する。 |
 | `src/make_features/explanatory_variables.py` | 個別説明変数の生成と監査をまとめる薄いAPI。 | `FeatureBatchInput`を受け、説明変数ID別の共通中間行と監査を返す。モデルallow-listへ自動投入しない。 |
 | `src/make_features/contracts/`、`validation/`、`generation/`、`catalog/` | 型、監査、共通生成、設定登録を責務別に管理する。 | 共通中間行は`FeatureTableRow`だけ。ID・名前・順序は`config/features.toml`が所有し、登録・監査・個別生成へ明示する。 |
-| `src/data_loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
+| `src/data/loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
 | `src/make_features/serialization/`、`src/models/serialization/` | 各機能の入力型への変換と結果・監査のJSON用値への変換。 | 読込済みobjectを受ける純粋処理。両入力契約を区別し、I/O・Typer・mainへ依存しない。 |
-| `src/data_saver/write_json.py` | UTF-8 JSON保存と再帰的なNaNのnull変換。 | 親ディレクトリ作成、既存の整形と末尾改行を維持する。特徴量・モデルの型を参照しない。 |
+| `src/data/saver/write_json.py` | UTF-8 JSON保存と再帰的なNaNのnull変換。 | 親ディレクトリ作成、既存の整形と末尾改行を維持する。特徴量・モデルの型を参照しない。 |
 | `src/make_features/tables/`と`validation/table.py` | 特徴量中間テーブルのスキーマ・構築・検証・Parquet入出力。 | 既存3の契約を維持し、他の名前は明示的な`registered_names`と列型を要求する。 |
 | `src/configuration/data_paths.py` | 明示されたTOMLから共有パス設定を読み、相対パスを解決する。 | 既定設定の暗黙読込やグローバルインスタンスを持たない。 |
 | `src/domain/race_key.py`、`src/jra_van_retriever/parsing/race_key.py` | 共有の`RaceKey`型と、取得境界のraw行変換をそれぞれ所有する。 | 型と変換の挙動を維持し、変換でI/Oを行わない。 |
@@ -157,7 +157,7 @@ ADR-024の責務別配置で取得・加工・読込の契約を維持する。�
 | `src/models/artifacts/native_model.py` | nativeモデルとschema metadataの検証済み公開・復旧・再読取。 | ファイルI/Oを集約し、実行可能オブジェクトの任意復元を避ける。 |
 | `src/main.py`、`src/cli/` | mainはTyperアプリの組立・登録・起動、機能別CLIは取得・加工・特徴量・評価・Datamartの実行を編成する。 | cliが引数検証、設定・入力読込、依存生成、表示、エラーJSON・終了コードを所有する。import・help時は実行せず、既存CLIを維持する。 |
 
-特徴量コマンドは`cli/cli_make_features.py`から特徴量API、各機能の`serialization/`、`data_loader/read_json.py`、`data_saver/write_json.py`を呼ぶ。設定は実行境界で一回読み込み、同じ不変登録を監査と生成へ渡す。保存・datamartには登録名だけを渡し、個別計算・監査・loaderはCLIをimportしない。import時のI/Oや隠れたsingletonを設けない。
+特徴量コマンドは`cli/make_features.py`から特徴量API、各機能の`serialization/`、`data/loader/read_json.py`、`data/saver/write_json.py`を呼ぶ。設定は実行境界で一回読み込み、同じ不変登録を監査と生成へ渡す。保存・datamartには登録名だけを渡し、個別計算・監査・loaderはCLIをimportしない。import時のI/Oや隠れたsingletonを設けない。
 
 ## 6. 入出力データ契約の候補
 
@@ -595,7 +595,7 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、JSON入力を受ける`model audit/features/explanatory-variables/walk-forward`、および`datamart build`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
 
-ADR-024に従い、CLIの組立・登録・起動は`src/main.py`、機能別の引数検証・実行・表示・終了は`src/cli/`が担当する。特徴量・モデル固有の純粋な入力・出力変換は各機能の`serialization/`、汎用JSON出力は`src/data_saver/write_json.py`、汎用読込は`src/data_loader/read_json.py`が担当する。`config/features.toml`のID・名前・順序を一回読み込み、不変登録を各APIへ渡す。CLIの引数・終了コード・`feature_ids`等JSONキーは維持し、`--features-config`でカタログパスを指定できる。
+ADR-025に従い、CLIの組立・登録・起動は`src/main.py`、機能別の引数検証・実行・表示・終了は`src/cli/`が担当する。特徴量・モデル固有の純粋な入力・出力変換は各機能の`serialization/`、汎用JSON出力は`src/data/saver/write_json.py`、汎用読込は`src/data/loader/read_json.py`が担当する。`config/features.toml`のID・名前・順序を一回読み込み、不変登録を各APIへ渡す。CLIの引数・終了コード・`feature_ids`等JSONキーは維持し、`--features-config`でカタログパスを指定できる。
 
 | コマンド案 | 入力 | 成果物 |
 | --- | --- | --- |
