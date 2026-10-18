@@ -10,17 +10,17 @@ from typing import cast
 
 import pytest
 
-from features.catalog.loader import load_feature_definitions
-from features.catalog.registry import create_feature_registry
-from features.contracts.rows import FeatureTableRow
-from features.explanatory_variables import (
+from make_features.catalog.loader import load_feature_definitions
+from make_features.catalog.registry import create_feature_registry
+from make_features.contracts.rows import FeatureTableRow
+from make_features.explanatory_variables import (
     FeatureBatchInput,
     FeatureBuildError,
     FeatureGroupInput,
     audit_feature_inputs,
     build_explanatory_variables,
 )
-from models.ranking_dataset import FeatureSchema
+from models.dataset.schema import FeatureSchema
 
 REGISTRY = create_feature_registry(
     load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")

@@ -1,6 +1,7 @@
 """Tests for raw SQLite preprocessing and processed Parquet loading."""
 
 import sqlite3
+from collections.abc import Iterable
 from contextlib import closing
 from datetime import date
 from pathlib import Path
@@ -8,10 +9,13 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
+from configuration.data_paths import DataPaths
+from data_loader.processed_data_loader import DataLoader
+from data_saver.write_parquet import write_parquet_batches
 from domain.race_key import RaceKey
-from preprocesser.data_preprocesser import DataPreprocesser
-from settings.data_paths import DataPaths
-from utils.data_loader import DataLoader
+from storage import snapshot_builder
+from storage.snapshot_builder import DataPreprocesser
+from storage.snapshot_store import SnapshotStore
 
 
 def _paths(tmp_path: Path) -> DataPaths:
@@ -147,3 +151,104 @@ def test_data_paths_resolve_all_shared_locations(tmp_path: Path) -> None:
         tmp_path / "processed",
         tmp_path / "runtime" / "jvlink",
     )
+
+
+def test_batches_defer_snapshot_lookup_and_validate_size_first(tmp_path: Path) -> None:
+    loader = DataLoader(_paths(tmp_path))
+    batches = loader.iter_batches("NL_RA_RACE", batch_size=0)
+    with pytest.raises(ValueError, match="batch_size must be positive"):
+        next(batches)
+    batches = loader.iter_batches("NL_RA_RACE")
+    with pytest.raises(FileNotFoundError):
+        next(batches)
+
+
+def test_batches_observe_current_at_first_iteration(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    _create_source(paths.raw_db)
+    builder = DataPreprocesser(paths)
+    builder.rebuild()
+    batches = DataLoader(paths).iter_batches("NL_RA_RACE")
+    with closing(sqlite3.connect(paths.raw_db)) as database, database:
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('003', '20261006', NULL)")
+    builder.rebuild()
+    assert sum(batch.num_rows for batch in batches) == 3
+
+
+@pytest.mark.parametrize("realtime", [False, True])
+def test_current_replacement_failure_keeps_readable_previous_version(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, realtime: bool
+) -> None:
+    paths = _paths(tmp_path)
+    _create_source(paths.raw_db)
+    race = RaceKey(date(2026, 10, 4), "05", "04", "08", "11") if realtime else None
+    builder = DataPreprocesser(paths)
+    publish = builder.rebuild if race is None else lambda: builder.update_race(race)
+    publish()
+    store = SnapshotStore(paths.processed_dir)
+    current = store.current_snapshot(race)
+
+    def fail_replace(source: Path, destination: Path) -> None:
+        raise OSError("CURRENT replacement failed")
+
+    monkeypatch.setattr("storage.snapshot_publisher.os.replace", fail_replace)
+    with pytest.raises(OSError, match="CURRENT replacement failed"):
+        publish()
+    assert store.current_snapshot(race) == current
+    loader = DataLoader(paths)
+    table = (
+        loader.read_table("NL_RA_RACE")
+        if race is None
+        else loader.read_realtime_table(race, "ARCHIVE_O1_ODDS_TANFUKUWAKU")
+    )
+    assert table.num_rows == (2 if race is None else 1)
+
+
+def test_complete_snapshot_uses_one_read_transaction_across_tables(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    paths = _paths(tmp_path)
+    paths.raw_db.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(paths.raw_db)) as database, database:
+        database.execute("PRAGMA journal_mode=WAL")
+        database.execute("CREATE TABLE FIRST_TABLE (value TEXT)")
+        database.execute("CREATE TABLE SECOND_TABLE (value TEXT)")
+        database.execute("INSERT INTO FIRST_TABLE VALUES ('before')")
+        database.execute("INSERT INTO SECOND_TABLE VALUES ('before')")
+    write_batches = write_parquet_batches
+
+    def write_and_change_raw(path: Path, schema: pa.Schema, batches: Iterable[pa.Table]) -> int:
+        count = write_batches(path, schema, batches)
+        if path.stem == "FIRST_TABLE":
+            with closing(sqlite3.connect(paths.raw_db)) as database, database:
+                database.execute("UPDATE SECOND_TABLE SET value = 'after'")
+        return count
+
+    monkeypatch.setattr(snapshot_builder, "write_parquet_batches", write_and_change_raw)
+    DataPreprocesser(paths).rebuild()
+    assert DataLoader(paths).read_table("SECOND_TABLE")["value"].to_pylist() == ["before"]
+    with closing(sqlite3.connect(paths.raw_db)) as database:
+        assert database.execute("SELECT value FROM SECOND_TABLE").fetchone() == ("after",)
+
+
+def test_sqlite_batches_preserve_empty_schema_nulls_and_leading_zeros(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    paths.raw_db.parent.mkdir(parents=True)
+    with closing(sqlite3.connect(paths.raw_db)) as database, database:
+        database.execute("CREATE TABLE EMPTY_TABLE (value TEXT, stamp DATETIME)")
+        database.execute("CREATE TABLE SOURCE_TABLE (rowid TEXT, value TEXT)")
+        database.executemany(
+            "INSERT INTO SOURCE_TABLE VALUES (?, ?)",
+            ((f"{index:06}", None if index == 0 else "001") for index in range(65_537)),
+        )
+    assert DataPreprocesser(paths).rebuild() == {"EMPTY_TABLE": 0, "SOURCE_TABLE": 65_537}
+    loader = DataLoader(paths)
+    empty = loader.read_table("EMPTY_TABLE")
+    assert empty.schema == pa.schema(
+        [pa.field("value", pa.string()), pa.field("stamp", pa.string())]
+    )
+    source = loader.read_table("SOURCE_TABLE")
+    assert source["rowid"][0].as_py() == "000000"
+    assert source["rowid"][-1].as_py() == "065536"
+    assert source["value"][0].as_py() is None
+    assert source["value"][1].as_py() == "001"

@@ -7,7 +7,7 @@ from typing import cast
 
 import pytest
 
-from utils.loader.read_json import read_json
+from data_loader.read_json import read_json
 
 
 def test_read_json_preserves_utf8_and_nested_values(tmp_path: Path) -> None:

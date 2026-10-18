@@ -5,15 +5,12 @@ from __future__ import annotations
 from collections.abc import Sequence
 from datetime import datetime
 
-from models.dataset_builder import (
-    AvailabilityAudit,
-    FeatureGenerationResult,
-    FeatureInput,
-    TimestampInput,
-)
-from models.evaluate_model import RankingMetrics
-from models.ranking_dataset import FeatureSchema
-from models.walk_forward import WalkForwardEvaluation
+from models.dataset.availability import AvailabilityAudit
+from models.dataset.builder import FeatureGenerationResult
+from models.dataset.rows import FeatureInput, TimestampInput
+from models.dataset.schema import FeatureSchema
+from models.evaluation.metrics import RankingMetrics
+from models.evaluation.walk_forward import WalkForwardEvaluation
 
 
 def model_audit_payload(

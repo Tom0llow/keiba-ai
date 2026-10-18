@@ -1,27 +1,17 @@
 """Race-ranking model primitives for the LambdaRank MVP."""
 
-from models.evaluate_model import (
+from models.dataset.dataset import RankingDataset
+from models.dataset.rows import FeatureRow, FeatureValue, RankingRow
+from models.dataset.schema import FeatureSchema, FeatureSpec
+from models.dataset.validation import label_for_finish_position
+from models.evaluation.metrics import (
     RankingMetrics,
     evaluate_ranking,
     ndcg_at_3,
     top1_accuracy,
     top3_overlap,
 )
-from models.predict_model import RankingModel, RankingPrediction
-from models.ranker import LightGBMUnavailableError
-from models.ranking_dataset import (
-    DEFAULT_LABEL_GAIN,
-    TIE_BREAK_RULE,
-    FeatureRow,
-    FeatureSchema,
-    FeatureSpec,
-    FeatureValue,
-    RankingDataset,
-    RankingRow,
-    label_for_finish_position,
-)
-from models.train_model import train_lambdarank
-from models.walk_forward import (
+from models.evaluation.walk_forward import (
     WalkForwardConfig,
     WalkForwardEvaluation,
     WalkForwardFold,
@@ -29,6 +19,9 @@ from models.walk_forward import (
     evaluate_walk_forward,
     make_walk_forward_folds,
 )
+from models.ranking.ranker import LightGBMUnavailableError, RankingModel, RankingPrediction
+from models.ranking.rules import DEFAULT_LABEL_GAIN, TIE_BREAK_RULE
+from models.training.train import train_lambdarank
 
 __all__ = [
     "DEFAULT_LABEL_GAIN",

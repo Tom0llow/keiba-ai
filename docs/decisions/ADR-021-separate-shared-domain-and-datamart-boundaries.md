@@ -1,10 +1,10 @@
 # ADR-021: 共有設定・レースキーとdatamartの責務を分離する
 
-- Status: Accepted
+- Status: Superseded by ADR-024（配置判断のみ。その他の契約は継続）
 - Date: 2026-10-14
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-020（共有パス・レースキーの配置判断のみ）
-- Superseded by: N/A
+- Superseded by: ADR-024（配置判断のみ）
 
 ## Context
 

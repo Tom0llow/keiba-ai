@@ -5,8 +5,8 @@ from pathlib import Path
 from unittest.mock import Mock
 
 from domain.race_key import RaceKey
-from retriever.realtime import RealtimeRetriever
-from retriever.setting import JVLinkProfile
+from jra_van_retriever.config.profiles import JVLinkProfile
+from jra_van_retriever.workflows.realtime import RealtimeRetriever
 
 
 def _profile(data_specs: set[str]) -> JVLinkProfile:

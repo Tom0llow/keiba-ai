@@ -316,14 +316,15 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 ## 17. Architecture
 
-The current repository defines and executes its CLI in `src/main.py`. Application
-modules live under `src/retriever/`, `src/preprocesser/`, `src/utils/`,
-`src/settings/`, `src/domain/`, `src/features/`, `src/make_datamart/`,
-and `src/models/`; tests remain under `src/tests/`.
-It is not installed as a Python distribution. `ARCHITECTURE.md` describes the
-implemented module boundaries. Feature/model JSON contract conversion belongs
-in each owning `serialization/` package; generic JSON writing belongs in
-`utils/json_output.py`. These lower modules do not depend on Typer or `main`.
+The repository assembles its CLI in `src/main.py` and executes feature-specific
+CLI handling under `src/cli/`. `configuration/` owns shared settings, physical
+I/O belongs to `data_loader/` and `data_saver/`, pure conversion to
+`data_preprocessor/`, and snapshot lifecycle to `storage/`. Business modules are
+`jra_van_retriever/`, `make_features/`, `make_datamart/`, `models/`, and shared
+`domain/`; tests remain under `src/tests/`. ADR-024 records these boundaries.
+Feature/model JSON conversion stays pure in each `serialization/` package;
+generic JSON output belongs to `data_saver/write_json.py`. Lower modules do not
+depend on Typer, `cli` or `main`. The project is not a Python distribution.
 
 - Add modules only for responsibilities required by the current task.
 - Keep imports free of runtime side effects and avoid circular dependencies.

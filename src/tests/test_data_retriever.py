@@ -4,9 +4,9 @@ from datetime import date
 from pathlib import Path
 from unittest.mock import Mock, patch
 
-from retriever.data_retriever import DataRetriever
-from retriever.setting import JVLinkConfig, JVLinkProfile
-from settings.data_paths import DataPaths
+from configuration.data_paths import DataPaths
+from jra_van_retriever.config.profiles import JVLinkConfig, JVLinkProfile
+from jra_van_retriever.retriever import DataRetriever
 
 
 def _profile() -> JVLinkProfile:
@@ -26,11 +26,11 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
     jvlink = JVLinkConfig(executable, seed, profile, profile, profile, profile, profile)
 
     with (
-        patch("retriever.data_retriever.HistoricalRetriever") as historical_type,
-        patch("retriever.data_retriever.LatestRetriever") as latest_type,
-        patch("retriever.data_retriever.RealtimeRetriever") as realtime_type,
-        patch("retriever.data_retriever.OddsArchive"),
-        patch("retriever.data_retriever.JVLinkSettingBuilder"),
+        patch("jra_van_retriever.retriever.HistoricalRetriever") as historical_type,
+        patch("jra_van_retriever.retriever.LatestRetriever") as latest_type,
+        patch("jra_van_retriever.retriever.RealtimeRetriever") as realtime_type,
+        patch("jra_van_retriever.retriever.OddsArchive"),
+        patch("jra_van_retriever.retriever.JVLinkSettingBuilder"),
     ):
         historical = Mock()
         historical.retrieve_basic.return_value = None

@@ -1,8 +1,8 @@
 """Datamart construction from feature intermediate tables."""
 
-from make_datamart.builder import (
+from make_datamart.builder import join_feature_tables
+from make_datamart.tables.parquet import (
     build_datamart,
-    join_feature_tables,
     make_datamart,
     read_datamart,
     write_datamart,

@@ -1,34 +1,14 @@
-"""Read and left-join feature intermediate tables into an ordered datamart."""
+"""Join validated feature tables into an ordered datamart without I/O."""
 
 from __future__ import annotations
 
 from collections.abc import Sequence
-from pathlib import Path
 
 import pyarrow as pa
 
-from features.tables.parquet import read_feature_table
-from features.tables.schema import IntermediateFeatureTable, table_column_types
-from features.validation.table import validate_feature_table
-from make_datamart.tables.parquet import read_datamart, write_datamart
 from make_datamart.tables.schema import contract_metadata, expected_column_types
-
-FeatureTableSource = str | Path | IntermediateFeatureTable
-
-
-def make_datamart(paths: Sequence[str | Path], *, registered_names: Sequence[str] = ()) -> pa.Table:
-    """Read intermediate Parquet files and left-join them in the given order."""
-    if not paths:
-        raise ValueError("at least one feature table path is required")
-    tables = [read_feature_table(path, registered_names=registered_names) for path in paths]
-    return join_feature_tables(tables, registered_names=registered_names)
-
-
-def build_datamart(
-    paths: Sequence[str | Path], *, registered_names: Sequence[str] = ()
-) -> pa.Table:
-    """Build a datamart from intermediate feature Parquet files."""
-    return make_datamart(paths, registered_names=registered_names)
+from make_features.tables.schema import IntermediateFeatureTable, table_column_types
+from make_features.validation.table import validate_feature_table
 
 
 def join_feature_tables(
@@ -145,12 +125,3 @@ def _feature_value(
     if row_index is None:
         return None
     return table[column_name][row_index].as_py()
-
-
-__all__ = [
-    "build_datamart",
-    "join_feature_tables",
-    "make_datamart",
-    "read_datamart",
-    "write_datamart",
-]

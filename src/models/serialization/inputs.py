@@ -6,8 +6,8 @@ from collections.abc import Mapping
 from datetime import datetime
 from typing import cast
 
-from models.dataset_builder import FeatureInput, TimestampInput
-from models.ranking_dataset import FeatureSchema, FeatureValue
+from models.dataset.rows import FeatureInput, FeatureValue, TimestampInput
+from models.dataset.schema import FeatureSchema
 
 
 def parse_feature_inputs(

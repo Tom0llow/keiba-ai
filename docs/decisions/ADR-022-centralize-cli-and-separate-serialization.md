@@ -1,10 +1,10 @@
 # ADR-022: CLIをmainへ集約し機能固有の変換と汎用JSON出力を分離する
 
-- Status: Accepted
+- Status: Superseded by ADR-024（配置判断のみ。その他の契約は継続）
 - Date: 2026-10-15
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-020（CLI配置判断のみ）
-- Superseded by: N/A
+- Superseded by: ADR-024（配置判断のみ）
 
 ## Context
 

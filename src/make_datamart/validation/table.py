@@ -8,12 +8,12 @@ from math import isfinite
 
 import pyarrow as pa
 
-from features.validation.availability import normalize_timestamp
 from make_datamart.tables.schema import (
     datamart_column_types,
     datamart_feature_names,
     expected_column_types,
 )
+from make_features.validation.availability import normalize_timestamp
 
 
 def validate_datamart(table: pa.Table, *, registered_names: Sequence[str] = ()) -> None:

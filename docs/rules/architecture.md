@@ -10,16 +10,21 @@ data loading, feature generation, and ranking-model evaluation. Its current
 source boundary is:
 
 ```text
-src/main.py      # all CLI definitions, validation and execution orchestration
-src/retriever/   # retrieval
-src/preprocesser/ # raw-to-Parquet processing and publication
-src/utils/       # processed-data/JSON readers and generic JSON output
-src/settings/    # explicit shared path settings
-src/domain/      # shared race identity
-src/make_datamart/ # ordered join, validation and persistence
-src/features/    # catalogs, contracts, validation, generation, tables and serialization
-src/models/      # model inputs, ranking, evaluation and serialization
-src/tests/       # application and environment tests
+config/                         # 既存3 TOMLの値・キーを維持
+src/
+├─ main.py                      # CLI組立・登録・起動
+├─ cli/                         # 機能別の引数・表示・終了処理
+├─ configuration/               # TOML物理読込・共通パス・DataPaths
+├─ data_loader/                 # JSON・Parquet・SQLite物理読込
+├─ data_saver/                  # JSON・Parquet物理保存
+├─ data_preprocessor/           # SQLite値からArrowへの純粋変換
+├─ storage/                     # snapshot生成・構造・CURRENT・原子的公開
+├─ jra_van_retriever/            # 取得とロック・台帳・復旧
+├─ make_features/               # 特徴量契約・生成・監査・テーブル
+├─ make_datamart/                # 純粋結合・検証・保存契約
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
+├─ domain/                      # 共有RaceKey
+└─ tests/                       # 既存22ファイルと追加回帰
 ```
 
 `ARCHITECTURE.md` and Accepted ADRs describe implemented contracts. The project
@@ -53,18 +58,22 @@ coherent responsibility and have a name that describes that responsibility.
   code must not import an entry point merely to share behavior.
 - Pass important dependencies explicitly instead of constructing hidden global
   clients deep in the package.
-- Keep `utils/` limited to the authorized processed-data and JSON readers and
-  generic JSON writing in `json_output.py`. Keep feature/model contract
-  conversion in each owning `serialization/` package; these pure converters
-  must not perform I/O or depend on Typer or `main`.
-- Keep all CLI applications, registration, option validation, orchestration,
-  console messages and error/exit handling in `main.py`. Lower-level modules
-  must not import `main` or Typer. Do not add feature validation, generation or
-  retrieval to `utils/`.
-- Keep shared `DataPaths` in `settings/` and `RaceKey` in `domain/`; raw
-  race-key conversion belongs to `retriever/race_key_parser.py`.
-- Keep datamart schema contracts independent of its builder and validation;
-  Parquet boundaries use validation before writing and after reading.
+- Common TOML reading and relative/user path resolution belong to `configuration/`.
+  Feature configuration uses this foundation; the foundation never imports features.
+- Physical JSON/Parquet/SQLite I/O belongs to `data_loader/` and `data_saver/`.
+  Feature/model contract conversion stays pure in each `serialization/` package.
+- Keep pure SQLite-to-Arrow conversion in `data_preprocessor/`; storage layout,
+  generation and atomic publication belong to `storage/`, with one transaction per snapshot.
+- Keep CLI options, validation, output and exits in feature-specific `cli/` modules.
+  `main.py` only assembles/registers/starts Typer; lower modules never import CLI or Typer.
+- Shared `DataPaths` belongs to `configuration/`, `RaceKey` to `domain/`, and raw
+  race-key conversion to `jra_van_retriever/parsing/race_key.py`.
+- Datamart `builder.py` implements only pure joins. File-based building/read/write
+  belongs to `tables/parquet.py`, using common physical I/O and feature validation.
+- Dataset types, schema, validation, availability and construction have distinct owners.
+  Model artifacts belong to `artifacts/native_model.py`, native LightGBM to `backends/`.
+- Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
+  See ADR-024 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
 - Keep public interfaces as small as the current callers require.
 
 Keep entry points responsible for boundary concerns and delegation rather than

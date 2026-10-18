@@ -2,7 +2,7 @@
 
 ## 1. 文書の位置付けと対象
 
-状態: 実装設計案（2026-10-07）。[要件定義](requirements.md)、[仕様書](specification.md)、Accepted [ADR-009](decisions/ADR-009-use-lambdarank-mvp-and-top3-pl-extension.md)を、実装単位・データ契約・検証手順へ分解する。本書の作成は製品コードの実装や、新しいAPI・永続形式・データ加工規則の承認を意味しない。
+状態: 実装設計案（2026-10-07、現行配置を2026-10-18更新）。[要件定義](requirements.md)、[仕様書](specification.md)、Accepted [ADR-009](decisions/ADR-009-use-lambdarank-mvp-and-top3-pl-extension.md)を、実装単位・データ契約・検証手順へ分解する。本書の作成は製品コードの実装や、新しいAPI・永続形式・データ加工規則の承認を意味しない。
 
 本書では「確定仕様」「現行実装」「設計候補」「実装前決定」を区別する。新規モジュール、型名、CLI、設定項目、成果物形式はすべて設計候補であり、公開契約や長期的な依存関係は実装前に必要なADRへ記録する。[現行アーキテクチャ](../ARCHITECTURE.md)は実装済みの事実を示す正本として維持する。
 
@@ -22,21 +22,27 @@ MVPの確定仕様は次の範囲とする。
 
 ## 2. 現行の到達点と追跡関係
 
+現行の責務分離は[ADR-024](decisions/ADR-024-separate-functional-responsibilities.md)に従う。
+共通TOML/パスはconfiguration、物理I/Oはdata_loader/data_saver、純粋Arrow変換はdata_preprocessor、
+保存構造と公開はstorageに集約する。CLIは機能別cli、Datamart結合は純粋builder、ファイル入力APIは
+tables/parquetへ移した。全旧ファイルの対応と責務は[移行記録](refactoring-pr21.md)を参照する。
+
+
 ### 2.1. 実装済みの土台と不足
 
 | 責務 | 現行実装 | MVPまでの不足 |
 | --- | --- | --- |
-| 取得 | `src/retriever/data_retriever.py`がJVLinkToSQLiteを介してhistorical/latest/realtimeを取得する。 | 取得済みという事実だけでは過去の判断時点での利用可能性を証明できない。 |
+| 取得 | `src/jra_van_retriever/retriever.py`がJVLinkToSQLiteを介してhistorical/latest/realtimeを取得する。 | 取得済みという事実だけでは過去の判断時点での利用可能性を証明できない。 |
 | オッズ保存 | `odds_archive.py`がRTのO1/O2を原列のまま累積archiveへ保存し、同一行を重複保存しない。 | 行ごとの受信時刻・改訂関係・発売対象馬との照合契約が未整備。 |
-| 原本からの加工 | `DataPreprocesser`がread-only SQLiteから文字列とNULLを維持してParquetを公開する。`src/features/`が明示入力から特徴量別中間Parquetを生成し、`src/make_datamart/`がそれらを結合する。 | JRA-VAN業務コード解釈、受信履歴からの過去集計、原本Parquetから中間入力を作る変換は未実装。 |
+| 原本からの加工 | `DataPreprocesser`がread-only SQLiteから文字列とNULLを維持してParquetを公開する。`src/make_features/`が明示入力から特徴量別中間Parquetを生成し、`src/make_datamart/`がそれらを結合する。 | JRA-VAN業務コード解釈、受信履歴からの過去集計、原本Parquetから中間入力を作る変換は未実装。 |
 | 公開 | 完全snapshotとrace-local O1/O2 versionを完成後にCURRENTで公開する。失敗時は従前の参照を維持する。 | snapshotの完成は、過去の出馬表・訂正履歴を保持したことを意味しない。 |
 | 読み込み | `DataLoader`は完全表・Arrow batch・RaceKey指定のO1/O2をParquetから読む。 | 各読取でCURRENTを再解決するため、複数表を同一版へ固定する公開APIがない。 |
-| CLI | `src/main.py`の取得フラグ、`preprocess rebuild`、`model audit/features/explanatory-variables/walk-forward`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルとdatamartはPython APIから明示的に生成・保存する。 |
-| モデル | ADR-009〜011によりLambdaRank境界、FeatureSchema、時点監査、race-level walk-forward、native成果物形式を決定し、`src/models/`と`src/features/`へ実装済み。 | JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物の製品統合は未実装。 |
+| CLI | `src/main.py`で登録する機能別`src/cli/`の取得フラグ、`preprocess rebuild`、`model audit/features/explanatory-variables/walk-forward`、`datamart build`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルはPython APIで生成し、datamartはPython APIまたは`datamart build`で保存する。 |
+| モデル | ADR-009〜011によりLambdaRank境界、FeatureSchema、時点監査、race-level walk-forward、native成果物形式を決定し、`src/models/`と`src/make_features/`へ実装済み。 | JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物の製品統合は未実装。 |
 
 既存の`src/tests/test_data_pipeline.py`は、原本削除後のParquet読取、変換失敗時のCURRENT維持、対象レースだけのO1/O2公開を検証する。これを学習・推論や時点再現の検証済み証拠とは扱わない。
 
-モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、race-level walk-forward、native成果物の保存/再読込、`src/models/dataset_builder.py`の明示数値入力に対する投影・時点監査、および`src/features/`の説明変数別中間テーブルとdatamartの保存・結合である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。現時点のallow-listは事前能力値と履歴オッズであり、血統文字列などの中間列は数値FeatureSchemaへ自動投入しない。曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物、購入判断は未実装であり、上流の決定と別実装単位として残す。
+モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、race-level walk-forward、native成果物の保存/再読込、`src/models/dataset/builder.py`の明示数値入力に対する投影・時点監査、および`src/make_features/`の説明変数別中間テーブルとdatamartの保存・結合である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。現時点のallow-listは事前能力値と履歴オッズであり、血統文字列などの中間列は数値FeatureSchemaへ自動投入しない。曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物、購入判断は未実装であり、上流の決定と別実装単位として残す。
 
 ### 2.2. 要件・仕様・ADRへの追跡
 
@@ -123,35 +129,35 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 
 ## 5. モジュール責務と依存方向
 
-ADR-020、ADR-021、ADR-022の責務別配置で取得・加工・読込の契約を維持する。実装済みの配置と、今後の候補を次に示す。
+ADR-024の責務別配置で取得・加工・読込の契約を維持する。実装済みの配置と、今後の候補を次に示す。
 
 | 配置候補 | 責務 | 依存・境界 |
 | --- | --- | --- |
-| `src/utils/loader/read_parquet.py`とfacade | 完全snapshot・race-local versionの固定読取契約を追加する候補。 | Parquetのみ。既存のCURRENT読取との互換性を設計する。 |
-| `src/models/dataset_builder.py` | 数値モデルへの明示入力の投影、欠損保持、時点監査、RankingDataset構築。 | `FeatureInput`のfreeze/available時刻を検証する。中間テーブルの生成・保存や取得処理を担当しない。 |
-| `src/features/previous_race_result.py` | 前レース結果の中間テーブル生成。 | 正規化済み入力のみを受け、Parquet保存は共通のテーブル契約へ委譲する。 |
-| `src/features/odds_ratio.py` | オッズ比率の中間テーブル生成。 | オッズ履歴不足はNULLで保持し、補完や最終オッズへの暗黙 fallback を行わない。 |
-| `src/features/pedigree.py` | 血統識別子の中間テーブル生成。 | 文字列を保持し、未承認のカテゴリ符号化を行わない。 |
-| `src/features/recent_performance.py`〜`src/features/opponent_pagerank.py` | F01〜F21それぞれの専用Input、Builder、build、normalizeを所有する。 | 共通基底`FeatureBuilder`を利用し、明示値と証跡から`FeatureTableRow`と中間テーブルを生成する。業務式、履歴窓、閾値、JRA-VANコード解釈は承認後に個別実装する。 |
-| `src/features/explanatory_variables.py` | 個別説明変数の生成と監査をまとめる薄いAPI。 | `FeatureBatchInput`を受け、説明変数ID別の共通中間行と監査を返す。モデルallow-listへ自動投入しない。 |
-| `src/features/contracts/`、`validation/`、`generation/`、`catalog/` | 型、監査、共通生成、設定登録を責務別に管理する。 | 共通中間行は`FeatureTableRow`だけ。ID・名前・順序は`config/features.toml`が所有し、登録・監査・個別生成へ明示する。 |
-| `src/utils/loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
-| `src/features/serialization/`、`src/models/serialization/` | 各機能の入力型への変換と結果・監査のJSON用値への変換。 | 読込済みobjectを受ける純粋処理。両入力契約を区別し、I/O・Typer・mainへ依存しない。 |
-| `src/utils/json_output.py` | UTF-8 JSON保存と再帰的なNaNのnull変換。 | 親ディレクトリ作成、既存の整形と末尾改行を維持する。特徴量・モデルの型を参照しない。 |
-| `src/features/tables/`と`validation/table.py` | 特徴量中間テーブルのスキーマ・構築・検証・Parquet入出力。 | 既存3の契約を維持し、他の名前は明示的な`registered_names`と列型を要求する。 |
-| `src/settings/data_paths.py` | 明示されたTOMLから共有パス設定を読み、相対パスを解決する。 | 既定設定の暗黙読込やグローバルインスタンスを持たない。 |
-| `src/domain/race_key.py`、`src/retriever/race_key_parser.py` | 共有の`RaceKey`型と、取得境界のraw行変換をそれぞれ所有する。 | 型と変換の挙動を維持し、変換でI/Oを行わない。 |
-| `src/make_datamart/builder.py` | 保存済み中間テーブルの読込を編成し、純粋なleft joinで順序を保つ。 | 余分なキー、`freeze_at`不一致、列衝突を拒否し、特徴量ごとのavailable時刻を残す。 |
+| `src/data_loader/read_parquet.py`とfacade | 完全snapshot・race-local versionの固定読取契約を追加する候補。 | Parquetのみ。既存のCURRENT読取との互換性を設計する。 |
+| `src/models/dataset/builder.py`と`availability.py` | 前者が明示入力の投影・欠損保持・RankingDataset構築、後者が時点監査を所有する。 | `FeatureInput`のfreeze/available時刻を検証する。中間テーブルの生成・保存や取得処理を担当しない。 |
+| `src/make_features/previous_race_result.py` | 前レース結果の中間テーブル生成。 | 正規化済み入力のみを受け、Parquet保存は共通のテーブル契約へ委譲する。 |
+| `src/make_features/odds_ratio.py` | オッズ比率の中間テーブル生成。 | オッズ履歴不足はNULLで保持し、補完や最終オッズへの暗黙 fallback を行わない。 |
+| `src/make_features/pedigree.py` | 血統識別子の中間テーブル生成。 | 文字列を保持し、未承認のカテゴリ符号化を行わない。 |
+| `src/make_features/recent_performance.py`〜`src/make_features/opponent_pagerank.py` | F01〜F21それぞれの専用Input、Builder、build、normalizeを所有する。 | 共通基底`FeatureBuilder`を利用し、明示値と証跡から`FeatureTableRow`と中間テーブルを生成する。業務式、履歴窓、閾値、JRA-VANコード解釈は承認後に個別実装する。 |
+| `src/make_features/explanatory_variables.py` | 個別説明変数の生成と監査をまとめる薄いAPI。 | `FeatureBatchInput`を受け、説明変数ID別の共通中間行と監査を返す。モデルallow-listへ自動投入しない。 |
+| `src/make_features/contracts/`、`validation/`、`generation/`、`catalog/` | 型、監査、共通生成、設定登録を責務別に管理する。 | 共通中間行は`FeatureTableRow`だけ。ID・名前・順序は`config/features.toml`が所有し、登録・監査・個別生成へ明示する。 |
+| `src/data_loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
+| `src/make_features/serialization/`、`src/models/serialization/` | 各機能の入力型への変換と結果・監査のJSON用値への変換。 | 読込済みobjectを受ける純粋処理。両入力契約を区別し、I/O・Typer・mainへ依存しない。 |
+| `src/data_saver/write_json.py` | UTF-8 JSON保存と再帰的なNaNのnull変換。 | 親ディレクトリ作成、既存の整形と末尾改行を維持する。特徴量・モデルの型を参照しない。 |
+| `src/make_features/tables/`と`validation/table.py` | 特徴量中間テーブルのスキーマ・構築・検証・Parquet入出力。 | 既存3の契約を維持し、他の名前は明示的な`registered_names`と列型を要求する。 |
+| `src/configuration/data_paths.py` | 明示されたTOMLから共有パス設定を読み、相対パスを解決する。 | 既定設定の暗黙読込やグローバルインスタンスを持たない。 |
+| `src/domain/race_key.py`、`src/jra_van_retriever/parsing/race_key.py` | 共有の`RaceKey`型と、取得境界のraw行変換をそれぞれ所有する。 | 型と変換の挙動を維持し、変換でI/Oを行わない。 |
+| `src/make_datamart/builder.py` | メモリ上の中間テーブルを純粋なleft joinで結合し、先頭表の順序を保つ。 | I/Oを行わず、余分なキー、`freeze_at`不一致、列衝突を拒否し、特徴量ごとのavailable時刻を残す。 |
 | `src/make_datamart/validation/table.py` | datamartのスキーマ、キー、時点、欠損、有限値を検証する。 | 列契約を`tables/schema.py`と共有し、builderに依存しない。 |
-| `src/make_datamart/tables/schema.py`、`parquet.py` | 順序付きの列・型・metadata契約と、検証付きParquet保存・再読込。 | 登録名を明示し、保存前・読込後に検証する。既存の`make_datamart`と`make_datamart.builder`の5公開関数を維持する。 |
-| `src/models/ranking_dataset.py` | 行キー、ラベル、連続レース行、group、型・順序の検証。 | 既に生成された特徴量と別経路の結果を結合する。 |
-| `src/models/train_model.py` | LightGBMの構築・学習と学習記録。 | 検証済みデータ、設定、明示した乱数・実行条件。SQLite・CLIに依存しない。 |
-| `src/models/evaluate_model.py` / `walk_forward.py` | レース別指標とrace-level時間順分割。 | train/validation/testを同一レースから分離せず、train以外を学習へ渡さない。 |
-| `src/models/predict_model.py` | 保存した特徴量契約とモデルによる1レースのscore/rank生成。 | 学習と共通の特徴量計算。確率化や購入方策を持たない。 |
-| `src/models/artifacts.py` | モデル・manifest・予測・評価の検証済み公開と再読取。 | ファイルI/Oを集約し、実行可能オブジェクトの任意復元を避ける。 |
-| `src/main.py` | 全Typerアプリ・コマンド・オプションを定義し、取得・加工・特徴量・評価の実行を編成する。 | CLI検証、設定・入力読込、依存生成、表示、エラーJSON・終了コードを所有する。import・help時は実行せず、既存CLIを維持する。 |
+| `src/make_datamart/tables/schema.py`、`parquet.py` | schemaは順序付きの列・型・metadata契約、parquetはファイルからの構築・検証付き保存・再読込を所有する。 | 登録名を明示し、物理I/Oは共通reader/writerへ委譲する。packageの5公開名を維持し、旧builderのファイルAPIはparquetへ移す。 |
+| `src/models/dataset/rows.py`、`schema.py`、`validation.py`、`dataset.py` | 入力行型、schema、値・ラベル・race検証、集約datasetの不変条件を分離する。 | 既に生成された特徴量と別経路の結果を結合する。 |
+| `src/models/training/train.py` | LightGBMの構築・学習と学習記録。 | 検証済みデータ、設定、明示した乱数・実行条件。SQLite・CLIに依存しない。 |
+| `src/models/evaluation/metrics.py` / `src/models/evaluation/walk_forward.py` | レース別指標とrace-level時間順分割。 | train/validation/testを同一レースから分離せず、train以外を学習へ渡さない。 |
+| `src/models/ranking/ranker.py` | 保存した特徴量契約とモデルによる1レースのscore/rank生成。 | 学習と共通の特徴量計算。確率化や購入方策を持たない。 |
+| `src/models/artifacts/native_model.py` | nativeモデルとschema metadataの検証済み公開・復旧・再読取。 | ファイルI/Oを集約し、実行可能オブジェクトの任意復元を避ける。 |
+| `src/main.py`、`src/cli/` | mainはTyperアプリの組立・登録・起動、機能別CLIは取得・加工・特徴量・評価・Datamartの実行を編成する。 | cliが引数検証、設定・入力読込、依存生成、表示、エラーJSON・終了コードを所有する。import・help時は実行せず、既存CLIを維持する。 |
 
-特徴量コマンドは`main.py`から特徴量API、各機能の`serialization/`、`utils/loader/read_json.py`、`utils/json_output.py`を呼ぶ。設定は実行境界で一回読み込み、同じ不変登録を監査と生成へ渡す。保存・datamartには登録名だけを渡し、個別計算・監査・loaderはCLIをimportしない。import時のI/Oや隠れたsingletonを設けない。
+特徴量コマンドは`cli/cli_make_features.py`から特徴量API、各機能の`serialization/`、`data_loader/read_json.py`、`data_saver/write_json.py`を呼ぶ。設定は実行境界で一回読み込み、同じ不変登録を監査と生成へ渡す。保存・datamartには登録名だけを渡し、個別計算・監査・loaderはCLIをimportしない。import時のI/Oや隠れたsingletonを設けない。
 
 ## 6. 入出力データ契約の候補
 
@@ -587,9 +593,9 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 ### 11.2. コマンド案と既存との区別
 
-実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、およびJSON入力を受ける`model audit/features/explanatory-variables/walk-forward`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
+実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、JSON入力を受ける`model audit/features/explanatory-variables/walk-forward`、および`datamart build`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
 
-ADR-022に従い、全CLI定義・実行は`src/main.py`、特徴量・モデル固有の純粋な入力・出力変換は各機能の`serialization/`、汎用JSON出力は`src/utils/json_output.py`、汎用読込は`src/utils/loader/read_json.py`が担当する。`config/features.toml`のID・名前・順序を一回読み込み、不変登録を各APIへ渡す。CLIの引数・終了コード・`feature_ids`等JSONキーは維持し、`--features-config`でカタログパスを指定できる。
+ADR-024に従い、CLIの組立・登録・起動は`src/main.py`、機能別の引数検証・実行・表示・終了は`src/cli/`が担当する。特徴量・モデル固有の純粋な入力・出力変換は各機能の`serialization/`、汎用JSON出力は`src/data_saver/write_json.py`、汎用読込は`src/data_loader/read_json.py`が担当する。`config/features.toml`のID・名前・順序を一回読み込み、不変登録を各APIへ渡す。CLIの引数・終了コード・`feature_ids`等JSONキーは維持し、`--features-config`でカタログパスを指定できる。
 
 | コマンド案 | 入力 | 成果物 |
 | --- | --- | --- |

@@ -10,8 +10,8 @@ from unittest.mock import Mock
 import pytest
 
 from domain.race_key import RaceKey
-from retriever.historical import HistoricalRetriever
-from retriever.setting import JVLinkProfile
+from jra_van_retriever.config.profiles import JVLinkProfile
+from jra_van_retriever.retriever import HistoricalRetriever
 
 
 def _create_race_db(path: Path) -> None:
@@ -329,7 +329,7 @@ def test_retrieve_closes_readers_before_subprocess_writes(
             writer.execute("BEGIN EXCLUSIVE")
             writer.rollback()
 
-    monkeypatch.setattr("retriever.raw_snapshot.sqlite3.connect", open_reader)
+    monkeypatch.setattr("jra_van_retriever.progress.raw_observation.sqlite3.connect", open_reader)
     runner.execute.side_effect = execute_with_writer
 
     assert retriever.retrieve() == 2

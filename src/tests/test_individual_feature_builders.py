@@ -11,18 +11,18 @@ from pathlib import Path
 import pyarrow as pa
 import pytest
 
-from features.catalog.loader import load_feature_definitions
-from features.catalog.registry import create_feature_registry
-from features.contracts.rows import FeatureTableRow
-from features.contracts.types import FeatureBuildError, FeatureValuesInput
-from features.generation.normalization import normalize_feature_inputs
-from features.odds_ratio import OddsRatioInput, build_odds_ratio
-from features.past_racing_ability import PastRacingAbilityBuilder
-from features.tables.build import build_feature_table
-from features.tables.parquet import read_feature_table, write_feature_table
-from features.validation.table import validate_feature_table
 from make_datamart.builder import join_feature_tables
 from make_datamart.tables.parquet import read_datamart, write_datamart
+from make_features.catalog.loader import load_feature_definitions
+from make_features.catalog.registry import create_feature_registry
+from make_features.contracts.rows import FeatureTableRow
+from make_features.contracts.types import FeatureBuildError, FeatureValuesInput
+from make_features.generation.normalization import normalize_feature_inputs
+from make_features.odds_ratio import OddsRatioInput, build_odds_ratio
+from make_features.past_racing_ability import PastRacingAbilityBuilder
+from make_features.tables.build import build_feature_table
+from make_features.tables.parquet import read_feature_table, write_feature_table
+from make_features.validation.table import validate_feature_table
 
 REGISTRY = create_feature_registry(
     load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")

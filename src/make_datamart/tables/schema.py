@@ -7,7 +7,7 @@ from collections.abc import Sequence
 
 import pyarrow as pa
 
-from features.tables.schema import (
+from make_features.tables.schema import (
     BASE_COLUMNS,
     FEATURE_COLUMNS,
     TIMESTAMP_TYPE,

@@ -10,12 +10,13 @@ from typing import cast
 
 import pytest
 
-from features.contracts.rows import FeatureTableRow
-from features.contracts.types import FeatureAudit, FeatureBuildResult
-from features.serialization.inputs import parse_explanatory_inputs
-from features.serialization.outputs import explanatory_payload, explanatory_records
-from models.dataset_builder import build_features
-from models.evaluate_model import RankingMetrics
+from make_features.contracts.rows import FeatureTableRow
+from make_features.contracts.types import FeatureAudit, FeatureBuildResult
+from make_features.serialization.inputs import parse_explanatory_inputs
+from make_features.serialization.outputs import explanatory_payload, explanatory_records
+from models.dataset.builder import build_features
+from models.evaluation.metrics import RankingMetrics
+from models.evaluation.walk_forward import WalkForwardEvaluation
 from models.serialization.inputs import parse_feature_inputs
 from models.serialization.outputs import (
     generated_records,
@@ -23,7 +24,6 @@ from models.serialization.outputs import (
     model_evaluation_payload,
     model_features_payload,
 )
-from models.walk_forward import WalkForwardEvaluation
 
 
 def _group() -> dict[str, object]:
@@ -241,11 +241,11 @@ def test_serializers_are_usable_without_typer_or_entry_point() -> None:
     script = f"""import sys
 sys.path.insert(0, {str(src_dir)!r})
 sys.modules['typer'] = None
-from features.serialization.inputs import parse_explanatory_inputs
-from features.serialization.outputs import feature_audit_payload
+from make_features.serialization.inputs import parse_explanatory_inputs
+from make_features.serialization.outputs import feature_audit_payload
 from models.serialization.inputs import parse_feature_inputs
 from models.serialization.outputs import metrics_payload
-from utils.json_output import write_json
+from data_saver.write_json import write_json
 assert parse_explanatory_inputs({{'records': []}}) == ()
 assert 'main' not in sys.modules
 """

@@ -1,10 +1,10 @@
 # ADR-023: 状態を持つ処理の責務を分離しCLIの重複を整理する
 
-- Status: Accepted
+- Status: Superseded by ADR-024（配置判断のみ。その他の契約は継続）
 - Date: 2026-10-17
 - Decision Owners: Repository maintainers
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-024（配置判断のみ）
 
 ## Context
 

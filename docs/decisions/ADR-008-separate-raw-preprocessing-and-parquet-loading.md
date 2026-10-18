@@ -1,11 +1,11 @@
 # ADR-008: Separate raw preprocessing from Parquet loading
 
-- Status: Accepted
+- Status: Superseded by ADR-024（モジュール配置判断のみ。保存・CURRENT・一貫性の契約は継続）
 - Date: 2026-10-04
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: PR #8
 - Supersedes: ADR-003
-- Superseded by: N/A
+- Superseded by: ADR-024（モジュール配置判断のみ）
 
 ## Context
 

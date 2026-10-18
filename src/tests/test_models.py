@@ -12,18 +12,15 @@ from typing import cast
 
 import pytest
 
-import models.lightgbm_backend as lightgbm_backend_module
-from models.artifacts import NativeModelArtifact
-from models.evaluate_model import evaluate_ranking, ndcg_at_3, top1_accuracy, top3_overlap
+import models.backends.lightgbm as lightgbm_backend_module
+from models.artifacts.native_model import NativeModelArtifact
+from models.dataset.dataset import RankingDataset
+from models.dataset.rows import FeatureRow, RankingRow
+from models.dataset.schema import FeatureSchema
+from models.evaluation.metrics import evaluate_ranking, ndcg_at_3, top1_accuracy, top3_overlap
 from models.predict_model import RankingModel
-from models.ranking_dataset import (
-    TIE_BREAK_RULE,
-    FeatureRow,
-    FeatureSchema,
-    RankingDataset,
-    RankingRow,
-)
-from models.train_model import train_lambdarank
+from models.ranking.rules import TIE_BREAK_RULE
+from models.training.train import train_lambdarank
 
 
 def _training_rows() -> list[RankingRow]:

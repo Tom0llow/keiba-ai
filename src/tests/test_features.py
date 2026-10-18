@@ -7,14 +7,10 @@ from math import isnan
 
 import pytest
 
-from models.dataset_builder import (
-    FeatureGenerationError,
-    FeatureInput,
-    audit_feature_availability,
-    build_feature_rows,
-    build_ranking_dataset,
-)
-from models.ranking_dataset import FeatureSchema
+from models.dataset.availability import FeatureGenerationError, audit_feature_availability
+from models.dataset.builder import build_feature_rows, build_ranking_dataset
+from models.dataset.rows import FeatureInput
+from models.dataset.schema import FeatureSchema
 
 
 def _schema() -> FeatureSchema:

@@ -8,8 +8,10 @@ from typing import cast
 
 import pytest
 
-from models.ranking_dataset import FeatureRow, FeatureSchema, RankingDataset, RankingRow
-from models.walk_forward import (
+from models.dataset.dataset import RankingDataset
+from models.dataset.rows import FeatureRow, RankingRow
+from models.dataset.schema import FeatureSchema
+from models.evaluation.walk_forward import (
     WalkForwardConfig,
     evaluate_walk_forward,
     make_walk_forward_folds,

@@ -1,5 +1,5 @@
-"""Prediction facade for score-and-rank-only model output."""
+"""Preserve the existing prediction import entry point."""
 
-from models.ranker import RankingModel, RankingPrediction
+from models.ranking.ranker import RankingModel, RankingPrediction
 
 __all__ = ["RankingModel", "RankingPrediction"]

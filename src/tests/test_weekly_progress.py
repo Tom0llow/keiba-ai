@@ -11,21 +11,21 @@ from unittest.mock import Mock, patch
 import pytest
 
 from domain.race_key import RaceKey
-from retriever.acquisition_lock import AcquisitionBlocked, AcquisitionLock
-from retriever.jvlinktosqlite import (
+from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked, AcquisitionLock
+from jra_van_retriever.acquisition.jvlink_runner import (
     JVLinkExecutionResult,
     JVLinkToSQLiteError,
     JVLinkToSQLiteRunner,
 )
-from retriever.odds_archive import OddsArchive
-from retriever.progress import (
+from jra_van_retriever.acquisition.odds_archive import OddsArchive
+from jra_van_retriever.config.profiles import HistoricalOddsBatch, JVLinkProfile
+from jra_van_retriever.progress.ledger import (
     ProgressLedger,
     RawSnapshot,
     _legacy_policy_hash,
     read_raw_snapshot,
 )
-from retriever.setting import HistoricalOddsBatch, JVLinkProfile
-from retriever.weekly import WeeklyHistoricalOddsRetriever
+from jra_van_retriever.workflows.historical_odds import WeeklyHistoricalOddsRetriever
 
 NOW = datetime(2026, 10, 6, 12, tzinfo=UTC)
 FRONTIER = RaceKey(date(2008, 1, 26), "06", "01", "07", "06")
@@ -833,7 +833,9 @@ def test_weekly_run_resumes_from_committed_ledger_after_report_write_failure(
 ) -> None:
     retriever, runner = _retriever_with_staging_rows(tmp_path, JVLinkExecutionResult({}))
     with (
-        patch("retriever.progress_output.atomic_write", side_effect=OSError("report failed")),
+        patch(
+            "jra_van_retriever.progress.output.atomic_write", side_effect=OSError("report failed")
+        ),
         pytest.raises(OSError, match="report failed"),
     ):
         retriever.run(cutoff=date(2026, 10, 5), raw_only=True)

@@ -8,12 +8,12 @@ from pathlib import Path
 import pytest
 
 from domain.race_key import RaceKey
-from retriever.setting import (
+from jra_van_retriever.acquisition.setting_xml import JVLinkSettingBuilder
+from jra_van_retriever.config.profiles import (
     JVLinkConfig,
     JVLinkProfile,
-    JVLinkSettingBuilder,
-    validate_historical_odds_batch,
 )
+from jra_van_retriever.config.validation import validate_historical_odds_batch
 
 
 def _write_seed(path: Path) -> None:

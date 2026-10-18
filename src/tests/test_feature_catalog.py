@@ -15,21 +15,21 @@ import pyarrow.parquet as pq
 import pytest
 from typer.testing import CliRunner
 
-from features.catalog.loader import load_feature_definitions
-from features.catalog.registry import FeatureRegistry, create_feature_registry
-from features.contracts.types import FeatureBatchInput, FeatureBuildError, FeatureGroupInput
-from features.explanatory_variables import audit_feature_inputs, build_explanatory_variables
-from features.jockey_combination import (
+from main import app
+from make_datamart.builder import join_feature_tables
+from make_datamart.tables.parquet import read_datamart, write_datamart
+from make_features.catalog.loader import load_feature_definitions
+from make_features.catalog.registry import FeatureRegistry, create_feature_registry
+from make_features.contracts.types import FeatureBatchInput, FeatureBuildError, FeatureGroupInput
+from make_features.explanatory_variables import audit_feature_inputs, build_explanatory_variables
+from make_features.jockey_combination import (
     JockeyCombinationBuilder,
     JockeyCombinationInput,
     build_jockey_combination,
 )
-from features.tables.build import build_feature_table
-from features.tables.parquet import read_feature_table, write_feature_table
-from features.validation.table import validate_feature_table
-from main import app
-from make_datamart.builder import join_feature_tables
-from make_datamart.tables.parquet import read_datamart, write_datamart
+from make_features.tables.build import build_feature_table
+from make_features.tables.parquet import read_feature_table, write_feature_table
+from make_features.validation.table import validate_feature_table
 
 CONFIG = Path(__file__).resolve().parents[2] / "config/features.toml"
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
@@ -269,11 +269,11 @@ def test_catalog_import_does_not_load_individual_implementations() -> None:
     src_dir = CONFIG.parent.parent / "src"
     script = f"""import sys
 sys.path.insert(0, {str(src_dir)!r})
-import features.catalog.loader
-assert 'features.catalog.registry' not in sys.modules
-assert 'features.recent_performance' not in sys.modules
-assert 'features.market_characteristics' not in sys.modules
-assert 'features.odds_ratio' not in sys.modules
+import make_features.catalog.loader
+assert 'make_features.catalog.registry' not in sys.modules
+assert 'make_features.recent_performance' not in sys.modules
+assert 'make_features.market_characteristics' not in sys.modules
+assert 'make_features.odds_ratio' not in sys.modules
 """
     result = subprocess.run(
         [sys.executable, "-c", script], capture_output=True, text=True, check=False
@@ -284,7 +284,7 @@ assert 'features.odds_ratio' not in sys.modules
 @pytest.mark.parametrize("command", [[], ["model"], ["model", "explanatory-variables"]])
 def test_help_never_loads_feature_config(command: list[str]) -> None:
     with patch(
-        "main.load_feature_definitions",
+        "cli.cli_make_features.load_feature_definitions",
         side_effect=AssertionError("unexpected config read"),
     ) as loader:
         result = CliRunner().invoke(app, [*command, "--help"])
@@ -297,7 +297,7 @@ def test_importing_entry_point_never_reads_feature_config() -> None:
     script = f"""import sys
 sys.path.insert(0, {str(src_dir)!r})
 from unittest.mock import patch
-with patch('features.catalog.loader.load_feature_definitions', side_effect=AssertionError('unexpected config read')) as loader:
+with patch('make_features.catalog.loader.load_feature_definitions', side_effect=AssertionError('unexpected config read')) as loader:
     import main
     loader.assert_not_called()
 """
@@ -340,7 +340,9 @@ def test_cli_reads_custom_catalog_once_and_preserves_output_order(tmp_path: Path
         ),
         encoding="utf-8",
     )
-    with patch("main.load_feature_definitions", wraps=load_feature_definitions) as loader:
+    with patch(
+        "cli.cli_make_features.load_feature_definitions", wraps=load_feature_definitions
+    ) as loader:
         result = CliRunner().invoke(
             app,
             [

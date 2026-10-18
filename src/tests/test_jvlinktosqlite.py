@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
-from retriever.jvlinktosqlite import (
+from jra_van_retriever.acquisition.jvlink_runner import (
     JVLinkExecutionResult,
     JVLinkToSQLiteError,
     JVLinkToSQLiteRunner,
@@ -39,7 +39,7 @@ def test_execute_invokes_exec_mode_without_shell(
     executable, setting, database = _create_runner_files(tmp_path)
     runner = JVLinkToSQLiteRunner(executable, database)
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess([str(executable)], 0, "", "")
         runner.execute(setting, skip_last_modified_update=skip_last_modified_update)
 
@@ -72,7 +72,7 @@ def test_execute_parses_data_spec_api_returncodes(tmp_path: Path) -> None:
     runner = JVLinkToSQLiteRunner(executable, database)
     output = "[INFO] [JVOpen] RC=-1 (0B41, 2008012701010801)\n"
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
         result = runner.execute(setting)
 
@@ -99,7 +99,9 @@ def test_execute_streams_provider_output_on_interactive_console(
             return 0
 
     with (
-        patch("retriever.jvlinktosqlite.subprocess.Popen", return_value=Process()),
+        patch(
+            "jra_van_retriever.acquisition.jvlink_runner.subprocess.Popen", return_value=Process()
+        ),
         patch.object(sys.stdout, "isatty", return_value=True),
     ):
         result = runner.execute(setting)
@@ -113,7 +115,7 @@ def test_execute_does_not_treat_jvread_minus_one_as_no_data(tmp_path: Path) -> N
     runner = JVLinkToSQLiteRunner(executable, database)
     output = "[INFO] [JVRead] RC=-1 (0B41, 2008012701010801)\n"
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
         result = runner.execute(setting)
 
@@ -127,7 +129,7 @@ def test_execute_marks_jvopen_error_as_fatal(tmp_path: Path) -> None:
     runner = JVLinkToSQLiteRunner(executable, database)
     output = "[INFO] [JVOpen] RC=-504 (0B41, 2008012701010801)\n"
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
         result = runner.execute(setting)
 
@@ -149,7 +151,7 @@ def test_execute_uses_last_api_result_for_classification(tmp_path: Path) -> None
         "[INFO] [JVOpen] RC=0 (0B41, 2008012701010801)\n"
     )
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.return_value = subprocess.CompletedProcess([str(executable)], 0, output, "")
         result = runner.execute(setting)
 
@@ -162,7 +164,7 @@ def test_execute_translates_nonzero_exit_status(tmp_path: Path) -> None:
     executable, setting, database = _create_runner_files(tmp_path)
     runner = JVLinkToSQLiteRunner(executable, database)
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.side_effect = subprocess.CalledProcessError(
             7,
             [str(executable)],
@@ -180,7 +182,7 @@ def test_execute_translates_timeout(tmp_path: Path) -> None:
     executable, setting, database = _create_runner_files(tmp_path)
     runner = JVLinkToSQLiteRunner(executable, database, timeout_seconds=30.0)
 
-    with patch("retriever.jvlinktosqlite.subprocess.run") as run:
+    with patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run:
         run.side_effect = subprocess.TimeoutExpired([str(executable)], 30.0)
         with pytest.raises(JVLinkToSQLiteError, match=r"timed out after 30\.0 seconds"):
             runner.execute(setting)
@@ -200,8 +202,10 @@ def test_execute_keeps_api_evidence_on_process_failure(tmp_path: Path, streaming
 
     with (
         patch.object(sys.stdout, "isatty", return_value=streaming),
-        patch("retriever.jvlinktosqlite.subprocess.Popen", return_value=Process()),
-        patch("retriever.jvlinktosqlite.subprocess.run") as run,
+        patch(
+            "jra_van_retriever.acquisition.jvlink_runner.subprocess.Popen", return_value=Process()
+        ),
+        patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run,
     ):
         run.side_effect = subprocess.CalledProcessError(7, [str(executable)], output=output)
         with pytest.raises(JVLinkToSQLiteError, match="status 7") as exc_info:
@@ -219,7 +223,7 @@ def test_missing_setting_is_rejected_before_process_start(tmp_path: Path) -> Non
     missing_setting = tmp_path / "missing.xml"
 
     with (
-        patch("retriever.jvlinktosqlite.subprocess.run") as run,
+        patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run,
         pytest.raises(FileNotFoundError, match="setting file does not exist"),
     ):
         runner.execute(missing_setting)
@@ -255,8 +259,8 @@ def test_assert_not_running_uses_tasklist_csv(tmp_path: Path) -> None:
     runner = JVLinkToSQLiteRunner(executable, database)
 
     with (
-        patch("retriever.jvlinktosqlite.os.name", "nt"),
-        patch("retriever.jvlinktosqlite.subprocess.run") as run,
+        patch("jra_van_retriever.acquisition.jvlink_runner.os.name", "nt"),
+        patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run,
     ):
         run.return_value = subprocess.CompletedProcess(
             ["tasklist"], 0, '"other.exe","1","Console","1","1 K"\n', ""
@@ -277,8 +281,8 @@ def test_assert_not_running_rejects_matching_process(tmp_path: Path) -> None:
     runner = JVLinkToSQLiteRunner(executable, database)
 
     with (
-        patch("retriever.jvlinktosqlite.os.name", "nt"),
-        patch("retriever.jvlinktosqlite.subprocess.run") as run,
+        patch("jra_van_retriever.acquisition.jvlink_runner.os.name", "nt"),
+        patch("jra_van_retriever.acquisition.jvlink_runner.subprocess.run") as run,
     ):
         run.return_value = subprocess.CompletedProcess(
             ["tasklist"], 0, '"JVLinkToSQLite.exe","1","Console","1","1 K"\n', ""

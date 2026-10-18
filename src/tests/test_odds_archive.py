@@ -5,7 +5,7 @@ from datetime import date
 from pathlib import Path
 
 from domain.race_key import RaceKey
-from retriever.odds_archive import OddsArchive
+from jra_van_retriever.acquisition.odds_archive import OddsArchive
 
 
 def _seed_realtime_tables(database: Path) -> None:
