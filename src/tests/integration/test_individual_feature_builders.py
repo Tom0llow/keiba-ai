@@ -25,7 +25,7 @@ from make_features.tables.parquet import read_feature_table, write_feature_table
 from make_features.validation.table import validate_feature_table
 
 REGISTRY = create_feature_registry(
-    load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")
+    load_feature_definitions(Path(__file__).resolve().parents[3] / "configs/features.toml")
 )
 FEATURE_GROUP_IDS = REGISTRY.feature_ids
 FEATURE_GROUP_SPECS = REGISTRY.definitions

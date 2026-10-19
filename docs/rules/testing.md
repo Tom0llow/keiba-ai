@@ -6,11 +6,19 @@ Tests provide deterministic evidence about observable behavior. Prefer focused
 unit tests, use integration tests at real boundaries, and add end-to-end tests
 only when lower-level coverage cannot demonstrate a critical user flow.
 
-The repository has application code and tests under `src/` but is not installed
-as a Python distribution. The test in
-`src/tests/test_project_environment.py` verifies that the synced environment
-preserves that contract. Product behavior is covered by the related tests under
-`src/tests/`.
+Application code lives under `src/`, configuration TOMLs under `configs/`, and
+tests under `src/tests/`. The repository is not installed as a Python
+distribution; `src/tests/test_project_environment.py` verifies that the synced
+environment preserves that contract. This smoke test keeps its original path so
+existing instructions and direct commands remain valid. ADR-026 records the
+configuration rename and test classification.
+
+Use `src/tests/unit/` for pure calculations and validation, and isolated tests with
+external boundaries mocked. Use `src/tests/integration/` for real filesystem, SQLite,
+subprocess, environment, and cross-feature connections. Tests that read the real
+feature catalog and construct its builders belong to integration, even without
+a `tmp_path` parameter. Split mixed files without losing tests, fixtures, or
+parametrization. Do not classify only from the filename or fixture arguments.
 
 ## 2. Framework and commands
 
@@ -18,7 +26,15 @@ Use pytest:
 
 ```bash
 uv run pytest
+uv run pytest src/tests/unit
+uv run pytest src/tests/integration
 ```
+
+Both the default run and the existing CI command `uv run pytest src/tests`
+discover the classified tests and environment smoke test. Pytest uses importlib
+mode so split modules may retain the same filename without import collisions.
+Mypy continues to target `src`, which includes every test. Existing CI, pre-commit,
+and guarded-workflow commands therefore keep their full validation scope.
 
 Run the nearest test first when changing behavior:
 

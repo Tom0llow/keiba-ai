@@ -1,14 +1,16 @@
 # PR #21 責務分離リファクタリング記録
 
 前段階の基準HEAD: `781cbcfdda0d1ec7377e70440e887562e89629dd`。その実装は`8053ea8fa3027109c5082612b0689e169f5030c4`までに完了した。
-今回の構成変更の基準は8053ea8。以下の旧123ファイルの履歴は保持し、移設先・責務一覧・最終ツリーはADR-025の現行配置へ更新した。今回の差分と検証は[データ基盤・CLI移行記録](refactoring-pr21-data-cli.md)を参照する。
+今回の構成変更の基準は8053ea8。以下の旧123ファイルの履歴は保持し、移設先・責務一覧・最終ツリーはADR-026までの現行配置へ更新した。今回の差分と検証は[データ基盤・CLI移行記録](refactoring-pr21-data-cli.md)を参照する。
 [ADR-024](decisions/ADR-024-separate-functional-responsibilities.md)に従い、既存の計算、設定値、保存形式、ロック・台帳・復旧とCLIの契約を維持して所有者を分離した。
+
+設定とテストの追加移設・分類は[設定・テスト移行記録](refactoring-pr21-configs-tests.md)に記録する。
 
 ## 旧ファイルと新ファイルの全件対応
 
 変更前の`src/`全123 Pythonファイル（本体101、テスト22）を以下に列挙する。テストファイルは全て維持した。
 
-|旧ファイル|新しい所有先（src/配下）|処置・理由|
+|旧ファイル|新しい所有先（製品コードはsrc/配下、テストはルートからのパス）|処置・理由|
 |---|---|---|
 |`src/domain/__init__.py`|`domain/__init__.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
 |`src/domain/race_key.py`|`domain/race_key.py`|現配置を維持。移設に伴うimportまたは所有先の再公開を更新。|
@@ -105,28 +107,28 @@
 |`src/retriever/weekly.py`|`jra_van_retriever/workflows/historical_odds.py`<br>`jra_van_retriever/workflows/historical_odds_plan.py`<br>`jra_van_retriever/workflows/historical_odds_request.py`<br>`jra_van_retriever/workflows/historical_odds_recovery.py`<br>`jra_van_retriever/workflows/historical_odds_publication.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
 |`src/settings/__init__.py`|該当する新packageの`__init__.py`へ統合|旧package宣言を削除。旧settings/utilsを含む旧配置は廃止し、実装を残さない。|
 |`src/settings/data_paths.py`|`configuration/data_paths.py`<br>`configuration/loader.py`<br>`configuration/path_resolver.py`|混在していた責務を分割し、共通処理の所有者を一意にした。|
-|`src/tests/test_data_pipeline.py`|`tests/test_data_pipeline.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_data_retriever.py`|`tests/test_data_retriever.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_datamart.py`|`tests/test_datamart.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_explanatory_variables.py`|`tests/test_explanatory_variables.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_feature_catalog.py`|`tests/test_feature_catalog.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_feature_tables.py`|`tests/test_feature_tables.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_features.py`|`tests/test_features.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_historical.py`|`tests/test_historical.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_individual_feature_builders.py`|`tests/test_individual_feature_builders.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_jvlinktosqlite.py`|`tests/test_jvlinktosqlite.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_latest.py`|`tests/test_latest.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_main.py`|`tests/test_main.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_make_features.py`|`tests/test_make_features.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_models.py`|`tests/test_models.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_odds_archive.py`|`tests/test_odds_archive.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_project_environment.py`|`tests/test_project_environment.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_read_json.py`|`tests/test_read_json.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_realtime.py`|`tests/test_realtime.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_serialization.py`|`tests/test_serialization.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_setting.py`|`tests/test_setting.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_walk_forward.py`|`tests/test_walk_forward.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
-|`src/tests/test_weekly_progress.py`|`tests/test_weekly_progress.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_data_pipeline.py`|`src/tests/integration/test_data_pipeline.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_data_retriever.py`|`src/tests/integration/test_data_retriever.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_datamart.py`|`src/tests/unit/test_datamart.py`<br>`src/tests/integration/test_datamart.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_explanatory_variables.py`|`src/tests/integration/test_explanatory_variables.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_feature_catalog.py`|`src/tests/unit/test_feature_catalog.py`<br>`src/tests/integration/test_feature_catalog.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_feature_tables.py`|`src/tests/unit/test_feature_tables.py`<br>`src/tests/integration/test_feature_tables.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_features.py`|`src/tests/unit/test_features.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_historical.py`|`src/tests/unit/test_historical.py`<br>`src/tests/integration/test_historical.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_individual_feature_builders.py`|`src/tests/integration/test_individual_feature_builders.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_jvlinktosqlite.py`|`src/tests/integration/test_jvlinktosqlite.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_latest.py`|`src/tests/integration/test_latest.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_main.py`|`src/tests/unit/test_main.py`<br>`src/tests/integration/test_main.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_make_features.py`|`src/tests/integration/test_make_features.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_models.py`|`src/tests/unit/test_models.py`<br>`src/tests/integration/test_models.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_odds_archive.py`|`src/tests/integration/test_odds_archive.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_project_environment.py`|`src/tests/test_project_environment.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_read_json.py`|`src/tests/integration/test_read_json.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_realtime.py`|`src/tests/integration/test_realtime.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_serialization.py`|`src/tests/unit/test_serialization.py`<br>`src/tests/integration/test_serialization.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_setting.py`|`src/tests/integration/test_setting.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_walk_forward.py`|`src/tests/unit/test_walk_forward.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
+|`src/tests/test_weekly_progress.py`|`src/tests/integration/test_weekly_progress.py`|既存ファイルと全検証を維持。import/patch先を新所有先へ更新し、必要な回帰を追加。|
 |`src/utils/__init__.py`|該当する新packageの`__init__.py`へ統合|旧package宣言を削除。旧settings/utilsを含む旧配置は廃止し、実装を残さない。|
 |`src/utils/data_loader.py`|`data/loader/processed_data_loader.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
 |`src/utils/json_output.py`|`data/saver/write_json.py`|責務に対応する機能内の配置へ移設。既存の型・引数・動作を維持。|
@@ -192,7 +194,7 @@ import/helpでは設定・入力を読まず、取得環境も作らない。
 
 ## 各最終ファイルの責務
 
-以下は現行src全Pythonファイルとconfig全TOMLファイルを省略せず列挙する。
+以下は現行srcの全Pythonファイル、configsの全TOMLファイルを省略せず列挙する。
 package宣言も記録し、存在しない将来用model設定は含めない。
 
 |ファイル|責務|
@@ -336,40 +338,49 @@ package宣言も記録し、存在しない将来用model設定は含めない�
 |`src/models/serialization/outputs.py`|Convert model features, audits, and evaluations to JSON-ready values.|
 |`src/models/training/__init__.py`|Training responsibilities.|
 |`src/models/training/train.py`|Training entry point for the LambdaRank MVP.|
-|`src/tests/test_cli_boundaries.py`|Tests for CLI composition, independent imports and shared input contracts.|
-|`src/tests/test_configuration.py`|Tests for shared physical TOML loading and path resolution.|
-|`src/tests/test_data_pipeline.py`|Tests for raw SQLite preprocessing and processed Parquet loading.|
-|`src/tests/test_data_retriever.py`|Tests for the public race-data retrieval facade.|
-|`src/tests/test_datamart.py`|Tests for ordered datamart joins of intermediate feature tables.|
-|`src/tests/test_explanatory_variables.py`|Tests for the explicit F01-F21 explanatory-variable boundary.|
-|`src/tests/test_feature_catalog.py`|Verify declarative registrations reach audit, generation and saved contracts.|
-|`src/tests/test_feature_tables.py`|Tests for feature-specific intermediate tables.|
-|`src/tests/test_features.py`|Tests for temporal feature construction and availability auditing.|
-|`src/tests/test_historical.py`|Tests for historical race and odds retrieval orchestration.|
-|`src/tests/test_individual_feature_builders.py`|Verify individual builders share middle rows, source audits and table storage.|
-|`src/tests/test_jvlinktosqlite.py`|Tests for the local JVLinkToSQLite subprocess boundary.|
-|`src/tests/test_latest.py`|Tests for latest-data retrieval orchestration.|
-|`src/tests/test_main.py`|Tests for the Typer data CLI.|
-|`src/tests/test_make_features.py`|Tests for feature execution JSON serialization.|
-|`src/tests/test_models.py`|Focused tests for the LambdaRank ranking MVP.|
-|`src/tests/test_odds_archive.py`|Tests for cumulative archiving of transient JVLinkToSQLite odds tables.|
-|`src/tests/test_project_environment.py`|Smoke tests for the non-package bootstrap environment.|
-|`src/tests/test_read_json.py`|Tests for the reusable UTF-8 JSON object loader.|
-|`src/tests/test_realtime.py`|Tests for prediction-time realtime odds retrieval.|
-|`src/tests/test_serialization.py`|Tests for reusable feature and model JSON contract conversion.|
-|`src/tests/test_setting.py`|Tests for declarative JVLinkToSQLite setting generation.|
-|`src/tests/test_walk_forward.py`|Tests for race-level chronological walk-forward evaluation.|
-|`src/tests/test_weekly_progress.py`|Tests for isolated weekly progress bootstrap and reconciliation.|
-|`config/data.toml`|共有raw/processed/runtimeパス宣言。|
-|`config/features.toml`|特徴量ID・名前・登録順の宣言。|
-|`config/jvlink.toml`|取得profile・DataSpec・期間の宣言。|
+|`src/tests/integration/test_cli_boundaries.py`|integration: Tests for CLI composition, independent imports and shared input contracts.|
+|`src/tests/integration/test_configuration.py`|integration: Tests for shared physical TOML loading and path resolution.|
+|`src/tests/integration/test_data_pipeline.py`|integration: Tests for raw SQLite preprocessing and processed Parquet loading.|
+|`src/tests/integration/test_data_retriever.py`|integration: Tests for the public race-data retrieval facade.|
+|`src/tests/integration/test_datamart.py`|integration: Tests for ordered datamart joins of intermediate feature tables.|
+|`src/tests/integration/test_explanatory_variables.py`|integration: Tests for the explicit F01-F21 explanatory-variable boundary.|
+|`src/tests/integration/test_feature_catalog.py`|integration: Verify declarative registrations reach audit, generation and saved contracts.|
+|`src/tests/integration/test_feature_tables.py`|integration: Tests for feature-specific intermediate tables.|
+|`src/tests/integration/test_historical.py`|integration: Tests for historical race and odds retrieval orchestration.|
+|`src/tests/integration/test_individual_feature_builders.py`|integration: Verify individual builders share middle rows, source audits and table storage.|
+|`src/tests/integration/test_jvlinktosqlite.py`|integration: Tests for the local JVLinkToSQLite subprocess boundary.|
+|`src/tests/integration/test_latest.py`|integration: Tests for latest-data retrieval orchestration.|
+|`src/tests/integration/test_main.py`|integration: Tests for the Typer data CLI.|
+|`src/tests/integration/test_make_features.py`|integration: Tests for feature execution JSON serialization.|
+|`src/tests/integration/test_models.py`|integration: Focused tests for the LambdaRank ranking MVP.|
+|`src/tests/integration/test_odds_archive.py`|integration: Tests for cumulative archiving of transient JVLinkToSQLite odds tables.|
+|`src/tests/test_project_environment.py`|既存環境smoke: Smoke tests for the non-package bootstrap environment.|
+|`src/tests/integration/test_read_json.py`|integration: Tests for the reusable UTF-8 JSON object loader.|
+|`src/tests/integration/test_realtime.py`|integration: Tests for prediction-time realtime odds retrieval.|
+|`src/tests/integration/test_serialization.py`|integration: Tests for reusable feature and model JSON contract conversion.|
+|`src/tests/integration/test_setting.py`|integration: Tests for declarative JVLinkToSQLite setting generation.|
+|`src/tests/integration/test_weekly_progress.py`|integration: Tests for isolated weekly progress bootstrap and reconciliation.|
+|`src/tests/unit/test_cli_boundaries.py`|unit: Tests for CLI composition, independent imports and shared input contracts.|
+|`src/tests/unit/test_configuration.py`|unit: Tests for shared physical TOML loading and path resolution.|
+|`src/tests/unit/test_datamart.py`|unit: Tests for ordered datamart joins of intermediate feature tables.|
+|`src/tests/unit/test_feature_catalog.py`|unit: Verify declarative registrations reach audit, generation and saved contracts.|
+|`src/tests/unit/test_feature_tables.py`|unit: Tests for feature-specific intermediate tables.|
+|`src/tests/unit/test_features.py`|unit: Tests for temporal feature construction and availability auditing.|
+|`src/tests/unit/test_historical.py`|unit: Tests for historical race and odds retrieval orchestration.|
+|`src/tests/unit/test_main.py`|unit: Tests for the Typer data CLI.|
+|`src/tests/unit/test_models.py`|unit: Focused tests for the LambdaRank ranking MVP.|
+|`src/tests/unit/test_serialization.py`|unit: Tests for reusable feature and model JSON contract conversion.|
+|`src/tests/unit/test_walk_forward.py`|unit: Tests for race-level chronological walk-forward evaluation.|
+|`configs/data.toml`|共有raw/processed/runtimeパス宣言。|
+|`configs/features.toml`|特徴量ID・名前・登録順の宣言。|
+|`configs/jvlink.toml`|取得profile・DataSpec・期間の宣言。|
 
 ## 最終の対象ディレクトリ構成（全ファイル）
 
-対象はsrcとconfig。生成キャッシュ・取得データ・仮想環境を除き全ファイルを示す。
+対象はsrcとconfigs。生成キャッシュ・取得データ・仮想環境を除き全ファイルを示す。
 
 ```text
-config/
+configs/
 ├── data.toml
 ├── features.toml
 └── jvlink.toml
@@ -546,30 +557,41 @@ src/
 │   ├── __init__.py
 │   └── predict_model.py
 ├── tests/
-│   ├── test_cli_boundaries.py
-│   ├── test_configuration.py
-│   ├── test_data_pipeline.py
-│   ├── test_data_retriever.py
-│   ├── test_datamart.py
-│   ├── test_explanatory_variables.py
-│   ├── test_feature_catalog.py
-│   ├── test_feature_tables.py
-│   ├── test_features.py
-│   ├── test_historical.py
-│   ├── test_individual_feature_builders.py
-│   ├── test_jvlinktosqlite.py
-│   ├── test_latest.py
-│   ├── test_main.py
-│   ├── test_make_features.py
-│   ├── test_models.py
-│   ├── test_odds_archive.py
-│   ├── test_project_environment.py
-│   ├── test_read_json.py
-│   ├── test_realtime.py
-│   ├── test_serialization.py
-│   ├── test_setting.py
-│   ├── test_walk_forward.py
-│   └── test_weekly_progress.py
+│   ├── integration/
+│   │   ├── test_cli_boundaries.py
+│   │   ├── test_configuration.py
+│   │   ├── test_data_pipeline.py
+│   │   ├── test_data_retriever.py
+│   │   ├── test_datamart.py
+│   │   ├── test_explanatory_variables.py
+│   │   ├── test_feature_catalog.py
+│   │   ├── test_feature_tables.py
+│   │   ├── test_historical.py
+│   │   ├── test_individual_feature_builders.py
+│   │   ├── test_jvlinktosqlite.py
+│   │   ├── test_latest.py
+│   │   ├── test_main.py
+│   │   ├── test_make_features.py
+│   │   ├── test_models.py
+│   │   ├── test_odds_archive.py
+│   │   ├── test_read_json.py
+│   │   ├── test_realtime.py
+│   │   ├── test_serialization.py
+│   │   ├── test_setting.py
+│   │   └── test_weekly_progress.py
+│   ├── unit/
+│   │   ├── test_cli_boundaries.py
+│   │   ├── test_configuration.py
+│   │   ├── test_datamart.py
+│   │   ├── test_feature_catalog.py
+│   │   ├── test_feature_tables.py
+│   │   ├── test_features.py
+│   │   ├── test_historical.py
+│   │   ├── test_main.py
+│   │   ├── test_models.py
+│   │   ├── test_serialization.py
+│   │   └── test_walk_forward.py
+│   └── test_project_environment.py
 └── main.py
 ```
 

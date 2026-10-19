@@ -109,7 +109,7 @@ def test_builder_applies_data_spec_specific_setup_start_datetimes(tmp_path: Path
 
 
 def test_config_loads_data_spec_specific_historical_start_datetimes() -> None:
-    config_path = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = Path(__file__).parents[3] / "configs" / "jvlink.toml"
 
     config = JVLinkConfig.from_toml(config_path)
 
@@ -120,7 +120,7 @@ def test_config_loads_data_spec_specific_historical_start_datetimes() -> None:
 
 
 def test_config_loads_realtime_race(tmp_path: Path) -> None:
-    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
     config_path = tmp_path / "jvlink.toml"
     config_path.write_text(
         source.read_text(encoding="utf-8")
@@ -140,7 +140,7 @@ def test_config_loads_realtime_race(tmp_path: Path) -> None:
 
 @pytest.mark.parametrize("value", [None, "true", "false"])
 def test_config_loads_optional_skip_existing(tmp_path: Path, value: str | None) -> None:
-    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
     config_path = tmp_path / "jvlink.toml"
     content = source.read_text(encoding="utf-8").replace("skip_existing = true\n", "")
     if value is not None:
@@ -157,7 +157,7 @@ def test_config_loads_optional_skip_existing(tmp_path: Path, value: str | None) 
 
 @pytest.mark.parametrize("value", ['"true"', "1", "[]"])
 def test_config_rejects_non_boolean_skip_existing(tmp_path: Path, value: str) -> None:
-    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
     config_path = tmp_path / "jvlink.toml"
     config_path.write_text(
         source.read_text(encoding="utf-8").replace(
@@ -171,7 +171,7 @@ def test_config_rejects_non_boolean_skip_existing(tmp_path: Path, value: str) ->
 
 
 def test_repository_config_retrieves_only_missing_historical_odds() -> None:
-    config_path = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = Path(__file__).parents[3] / "configs" / "jvlink.toml"
 
     config = JVLinkConfig.from_toml(config_path)
 
@@ -188,7 +188,7 @@ def test_repository_config_retrieves_only_missing_historical_odds() -> None:
 
 
 def test_config_rejects_removed_initial_gap_policy(tmp_path: Path) -> None:
-    source = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
     config_path = tmp_path / "jvlink.toml"
     config_path.write_text(
         source.read_text(encoding="utf-8").replace(
@@ -203,7 +203,7 @@ def test_config_rejects_removed_initial_gap_policy(tmp_path: Path) -> None:
 
 
 def test_historical_odds_rejects_refetch_policy() -> None:
-    config_path = Path(__file__).parents[2] / "config" / "jvlink.toml"
+    config_path = Path(__file__).parents[3] / "configs" / "jvlink.toml"
     config = JVLinkConfig.from_toml(config_path)
     assert config.historical_odds_batch is not None
 

@@ -23,7 +23,7 @@ from make_features.explanatory_variables import (
 from models.dataset.schema import FeatureSchema
 
 REGISTRY = create_feature_registry(
-    load_feature_definitions(Path(__file__).resolve().parents[2] / "config/features.toml")
+    load_feature_definitions(Path(__file__).resolve().parents[3] / "configs/features.toml")
 )
 FEATURE_GROUP_IDS = REGISTRY.feature_ids
 FEATURE_GROUP_SPECS = REGISTRY.definitions

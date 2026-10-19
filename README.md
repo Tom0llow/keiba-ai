@@ -10,7 +10,7 @@ retrieval boundary through JVLinkToSQLite, versioned Parquet publication, and a
 Parquet-only loader boundary. It remains a non-distributed Python project.
 
 ```text
-config/                         # 既存3 TOMLの値・キーを維持
+configs/                        # 既存3 TOMLの値・キーを維持
 src/
 ├─ main.py                      # CLI組立・登録・起動
 ├─ cli/                         # options/json_ioと機能CLI5ファイル
@@ -25,7 +25,10 @@ src/
 ├─ make_datamart/                # 純粋結合・検証・保存契約
 ├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
 ├─ domain/                      # 共有RaceKey
-└─ tests/                       # 全既存ファイルと境界回帰
+└─ tests/
+   ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
+   ├─ integration/              # 実ファイル・DB・process・機能接続のテスト
+   └─ test_project_environment.py # 既存環境契約の確認
 ```
 
 The project has no build system. `uv sync` installs its locked dependencies
@@ -37,7 +40,9 @@ ADR-008とADR-021〜023の配置判断を置き換えた責務分離を継承す
 [ADR-025](docs/decisions/ADR-025-group-data-and-separate-cli-contracts.md)によりデータ基盤をdataへ集約し、CLI共通契約と登録の依存を整理した。
 全ファイルの最終構成、旧配置の対応表、責務と互換性は
 [PR #21リファクタリング記録](docs/refactoring-pr21.md)と
-[今回のデータ基盤・CLI移行記録](docs/refactoring-pr21-data-cli.md)を参照する。
+[データ基盤・CLI移行記録](docs/refactoring-pr21-data-cli.md)を参照する。
+[ADR-026](docs/decisions/ADR-026-rename-configs-and-classify-tests.md)に従うconfigsへの改名とsrc/tests内の分類、
+全テストの分類・旧新対応は[設定・テスト移行記録](docs/refactoring-pr21-configs-tests.md)に記録する。
 
 ## Data flow
 
@@ -60,7 +65,7 @@ it directly. SQLiteの読取取引は`src/data/loader/read_sqlite.py`、純粋�
 `src/data/loader/read_parquet.py` reads processed Parquet only. The separate
 `read_json.py` reads explicit JSON inputs without feature or model validation.
 
-Storage paths are configured in `config/data.toml`:
+Storage paths are configured in `configs/data.toml`:
 
 ```toml
 [paths]
@@ -77,7 +82,7 @@ The Python code does not call JV-Link COM directly and does not store the
 JRA-VAN service key.
 
 The user-owned `C:\JVLinkToSQLite\setting.xml` is treated as a seed. Retrieval
-behavior is declared in `config/jvlink.toml`, and Python generates execution XML
+behavior is declared in `configs/jvlink.toml`, and Python generates execution XML
 for historical-basic, historical-odds, latest, and realtime modes.
 
 Important profiles include:
@@ -111,7 +116,7 @@ when the corresponding base-data retrieval is intentionally disabled. A missing
 database still fails before retrieval.
 
 The target race for realtime retrieval can also be configured in
-`config/jvlink.toml`:
+`configs/jvlink.toml`:
 
 ```toml
 [realtime]
@@ -288,6 +293,11 @@ uv run mypy src
 uv run pytest
 ```
 
+単体テストだけを実行する場合は`uv run pytest src/tests/unit`、結合テストは
+`uv run pytest src/tests/integration`を使う。引数なしのpytestは両方を実行する。
+型検査は`src`全体を対象とし、分類した全テストも含む。環境確認テストは従来の
+`src/tests/test_project_environment.py`に置き、既定実行と`pytest src/tests`の両方で収集する。
+
 Guard trust-boundary validation is run separately by the Quality workflow and can
 also be invoked with:
 
@@ -318,7 +328,7 @@ Repository instructions are in `AGENTS.md`. Current architectural facts are in
 
 ## Feature registration and Python API migration
 
-`config/features.toml` owns the F01-F21 group IDs, names and declaration order.
+`configs/features.toml` owns the F01-F21 group IDs, names and declaration order.
 These are stable JSON identifiers, independent of the numeric model allow-list.
 Each `[[features]]` entry contains only `id` and `name`. The catalog must match
 all implemented groups; duplicate IDs/names, malformed entries, unknown names
@@ -326,10 +336,10 @@ and missing implementations are rejected. Changing an ID requires considering
 existing JSON consumers. Importing modules or requesting CLI help never reads it.
 
 ```bash
-uv run python src/main.py model explanatory-variables --input inputs.json --output features.json --features-config config/features.toml
+uv run python src/main.py model explanatory-variables --input inputs.json --output features.json --features-config configs/features.toml
 ```
 
-`--features-config` defaults to `config/features.toml`. Other commands and their
+`--features-config` defaults to `configs/features.toml`. Other commands and their
 existing arguments, JSON keys and exit codes retain their contracts.
 
 Python callers load the catalog explicitly once and reuse the same registry:
@@ -341,7 +351,7 @@ from make_features.explanatory_variables import build_explanatory_variables
 from make_features.jockey_combination import build_jockey_combination
 from make_features.tables.parquet import read_feature_table, write_feature_table
 
-registry = create_feature_registry(load_feature_definitions("config/features.toml"))
+registry = create_feature_registry(load_feature_definitions("configs/features.toml"))
 result = build_explanatory_variables(batch_inputs, registry=registry)
 definition = registry.by_name("jockey_combination").definition
 table = build_jockey_combination(
@@ -385,10 +395,10 @@ manual authorization.
 既存の中間Parquetを指定順に左結合し、検証済みDatamartを保存する。
 
 ```powershell
-uv run python src/main.py datamart build --input previous.parquet --input odds.parquet --output datamart.parquet --features-config config/features.toml
+uv run python src/main.py datamart build --input previous.parquet --input odds.parquet --output datamart.parquet --features-config configs/features.toml
 ```
 
-`--input`は結合順に繰り返す。`--features-config`は既定で`config/features.toml`を使用し、
+`--input`は結合順に繰り返す。`--features-config`は既定で`configs/features.toml`を使用し、
 宣言された特徴量名を読込・結合・保存の検証へ渡す。元の3特徴量は従来の固定スキーマも使用できる。
 F01〜F21と独自IDの登録では、既存APIと同じ列・metadata・時点検証を維持する。
 入力や結合の失敗は標準エラーへ表示して終了コード1とし、保存処理へ進まない。

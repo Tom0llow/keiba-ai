@@ -94,7 +94,7 @@ and literal argv integration remain separate manual installation checks.
 ## 現行の機能境界
 
 ```text
-config/                         # 既存3 TOMLの値・キーを維持
+configs/                        # 既存3 TOMLの値・キーを維持
 src/
 ├─ main.py                      # CLI組立・登録・起動
 ├─ cli/                         # options/json_ioと機能CLI5ファイル
@@ -109,7 +109,10 @@ src/
 ├─ make_datamart/                # 純粋結合・検証・保存契約
 ├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
 ├─ domain/                      # 共有RaceKey
-└─ tests/                       # 全既存ファイルと境界回帰
+└─ tests/
+   ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
+   ├─ integration/              # 実ファイル・DB・process・機能接続のテスト
+   └─ test_project_environment.py # 既存環境契約の確認
 ```
 
 全ソースファイルの責務と移行対応、最終全ファイルツリーは
@@ -118,10 +121,14 @@ ADR-024はADR-008とADR-021〜023の配置判断を置換し、既存の計算�
 旧settings/utils/retriever/preprocesser/featuresパッケージは廃止した。
 ADR-025がADR-024のデータ基盤とCLI共通処理・登録の配置判断を部分置換する。
 data内の4責務と既存保存契約は継承し、configurationは独立したまま維持する。
+ADR-026がルート設定のフォルダー名をconfigsへ変更し、src/tests内を分類する。
+3 TOMLは内容と相対値を維持し、src/tests/unitとsrc/tests/integrationを既存のpytest・mypyで検査する。
+環境確認テストは既存のsrc/tests/test_project_environment.pyに置く。
+全件の分類と対応は[設定・テスト移行記録](docs/refactoring-pr21-configs-tests.md)に記録する。
 
 ## 設定管理
 
-`config/data.toml`、`jvlink.toml`、`features.toml`のキー・値・既定値は変更しない。
+`configs/data.toml`、`jvlink.toml`、`features.toml`のキー・値・相対パス値は変更しない。
 `configuration/loader.py`だけがTOMLを物理読込し、ファイルと解析エラーをそのまま返す。
 `path_resolver.py`は非空の文字列、ホーム展開、設定ファイルの親からの相対パス、絶対パスを扱う。
 `data_paths.py`は共有のraw SQLite、processed、JVLink runtimeの必須パスを検証してDataPathsを作る。
@@ -262,7 +269,7 @@ parse_json_inputs/input_error_payload/exit_input_errorを所有する。CLI固�
 取得・前処理CLIはSnapshotBuilder.from_tomlを直接呼び、他CLIのprivate factoryを参照しない。
 機能CLIはjra_van_retriever.py/preprocessor.py/make_features.py/make_datamart.py/models.pyとし、
 機能同士を登録のためにimportしない。Typer登録は全てmainが所有する。
-新規datamart buildはrepeatable --input、--output、既定config/features.tomlの--features-configを受け、
+新規datamart buildはrepeatable --input、--output、既定configs/features.tomlの--features-configを受け、
 定義名のみを読み、既存のファイル構築・保存APIへ渡す。失敗はstderr/終了1、成功は行数をstdoutへ出す。
 
 ## 進化時の制約

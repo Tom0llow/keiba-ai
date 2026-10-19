@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import tracemalloc
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
 
 import pyarrow as pa
 import pytest
@@ -12,10 +11,11 @@ import pytest
 from make_features.odds_ratio import OddsRatioInput, build_odds_ratio
 from make_features.pedigree import PedigreeInput, build_pedigree
 from make_features.previous_race_result import PreviousRaceResultInput, build_previous_race_result
-from make_features.tables.parquet import read_feature_table, write_feature_table
 from make_features.validation.table import validate_feature_table
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
+
+
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)
 
 
@@ -100,19 +100,6 @@ def test_feature_table_rejects_invalid_feature_name_and_columns() -> None:
     invalid_columns = table.select(["race_id", "horse_id", "freeze_at", "available_at", "horse_id"])
     with pytest.raises(ValueError, match="columns"):
         validate_feature_table(invalid_columns, "previous_race_result")
-
-
-def test_feature_table_round_trips_through_parquet(tmp_path: Path) -> None:
-    table = build_pedigree(
-        [PedigreeInput("race-1", "horse-1", FREEZE_AT, AVAILABLE_AT, "Sire A", None)]
-    )
-    path = tmp_path / "pedigree.parquet"
-
-    write_feature_table(table, path)
-    loaded = read_feature_table(path)
-
-    assert loaded.equals(table)
-    assert loaded.schema.metadata == table.schema.metadata
 
 
 def test_feature_table_requires_timezone_aware_timestamps() -> None:

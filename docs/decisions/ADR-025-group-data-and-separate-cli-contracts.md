@@ -1,10 +1,10 @@
 # ADR-025: データ基盤を集約しCLIの共通契約と登録を分離する
 
-- Status: Accepted
+- Status: Superseded by ADR-026（ルート設定フォルダー名のみ。データ基盤・CLIの責務と契約はAccepted）
 - Date: 2026-10-18
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-024（データ基盤とCLI共通処理・登録の配置判断のみ）
-- Superseded by: N/A
+- Superseded by: ADR-026（ルート設定フォルダー名のみ）
 
 ## Context
 

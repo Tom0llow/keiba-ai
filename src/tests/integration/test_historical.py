@@ -65,6 +65,8 @@ _ODDS_TABLES = {
     "0B41": "ARCHIVE_O1_ODDS_TANFUKUWAKU",
     "0B42": "ARCHIVE_O2_ODDS_UMAREN",
 }
+
+
 _ELIGIBLE_RACE_ROWS = [
     ("2003", "1004", "05", "04", "09", "01"),
     ("2026", "1003", "06", "04", "07", "12"),
@@ -198,11 +200,6 @@ def test_iter_race_keys_skips_non_jra_races(tmp_path: Path) -> None:
         )
 
     assert list(_retriever(database).iter_race_keys(start_date=date(2003, 10, 4))) == []
-
-
-def test_manual_race_key_requires_two_digit_components() -> None:
-    with pytest.raises(ValueError, match="jyo_code must be a two-digit string"):
-        RaceKey(date(2026, 10, 4), "5", "04", "08", "11")
 
 
 def test_retrieve_skips_fully_archived_races_without_odds_execution(tmp_path: Path) -> None:

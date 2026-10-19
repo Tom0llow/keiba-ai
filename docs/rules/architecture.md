@@ -10,7 +10,7 @@ data loading, feature generation, and ranking-model evaluation. Its current
 source boundary is:
 
 ```text
-config/                         # 既存3 TOMLの値・キーを維持
+configs/                        # 既存3 TOMLの値・キーを維持
 src/
 ├─ main.py                      # CLI組立・登録・起動
 ├─ cli/                         # options/json_ioと機能CLI5ファイル
@@ -25,7 +25,10 @@ src/
 ├─ make_datamart/                # 純粋結合・検証・保存契約
 ├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
 ├─ domain/                      # 共有RaceKey
-└─ tests/                       # 全既存ファイルと境界回帰
+└─ tests/
+   ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
+   ├─ integration/              # 実ファイル・DB・process・機能接続のテスト
+   └─ test_project_environment.py # 既存環境契約の確認
 ```
 
 `ARCHITECTURE.md` and Accepted ADRs describe implemented contracts. The project
@@ -94,7 +97,7 @@ this layout only when an explicit requirement needs it:
 | Content | Placement |
 | --- | --- |
 | Reusable Python behavior | `src/`; group implemented work by data creation, features, models, and visualization. |
-| Automated behavior tests | `src/tests/`; group related tests so the source they cover is easy to find. |
+| Automated behavior tests | `src/tests/unit/` and `src/tests/integration/`; classify by actual boundaries under ADR-026. Keep the existing environment smoke test directly under `src/tests/`. |
 | Datasets | `data/external/` and `data/raw/` for inputs; `data/interim/` and `data/processed/` for derived outputs. |
 | Model and report artifacts | Root `models/` for trained models and predictions; `reports/figures/` for generated analysis. |
 | Exploration and reference material | `notebooks/` for exploration; `references/` for data dictionaries and manuals. |
@@ -145,7 +148,10 @@ diagram, not a scaffold to create now or a specification of Python import paths:
     │   └── predict_model.py      # Inference code
     ├── visualization/
     │   └── visualize.py          # Plotting code
-    └── tests/                    # Tests for implemented behavior
+    └── tests/
+        ├── unit/
+        ├── integration/
+        └── test_project_environment.py
 ```
 
 Name notebooks by order, author, and purpose when they are introduced, for
@@ -198,7 +204,7 @@ one; when introduced, document and test it as a public contract.
 
 ## 7. Configuration and dependencies
 
-Configuration may own explicit reviewed registries, as `config/features.toml`
+Configuration may own explicit reviewed registries, as `configs/features.toml`
 does under ADR-020, as well as behavior that varies by environment or user choice. Validate required values at the system boundary and keep ownership and
 precedence explicit. Never use configuration as a substitute for a clear product
 decision.

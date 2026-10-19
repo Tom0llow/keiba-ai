@@ -1,10 +1,10 @@
 # ADR-024: 機能ごとの処理と共通基盤の責務を分離する
 
-- Status: Superseded by ADR-025（データ基盤とCLI共通処理・登録の配置判断のみ。責務・保存契約は継承）
+- Status: Superseded by ADR-025（データ基盤とCLI共通処理・登録の配置判断）、ADR-026（ルート設定フォルダー名のみ。責務・保存契約は継承）
 - Date: 2026-10-18
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-008（raw SQLite readerとpreprocessing/loadingのモジュール配置判断のみ）、ADR-021（共有設定配置とDatamart入出力配置）、ADR-022（全CLIのmain集中配置）、ADR-023（旧モジュール配置とCLI配置）
-- Superseded by: ADR-025（配置判断のみ）
+- Superseded by: ADR-025（配置判断のみ）、ADR-026（ルート設定フォルダー名のみ）
 
 ## Context
 

@@ -22,7 +22,7 @@ def model_explanatory_variables(
     output_path: Annotated[Path, typer.Option("--output", help="Feature output JSON path.")],
     features_config: Annotated[
         Path, typer.Option("--features-config", help="Feature registration TOML path.")
-    ] = Path("config/features.toml"),
+    ] = Path("configs/features.toml"),
 ) -> None:
     """Validate F01-F21 feature values without using the model schema."""
     try:

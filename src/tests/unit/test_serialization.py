@@ -1,10 +1,7 @@
 """Tests for reusable feature and model JSON contract conversion."""
 
-import subprocess
-import sys
 from datetime import UTC, datetime
 from math import isnan
-from pathlib import Path
 from types import MappingProxyType
 from typing import cast
 
@@ -234,22 +231,3 @@ def test_model_documents_preserve_schema_order_missing_values_and_timezone_offse
         "metrics": {"ndcg_at_3": 0.75, "top1_accuracy": 0.5, "top3_overlap": 1.0},
         "folds": [],
     }
-
-
-def test_serializers_are_usable_without_typer_or_entry_point() -> None:
-    src_dir = Path(__file__).resolve().parents[1]
-    script = f"""import sys
-sys.path.insert(0, {str(src_dir)!r})
-sys.modules['typer'] = None
-from make_features.serialization.inputs import parse_explanatory_inputs
-from make_features.serialization.outputs import feature_audit_payload
-from models.serialization.inputs import parse_feature_inputs
-from models.serialization.outputs import metrics_payload
-from data.saver.write_json import write_json
-assert parse_explanatory_inputs({{'records': []}}) == ()
-assert 'main' not in sys.modules
-"""
-    result = subprocess.run(
-        [sys.executable, "-c", script], capture_output=True, text=True, check=False
-    )
-    assert result.returncode == 0, result.stderr

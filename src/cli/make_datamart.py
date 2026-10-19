@@ -16,7 +16,7 @@ def datamart_build(
     output: Annotated[Path, typer.Option("--output", help="Datamart Parquet output path.")],
     features_config: Annotated[
         Path, typer.Option("--features-config", help="Feature registration TOML path.")
-    ] = Path("config/features.toml"),
+    ] = Path("configs/features.toml"),
 ) -> None:
     """Join feature tables and save a validated datamart."""
     try:

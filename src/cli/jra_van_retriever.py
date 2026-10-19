@@ -83,8 +83,8 @@ def main(
         list[str] | None,
         typer.Option("--data-spec", help="DataSpec to confirm; repeat for multiple specs."),
     ] = None,
-    data_config: DataConfigOption = Path("config/data.toml"),
-    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    data_config: DataConfigOption = Path("configs/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("configs/jvlink.toml"),
     race_datetime: Annotated[
         datetime | None,
         typer.Option("--date", formats=["%Y-%m-%d"], help="Race date (YYYY-MM-DD)."),
@@ -195,8 +195,8 @@ def _provider_missing_specs(data_specs: list[str] | None) -> frozenset[str]:
 
 
 def retrieve_historical_basic(
-    data_config: DataConfigOption = Path("config/data.toml"),
-    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    data_config: DataConfigOption = Path("configs/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("configs/jvlink.toml"),
 ) -> None:
     """Retrieve historical base data and publish a complete Parquet snapshot."""
     tables: dict[str, int] = {}
@@ -210,8 +210,8 @@ def retrieve_historical_basic(
 
 
 def retrieve_historical_odds(
-    data_config: DataConfigOption = Path("config/data.toml"),
-    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    data_config: DataConfigOption = Path("configs/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("configs/jvlink.toml"),
     *,
     plan_only: bool = False,
     recover: bool = False,
@@ -256,8 +256,8 @@ def retrieve_historical_odds(
 def confirm_historical_odds_provider_missing(
     race_key: RaceKey,
     specs: frozenset[str],
-    data_config: DataConfigOption = Path("config/data.toml"),
-    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    data_config: DataConfigOption = Path("configs/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("configs/jvlink.toml"),
 ) -> None:
     """Confirm selected empty-response failures without starting JV-Link."""
     count = _retriever(data_config, jvlink_config).confirm_historical_odds_provider_missing(
@@ -278,8 +278,8 @@ def confirm_historical_odds_provider_missing(
 
 
 def retrieve_latest(
-    data_config: DataConfigOption = Path("config/data.toml"),
-    jvlink_config: JVLinkConfigOption = Path("config/jvlink.toml"),
+    data_config: DataConfigOption = Path("configs/data.toml"),
+    jvlink_config: JVLinkConfigOption = Path("configs/jvlink.toml"),
 ) -> None:
     """Retrieve latest raw data and refresh the complete Parquet snapshot."""
     _retriever(data_config, jvlink_config).retrieve_latest()

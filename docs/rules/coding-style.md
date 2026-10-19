@@ -321,7 +321,10 @@ CLI handling under `src/cli/`. `configuration/` owns shared settings, physical
 I/O belongs to `data/loader/` and `data/saver/`, pure conversion to
 `data/preprocessor/`, and snapshot lifecycle to `data/storage/`. Business modules are
 `jra_van_retriever/`, `make_features/`, `make_datamart/`, `models/`, and shared
-`domain/`; tests remain under `src/tests/`. ADR-025 records these boundaries.
+`domain/`. ADR-025 records these source boundaries. ADR-026 places the three
+root configuration TOMLs under `configs/` and classifies tests under
+`src/tests/unit/` and `src/tests/integration/`. The existing environment smoke test
+remains at `src/tests/test_project_environment.py`. Type checks target all of `src`.
 CLI option types belong to `cli/options.py`, JSON boundary handling to
 `cli/json_io.py`, and all command registration to `main.py`. Do not import
 private functions from sibling CLI modules.

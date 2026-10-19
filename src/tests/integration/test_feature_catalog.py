@@ -31,8 +31,12 @@ from make_features.tables.build import build_feature_table
 from make_features.tables.parquet import read_feature_table, write_feature_table
 from make_features.validation.table import validate_feature_table
 
-CONFIG = Path(__file__).resolve().parents[2] / "config/features.toml"
+CONFIG = Path(__file__).resolve().parents[3] / "configs/features.toml"
+
+
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
+
+
 AVAILABLE_AT = FREEZE_AT - timedelta(hours=1)
 
 
@@ -279,17 +283,6 @@ assert 'make_features.odds_ratio' not in sys.modules
         [sys.executable, "-c", script], capture_output=True, text=True, check=False
     )
     assert result.returncode == 0, result.stderr
-
-
-@pytest.mark.parametrize("command", [[], ["model"], ["model", "explanatory-variables"]])
-def test_help_never_loads_feature_config(command: list[str]) -> None:
-    with patch(
-        "cli.make_features.load_feature_definitions",
-        side_effect=AssertionError("unexpected config read"),
-    ) as loader:
-        result = CliRunner().invoke(app, [*command, "--help"])
-    assert result.exit_code == 0
-    loader.assert_not_called()
 
 
 def test_importing_entry_point_never_reads_feature_config() -> None:
