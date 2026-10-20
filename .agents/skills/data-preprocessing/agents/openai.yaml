@@ -1,0 +1,7 @@
+interface:
+  display_name: "Data Preprocessing"
+  short_description: "Plan and validate approved data transformations"
+  default_prompt: "Use $data-preprocessing to prepare the specified data with approved rules."
+
+policy:
+  allow_implicit_invocation: true

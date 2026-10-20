@@ -12,6 +12,7 @@ This repository provides focused Codex workflows under `.agents/skills/`.
 | `code-review` | Read-only defect-first review of diffs/branches/commits/PRs |
 | `merge-approved` | Guarded squash merge after explicit approval of the exact reviewed HEAD |
 | `data-assessment` | Assess data management against seven DMBOK environmental elements and nine data-quality dimensions |
+| `data-preprocessing` | Preview and apply approved transformations from raw to processed or datamart |
 
 Codex may select a user-facing skill implicitly from its description, or it can
 be invoked explicitly from the Codex IDE/CLI. When `AGENTS.md` requires the
