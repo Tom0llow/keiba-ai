@@ -10,31 +10,39 @@ retrieval boundary through JVLinkToSQLite, versioned Parquet publication, and a
 Parquet-only loader boundary. It remains a non-distributed Python project.
 
 ```text
-config/
-├─ data.toml
-└─ jvlink.toml
+configs/                        # 既存3 TOMLの値・キーを維持
 src/
-├─ main.py
-└─ data/
-   ├─ config.py
-   ├─ data_retriever.py
-   ├─ data_preprocesser.py
-   ├─ data_loader.py
-   ├─ race_key.py
-   ├─ retriever/
-   ├─ preprocesser/
-   │  ├─ read_sqlite.py
-   │  └─ snapshot.py
-   └─ loader/
-      └─ read_parquet.py
+├─ main.py                      # CLI組立・登録・起動
+├─ cli/                         # options/json_ioと機能CLI5ファイル
+├─ configuration/               # TOML物理読込・共通パス・DataPaths
+├─ data/                        # 共通データ基盤
+│  ├─ loader/                   # JSON・Parquet・SQLite物理読込
+│  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
+│  ├─ saver/                    # JSON・Parquet物理保存
+│  └─ storage/                  # snapshot生成・構造・CURRENT・原子的公開
+├─ jra_van_retriever/            # 取得とロック・台帳・復旧
+├─ make_features/               # 特徴量契約・生成・監査・テーブル
+├─ make_datamart/                # 純粋結合・検証・保存契約
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
+├─ domain/                      # 共有RaceKey
+└─ tests/
+   ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
+   ├─ integration/              # 実ファイル・DB・process・機能接続のテスト
+   └─ test_project_environment.py # 既存環境契約の確認
 ```
 
 The project has no build system. `uv sync` installs its locked dependencies
 without installing this repository as a Python distribution.
 
-The active data boundaries are described by ADR-005 through ADR-008. ADR-008
-supersedes the earlier ADR-003 publication boundary and records the split between
-raw SQLite preprocessing and processed Parquet loading.
+データ契約はADR-005〜008、特徴量登録はADR-020に従う。
+[ADR-024](docs/decisions/ADR-024-separate-functional-responsibilities.md)が
+ADR-008とADR-021〜023の配置判断を置き換えた責務分離を継承する。
+[ADR-025](docs/decisions/ADR-025-group-data-and-separate-cli-contracts.md)によりデータ基盤をdataへ集約し、CLI共通契約と登録の依存を整理した。
+全ファイルの最終構成、旧配置の対応表、責務と互換性は
+[PR #21リファクタリング記録](docs/refactoring-pr21.md)と
+[データ基盤・CLI移行記録](docs/refactoring-pr21-data-cli.md)を参照する。
+[ADR-026](docs/decisions/ADR-026-rename-configs-and-classify-tests.md)に従うconfigsへの改名とsrc/tests内の分類、
+全テストの分類・旧新対応は[設定・テスト移行記録](docs/refactoring-pr21-configs-tests.md)に記録する。
 
 ## Data flow
 
@@ -51,10 +59,13 @@ JV-Link
 ```
 
 `race.db` is the mutable raw acquisition store. Model-facing code does not read
-it directly. SQLite reads live under `src/data/preprocesser/`, while
-`src/data/loader/` reads processed Parquet only.
+it directly. SQLiteの読取取引は`src/data/loader/read_sqlite.py`、純粋変換は
+`src/data/preprocessor/sqlite_to_arrow.py`、生成と公開は`src/data/storage/`が所有する。
 
-Storage paths are configured in `config/data.toml`:
+`src/data/loader/read_parquet.py` reads processed Parquet only. The separate
+`read_json.py` reads explicit JSON inputs without feature or model validation.
+
+Storage paths are configured in `configs/data.toml`:
 
 ```toml
 [paths]
@@ -71,7 +82,7 @@ The Python code does not call JV-Link COM directly and does not store the
 JRA-VAN service key.
 
 The user-owned `C:\JVLinkToSQLite\setting.xml` is treated as a seed. Retrieval
-behavior is declared in `config/jvlink.toml`, and Python generates execution XML
+behavior is declared in `configs/jvlink.toml`, and Python generates execution XML
 for historical-basic, historical-odds, latest, and realtime modes.
 
 Important profiles include:
@@ -105,7 +116,7 @@ when the corresponding base-data retrieval is intentionally disabled. A missing
 database still fails before retrieval.
 
 The target race for realtime retrieval can also be configured in
-`config/jvlink.toml`:
+`configs/jvlink.toml`:
 
 ```toml
 [realtime]
@@ -238,8 +249,9 @@ reproducibility until a separate retention policy is introduced.
 
 ## Data loader
 
-`src/data/data_loader.py` is the public loading facade.
-`src/data/loader/read_parquet.py` is the concrete reader.
+`src/data/loader/processed_data_loader.py` is the public loading facade.
+`src/data/loader/read_parquet.py` owns physical Parquet reads.
+`src/data/storage/snapshot_store.py` selects CURRENT versions; readers do not manage versions.
 
 The loader can:
 
@@ -247,10 +259,9 @@ The loader can:
 - iterate large Parquet tables in bounded Arrow record batches;
 - read prediction-time O1/O2 Parquet for a specified `RaceKey`.
 
-There is intentionally no `loader/read_sqlite.py`. Raw `race.db` access belongs
-to preprocessing and is implemented by
-`src/data/preprocesser/read_sqlite.py`. Realtime is also loaded through
-`read_parquet.py` after its race-scoped Parquet version has been published.
+汎用SQLite物理readerは`src/data/loader/read_sqlite.py`に置き、snapshot生成工程が利用する。
+公開DataLoader APIは引き続きprocessed Parquetだけを読み、raw `race.db`を開かない。
+Realtimeもレース別Parquet版を公開してから`read_parquet.py`で読む。
 
 ## Planned racing AI
 
@@ -282,6 +293,11 @@ uv run mypy src
 uv run pytest
 ```
 
+単体テストだけを実行する場合は`uv run pytest src/tests/unit`、結合テストは
+`uv run pytest src/tests/integration`を使う。引数なしのpytestは両方を実行する。
+型検査は`src`全体を対象とし、分類した全テストも含む。環境確認テストは従来の
+`src/tests/test_project_environment.py`に置き、既定実行と`pytest src/tests`の両方で収集する。
+
 Guard trust-boundary validation is run separately by the Quality workflow and can
 also be invoked with:
 
@@ -309,3 +325,86 @@ and execution-tool integration checks.
 
 Repository instructions are in `AGENTS.md`. Current architectural facts are in
 `ARCHITECTURE.md`.
+
+## Feature registration and Python API migration
+
+`configs/features.toml` owns the F01-F21 group IDs, names and declaration order.
+These are stable JSON identifiers, independent of the numeric model allow-list.
+Each `[[features]]` entry contains only `id` and `name`. The catalog must match
+all implemented groups; duplicate IDs/names, malformed entries, unknown names
+and missing implementations are rejected. Changing an ID requires considering
+existing JSON consumers. Importing modules or requesting CLI help never reads it.
+
+```bash
+uv run python src/main.py model explanatory-variables --input inputs.json --output features.json --features-config configs/features.toml
+```
+
+`--features-config` defaults to `configs/features.toml`. Other commands and their
+existing arguments, JSON keys and exit codes retain their contracts.
+
+Python callers load the catalog explicitly once and reuse the same registry:
+
+```python
+from make_features.catalog.loader import load_feature_definitions
+from make_features.catalog.registry import create_feature_registry
+from make_features.explanatory_variables import build_explanatory_variables
+from make_features.jockey_combination import build_jockey_combination
+from make_features.tables.parquet import read_feature_table, write_feature_table
+
+registry = create_feature_registry(load_feature_definitions("configs/features.toml"))
+result = build_explanatory_variables(batch_inputs, registry=registry)
+definition = registry.by_name("jockey_combination").definition
+table = build_jockey_combination(
+    jockey_inputs, definition=definition, column_types=column_types
+)
+write_feature_table(table, "jockey.parquet", registered_names=registry.names)
+restored = read_feature_table("jockey.parquet", registered_names=registry.names)
+```
+
+`batch_inputs`, `jockey_inputs`, and `column_types` above are caller-provided
+validated inputs and explicit Arrow scalar types. Registration does not approve
+new calculation rules or add columns to model training.
+
+The `make_features` package no longer re-exports implementations. Import individual
+build APIs from their feature modules, `FeatureTableRow` from
+`make_features.contracts.rows`, input/result types from `make_features.contracts.types`,
+table construction from `make_features.tables.build`, table validation from
+`make_features.validation.table`, and persistence from `make_features.tables.parquet`.
+The original previous-race result, odds ratio and pedigree build APIs keep their
+arguments and metadata and receive no F identifiers. Other individual build APIs
+now require `definition`; batch generation/audit require `registry`. Table and
+datamart APIs require `registered_names=registry.names` for those groups and
+retain fixed validation for the original three when omitted.
+
+Import `DataRetriever` from `jra_van_retriever.retriever`, `DataPreprocesser` from
+`data.storage.snapshot_builder`, `DataLoader` from `data.loader.processed_data_loader`,
+`DataPaths` from `configuration.data_paths`, and `RaceKey` from `domain.race_key`.
+Raw race-key rows are converted by `jra_van_retriever.parsing.race_key.race_key_from_row`.
+Import pure datamart joins from `make_datamart.builder`, file-based construction and persistence from
+`make_datamart.tables.parquet`, and validation from
+`make_datamart.validation.table`. All five existing public names remain available from `make_datamart`;
+file-based names previously imported from `make_datamart.builder` move to `make_datamart.tables.parquet`. The former
+the earlier combined data modules, `features/common/`, `features/make_features.py` and module `SPEC`
+constants are removed. The current `src/data/` groups the already separated data responsibilities. Acquired data and existing Parquet artifacts remain in
+their original locations and formats. `docs/GUARDED_WORKFLOW_REPAIR.md` remains
+available because removing its guarded workflow references requires a separate
+manual authorization.
+
+## Datamart CLI
+
+既存の中間Parquetを指定順に左結合し、検証済みDatamartを保存する。
+
+```powershell
+uv run python src/main.py datamart build --input previous.parquet --input odds.parquet --output datamart.parquet --features-config configs/features.toml
+```
+
+`--input`は結合順に繰り返す。`--features-config`は既定で`configs/features.toml`を使用し、
+宣言された特徴量名を読込・結合・保存の検証へ渡す。元の3特徴量は従来の固定スキーマも使用できる。
+F01〜F21と独自IDの登録では、既存APIと同じ列・metadata・時点検証を維持する。
+`--output`がいずれかの`--input`と同じファイルを指す場合は、相対パス表記やリンクが異なっても拒否する。
+入力や結合の失敗は標準エラーへ表示して終了コード1とし、保存処理へ進まない。
+成功時は`datamart saved: N rows`を標準出力へ表示する。
+
+共通設定の物理読込は`configuration.loader.load_toml`、パス解決は
+`configuration.path_resolver.resolve_path`が所有する。機能設定がこの基盤へ依存し、
+基盤から取得・特徴量・モデルへの依存はない。モデル設定の外部化は今回導入しない。

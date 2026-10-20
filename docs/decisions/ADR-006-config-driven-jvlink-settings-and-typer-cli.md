@@ -1,7 +1,8 @@
 # ADR-006: Configure JVLink retrieval profiles and expose a Typer CLI
 
-- Status: Accepted
+- Status: Superseded by ADR-026（ルート設定ファイルの配置のみ。設定所有・取得契約はAccepted）
 - Date: 2026-10-04
+- Superseded by: ADR-026（設定配置のみ）
 
 ## Context
 

@@ -91,333 +91,190 @@ metadata edits invalidate readiness and require renewed review. Reinstallation
 rejects active task state and Store/MSIX PowerShell hosts. Runtime shell startup
 and literal argv integration remain separate manual installation checks.
 
-## Current code boundary
+## 現行の機能境界
 
 ```text
-config/
-├─ data.toml
-└─ jvlink.toml
-
+configs/                        # 既存3 TOMLの値・キーを維持
 src/
-├─ main.py
-├─ data/
-│  ├─ config.py
-│  ├─ data_retriever.py
-│  ├─ data_preprocesser.py
-│  ├─ data_loader.py
-│  ├─ race_key.py
-│  ├─ retriever/
-│  │  ├─ historical.py
-│  │  ├─ jvlinktosqlite.py
-│  │  ├─ latest.py
-│  │  ├─ odds_archive.py
-│  │  ├─ acquisition_lock.py
-│  │  ├─ progress.py
-│  │  ├─ realtime.py
-│  │  ├─ setting.py
-│  │  └─ weekly.py
-│  ├─ preprocesser/
-│  │  ├─ __init__.py
-│  │  ├─ read_sqlite.py
-│  │  └─ snapshot.py
-│  └─ loader/
-│     ├─ __init__.py
-│     ├─ read_json.py
-│     └─ read_parquet.py
+├─ main.py                      # CLI組立・登録・起動
+├─ cli/                         # options/json_ioと機能CLI5ファイル
+├─ configuration/               # TOML物理読込・共通パス・DataPaths
+├─ data/                        # 共通データ基盤
+│  ├─ loader/                   # JSON・Parquet・SQLite物理読込
+│  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
+│  ├─ saver/                    # JSON・Parquet物理保存
+│  └─ storage/                  # snapshot生成・構造・CURRENT・原子的公開
+├─ jra_van_retriever/            # 取得とロック・台帳・復旧
+├─ make_features/               # 特徴量契約・生成・監査・テーブル
+├─ make_datamart/                # 純粋結合・検証・保存契約
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
+├─ domain/                      # 共有RaceKey
 └─ tests/
-   └─ ...
+   ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
+   ├─ integration/              # 実ファイル・DB・process・機能接続のテスト
+   └─ test_project_environment.py # 既存環境契約の確認
 ```
 
-The user-facing data dependency direction is intentionally one-way:
+全ソースファイルの責務と移行対応、最終全ファイルツリーは
+[PR #21リファクタリング記録](docs/refactoring-pr21.md)に記録する。
+ADR-024はADR-008とADR-021〜023の配置判断を置換し、既存の計算・保存形式・CLIを維持する。
+旧settings/utils/retriever/preprocesser/featuresパッケージは廃止した。
+ADR-025がADR-024のデータ基盤とCLI共通処理・登録の配置判断を部分置換する。
+data内の4責務と既存保存契約は継承し、configurationは独立したまま維持する。
+ADR-026がルート設定のフォルダー名をconfigsへ変更し、src/tests内を分類する。
+3 TOMLは内容と相対値を維持し、src/tests/unitとsrc/tests/integrationを既存のpytest・mypyで検査する。
+環境確認テストは既存のsrc/tests/test_project_environment.pyに置く。
+全件の分類と対応は[設定・テスト移行記録](docs/refactoring-pr21-configs-tests.md)に記録する。
 
-```text
-JV-Link
-  -> JVLinkToSQLite
-  -> data/raw/race.db
-  -> DataPreprocesser / preprocesser/*
-  -> versioned Parquet
-  -> DataLoader / loader/read_parquet.py
-  -> training / analysis / prediction
-```
+## 設定管理
 
-The raw SQLite database is an acquisition store and is never a model-facing
-loader source. Training and realtime inference both consume processed Parquet.
-This boundary is recorded in ADR-008.
+`configs/data.toml`、`jvlink.toml`、`features.toml`のキー・値・相対パス値は変更しない。
+`configuration/loader.py`だけがTOMLを物理読込し、ファイルと解析エラーをそのまま返す。
+`path_resolver.py`は非空の文字列、ホーム展開、設定ファイルの親からの相対パス、絶対パスを扱う。
+`data_paths.py`は共有のraw SQLite、processed、JVLink runtimeの必須パスを検証してDataPathsを作る。
 
-## Retrieval boundary
+`jra_van_retriever/config/profiles.py`はJVLinkConfig/JVLinkProfile/HistoricalOddsBatchと
+TOMLからの変換、`validation.py`は取得固有の値と期間・DataSpec・モードの検証を所有する。
+XML生成は`acquisition/setting_xml.py`が型付きprofileから行い、TOMLを読まない。
+`make_features/catalog/loader.py`は共通TOML読込を使い、ID・名前・重複・順序を検証する。
+独自の非空IDを受け付ける既存契約も維持し、F01〜F21限定の新制約は導入しない。
+実装と定義の対応はcatalog/registry.pyが所有する。
 
-`src/main.py` is the user-facing Typer entry point for historical-basic,
-historical-odds, latest, and
-prediction-time realtime retrieval, standalone preprocessing, and the model
-commands `model audit`, `model features`, `model explanatory-variables`, and
-`model walk-forward`. `src/features/make_features.py` registers and executes
-the feature audit/generation commands; `main.py` retains retrieval,
-preprocessing, and walk-forward orchestration. XML
-transformation, feature validation, and model evaluation remain below the CLI
-boundary.
+依存は`機能の設定 → configuration → 標準ライブラリ`の一方向である。
+configurationは業務機能へ依存しない。暗黙の設定読込、singleton、model設定の新設はない。
 
-`src/data/data_retriever.py` composes `HistoricalRetriever`, `LatestRetriever`,
-and `RealtimeRetriever` around one `JVLinkToSQLiteRunner`, one
-`JVLinkSettingBuilder`, and one `OddsArchive`.
-`src/data/retriever/jvlinktosqlite.py` owns the local subprocess boundary to
-`JVLinkToSQLite.exe`, passes arguments without a shell, and does not own JRA-VAN
-credentials or parse JV-Data directly. This external process boundary is
-recorded in ADR-005.
+## データI/O・変換・スナップショット
 
-`src/data/retriever/setting.py` validates `config/jvlink.toml` and translates
-semantic retrieval profiles into JVLinkToSQLite XML. The installed `setting.xml`
-is treated as a seed and is not modified by keiba-ai. Normal, setup, and realtime
-section enablement plus DataSpec allow-lists are applied explicitly; configured
-DataSpecs missing from the seed fail at this boundary.
+データ経路は`JVLinkToSQLite → raw SQLite → SnapshotBuilder → versioned Parquet → DataLoader`。
+モデルはraw SQLiteを直接読まない。これはADR-008の保存契約を維持する。
 
-`historical.py` generates base and per-race odds settings in a temporary
-directory. It omits base execution when all historical update sections are
-disabled and then requires an existing raw database. After the base database
-exists, it snapshots JRA-compatible race keys
-from `NL_RA_RACE` and closes that SQLite reader before JVLinkToSQLite begins
-realtime odds writes. Non-JRA race records remain in the base database but are
-not sent to the JRA-specific historical-odds DataSpecs. The historical-odds
-profile then generates an exclusive realtime setting for each eligible race.
-The `historical_odds.skip_existing` flag must be true for the historical-odds
-workflow. The retriever snapshots distinct complete race keys from each
-configured O1/O2 archive table once, closes the read-only connection, and removes already-present
-DataSpecs from each race's request. Fully archived races are omitted; missing
-tables and unrecognized DataSpecs remain eligible for retrieval. Presence is a
-resume criterion, not a guarantee of a complete odds time series. Realtime
-prediction retrieval continues to request its configured history/current specs.
-Because JVLinkToSQLite recreates realtime O1/O2 staging tables on subsequent
-realtime executions, each race's result is archived before the next race is
-requested. The `historical-basic` CLI uses only the base profile and publishes
-one complete Parquet snapshot after that base retrieval; it does not run the
-per-race odds loop.
-
-`historical-odds` is the manual, year-scoped batch boundary for long-running
-historical odds acquisition. It uses a runtime SQLite progress ledger keyed by
-complete `RaceKey` plus DataSpec, records observed archive rows as `acquired`
-and leaves initial archive gaps as `pending`,
-then processes only the oldest unfinished year up to a
-past-date cutoff. The generated execution TOML and JSON report are derived
-runtime artifacts; `config/jvlink.toml` remains the fixed policy source. The
-PowerShell entry point starts one process and does not register Task Scheduler
-jobs or inspect the weekday. Within that process, the CLI retrieves one year,
-retains raw progress, and continues with the next year. It publishes one
-complete Parquet snapshot only after every managed year is raw-complete; a
-retrieval or publication failure leaves the raw database and ledger available
-for the next manual run. It stops when the operator interrupts it, a retrieval
-or publication fails, or no target years remain. A successful
-JVLink/JVRTOpen request that leaves a valid empty realtime staging table is
-recorded as `provider_missing/jvopen_no_data` only when the captured API result
-is the documented `-1` no-data result; the current run continues with the next
-RaceKey. If the API result is unavailable, the row remains
-`failed/empty_response_unverified` and is eligible for explicit confirmation.
-Missing tables, invalid staging schemas, execution failures, save failures, and
-other JV-Link error results remain `failed` and stop the run.
-The process exit code remains in `returncode`; the API name and return code are
-stored separately in `api_name` and `api_returncode`, with the columns added
-automatically when an older v1 ledger is first updated. An older
-`provider_missing/jvopen_no_data` row without API evidence is migrated to
-`provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data`
-rows require the captured `JVOpen`/`JVRTOpen = -1` result.
-Historical-basic, historical-odds, latest, and realtime writes share the raw DB OS lock and
-reject unresolved historical-odds requests. The API return-code mapping is defined by
-the [JRA-VAN JV-Link API error-code list](https://developer.jra-van.jp/t/topic/822).
-After an operator verifies a provider-side gap with JV-Link, the historical-odds CLI can
-still explicitly promote the exact legacy failed RaceKey/DataSpec from
-`empty_response_unverified` to `provider_missing` without starting JV-Link.
-
-`latest.py` uses a persistent runtime XML under the configured Git-ignored data
-runtime directory. The first run creates it from the seed. Later runs use the
-runtime XML as their source, reapply the latest profile, and allow
-JVLinkToSQLite to persist updated latest-read positions into that runtime file.
-The seed remains unchanged. This configuration ownership and the Typer entry
-point are recorded in ADR-006.
-
-`realtime.py` owns prediction-time retrieval for one explicit `RaceKey`. It first
-runs the `realtime_history` profile (`0B41`, `0B42`) and archives the O1/O2
-staging rows, then runs `realtime_current` (`0B31`, `0B32`) and archives the
-current rows. Both settings are temporary and execute with
-`--skipslastmodifiedupdate`; prediction-time retrieval therefore does not share
-mutable latest-read state.
-
-`odds_archive.py` treats `RT_O1_ODDS_TANFUKUWAKU` and `RT_O2_ODDS_UMAREN` as
-staging tables and copies them into cumulative
-`ARCHIVE_O1_ODDS_TANFUKUWAKU` and `ARCHIVE_O2_ODDS_UMAREN` tables. Archive
-tables preserve source column names/order and use full-row set deduplication.
-This gives historical training and production inference one raw O1/O2 column
-contract. The staging/archive boundary is recorded in ADR-007.
-
-## Preprocessing boundary
-
-`src/data/data_preprocesser.py` is the public raw-to-processed orchestration
-facade. `src/data/preprocesser/read_sqlite.py` exclusively owns read-only access
-to `race.db`; it opens a consistent SQLite snapshot, streams bounded batches,
-preserves source column names/order/text/NULLs, writes Parquet, and validates the
-resulting schema and row count.
-
-`src/data/preprocesser/snapshot.py` owns publication. Complete historical/latest
-processed datasets are immutable directories under:
-
-```text
-data/processed/snapshots/<snapshot-id>/
-```
-
-A complete snapshot becomes visible only when `data/processed/CURRENT` is
-atomically replaced with that snapshot ID. A failed rebuild leaves the previous
-pointer unchanged.
-
-Prediction-time realtime data is published separately by exact `RaceKey`:
-
-```text
-data/processed/realtime/<race-id>/
-├─ CURRENT
-└─ versions/
-   └─ <version-id>/
-      ├─ ARCHIVE_O1_ODDS_TANFUKUWAKU.parquet
-      └─ ARCHIVE_O2_ODDS_UMAREN.parquet
-```
-
-The realtime publisher filters the cumulative archive tables by year, month/day,
-venue, meeting, meeting day, and race number. It writes both O1/O2 files to a
-new version and atomically switches the race-local `CURRENT` pointer only after
-both files validate. Realtime preprocessing therefore stays race-scoped rather
-than rebuilding the complete historical dataset for each prediction refresh.
-
-Historical-basic retrieval automatically calls a complete `rebuild` after base
-data retrieval. Historical-odds retrieval defers that complete `rebuild` until
-all raw odds years are complete and then calls it once. Latest retrieval
-automatically calls a complete `update` (currently implemented as a complete
-snapshot refresh). Realtime retrieval automatically calls `update_race` for the
-target race. A standalone `preprocess rebuild` command is also available when
-raw data already exists.
-
-ADR-008 supersedes ADR-003 for this preprocessing/publication contract.
-
-## Loader boundary
-
-`src/data/data_loader.py` is the public processed-data facade.
-`src/data/loader/read_parquet.py` is the concrete Parquet reader. Loader modules
-never open raw SQLite.
-
-The loader can:
-
-- list and read tables from the complete snapshot selected by
-  `data/processed/CURRENT`;
-- iterate large complete tables in bounded Arrow record batches;
-- read race-scoped realtime O1/O2 tables from the race-local `CURRENT` version.
-
-This means model code has one storage contract—Parquet—regardless of whether the
-source data arrived through historical, latest, or realtime retrieval.
-
-`src/data/loader/read_json.py` separately reads explicit UTF-8 JSON object
-inputs for CLI workflows. It preserves decoded values and does not depend on
-Typer, feature contracts, or the Parquet `DataLoader` facade. Feature input
-conversion, structured CLI errors, and JSON output remain in
-`src/features/make_features.py`. ADR-019 records this placement; no `src/run`
-package is introduced.
-
-## Configuration and persisted state
-
-`config/data.toml` owns the raw SQLite path, processed directory, and JVLink
-runtime directory. `config/jvlink.toml` owns the local executable/seed paths,
-semantic retrieval profiles, and the optional target race for realtime retrieval;
-XML tag details remain inside the adapter.
-
-`data/` is Git-ignored. Mutable raw SQLite, JVLink runtime XML, complete Parquet
-snapshots, and realtime Parquet versions are local artifacts rather than Git
-contents. Git versions the code and declarative retrieval/preprocessing policy,
-not the acquired datasets.
-
-The historical-odds progress ledger, derived execution TOML, reports, and recovery
-artifacts live under the configured JVLink runtime directory and are not model
-inputs. The ledger is the source of truth for historical-odds state; generated artifacts
-are atomically regenerated from it after a raw archive commit.
-
-ADR-009 selects LightGBM LambdaRank for the ranking MVP and a later top-3
-Plackett–Luce custom objective for finishing-order probabilities. The current
-MVP implementation lives under `src/models/`: it accepts an explicit ordered
-feature schema, trains `LGBMRanker(objective="lambdarank")`, and returns finite
-race-local scores and ranks. It does not produce probabilities, expected value,
-or purchase recommendations. LightGBM and its scikit-learn runtime dependency
-are locked project dependencies.
-
-Model artifacts use the LightGBM native format plus JSON metadata containing the
-fixed objective, label gain, feature schema, and hashes. A readiness marker is
-published only after the native model and metadata are complete. Model code
-does not read raw SQLite or initiate data acquisition; it receives processed
-feature rows from its caller. ADR-010 records this model boundary and artifact
-contract. Missing feature values, including unavailable odds history, remain
-missing and are passed through without final-odds fallback or imputation. Equal
-scores are ordered by horse ID, independently of input row order.
-`src/models/dataset_builder.py` validates explicit numeric model inputs and their
-timezone-aware availability against `freeze_at`, projects the approved schema,
-and builds `RankingDataset`. It does not own intermediate table schemas.
-
-Every feature-specific module under `src/features/` owns its input type,
-builder, build function, and normalization. The previous-race result, odds
-ratio, pedigree, and F01-F21 modules share `FeatureBuilder` and the sole middle-row
-type `FeatureTableRow`. F01-F21 builders consume explicitly computed values and
-source evidence; no unapproved business formulas are introduced. The thin
-`explanatory_variables.py` facade combines their individual row-generation APIs.
-F01-F21 identifiers are `feature_id`, not candidate identifiers, and remain
-independent of numeric model adoption.
-
-Shared feature responsibilities are located under `src/features/common/`:
-
-| Module | Responsibility |
+| 所有者 | 責務 |
 | --- | --- |
-| `base.py` | Common row-generation and table-building procedure, with a batch hook for feature-owned calculations. |
-| `rows.py` | The sole intermediate row contract, `FeatureTableRow`. |
-| `types.py` | Explicit source-input types and structured audit/build results, not another middle-row type. |
-| `availability.py` | UTC timestamp parsing and `freeze_at` / `available_at` / `source_event_at` limits. |
-| `leakage.py` | Target-result, future-data, result-column, and historical-source checks. |
-| `validation.py` | Scalar values, missingness, confirmation status, and group-level audit composition. |
-| `audit.py` | Row keys, race shape, freeze-time consistency, and batch audits. |
-| `normalization.py` | Audited explicit inputs to common middle rows without imputation. |
-| `registry.py` | F01-F21 specification, input-type, and individual-builder registration. |
-| `feature_table.py` | Arrow schemas, table validation, and explicit Parquet persistence. |
+| data/loader/read_sqlite.py | read-only接続と単一取引、表・列の列挙、rowid順のバッチ読込。Arrowと保存を扱わない。 |
+| data/preprocessor/sqlite_to_arrow.py | TEXT/DATETIME宣言をnullable stringへ変換し、NULL・先頭ゼロ・列順を保持。I/Oを持たない。 |
+| data/saver/write_parquet.py | 明示Arrow schema/table/batchの物理保存。空表もschemaを保存する。 |
+| data/loader/read_parquet.py | 明示Parquetパスのtable/metadata/RecordBatchの物理読込。CURRENTを扱わない。 |
+| data/storage/snapshot_builder.py | 読込・変換・保存・保存結果照合・完成版公開を統括。DataPreprocesserのAPI名も維持する。 |
+| data/storage/snapshot_store.py | complete/race別保存構造、versionパス、CURRENT解決、表パスの所有。 |
+| data/storage/snapshot_publisher.py | stagingの完成版rename後、os.replaceでCURRENTを原子的に更新する。 |
+| data/loader/processed_data_loader.py | DataLoader公開API。Storageから選択パスを取得し、物理readerへ渡す。 |
+| data/loader/read_json.py / data/saver/write_json.py | UTF-8 JSON object読込と、NaNをnullへ変換する汎用JSON保存。 |
 
-The three original value-column schemas and saved metadata are unchanged.
-F01-F21 tables require caller-declared scalar column types; ordered type metadata
-is validated when saved and reloaded. `src/make_datamart/` reads the same common
-tables and performs an ordered, validated left join while retaining each
-feature's availability timestamp. It does not generate feature values. Mixed
-tables carry explicit type metadata; existing three-feature datamarts retain
-their original metadata and remain readable. ADR-019 records these boundaries
-and the candidate API/CLI migration, extending the table contract of ADR-012.
+完全snapshotの全表を一つのSQLite読取取引内で処理する。バッチは最大65,536行、
+目安1,000,000セルを列数で割った従来の上限を維持する。保存後のrow countとschemaを照合する。
+列がrowidを隠す場合は_rowid_/oidへ順にフォールバックし、利用不能なら失敗する。
 
-`src/models/walk_forward.py`
-performs expanding race-level train/validation/test splits. The model CLI uses
-JSON input at this boundary through `features/make_features.py` and the
-independent JSON reader, and does not start data retrieval implicitly. These
-modules do not yet interpret raw JRA-VAN business codes or build historical
-aggregates; those transformations remain a separate feature-source
-implementation.
-JRA-VAN acquisition uses the locally installed JVLinkToSQLite/JV-Link environment
-on Windows; no HTTP API key or repository credential is introduced.
+完全版は`data/processed/snapshots/<id>/`、ポインタは`data/processed/CURRENT`。
+レース別は`data/processed/realtime/<race-id>/versions/<id>/`と同階層のCURRENTを使用する。
+対象RaceKeyのO1/O2 archiveをフィルタし、両方の生成・検証成功後にだけ切り替える。
+変換や公開の失敗では旧CURRENTを維持する。公開されなかった完成版の保持も従来通りである。
+DataLoader.iter_batchesは最初の反復までパスを解決せず、batch_sizeを先に検証する。
 
-## Architectural constraints during bootstrap
+Reader/Converter/WriterはStorage生成処理へ依存しない。DataLoaderだけが読込APIの組立として
+SnapshotStoreへ依存する。各packageの__init__は下位から上位への暗黙依存を作らない。
 
-- Keep imports free of runtime side effects.
-- Keep tests under `src/tests/`.
-- Do not introduce speculative plugin systems or service boundaries.
-- Keep external I/O, process execution, time, and randomness explicit and
-  testable.
-- Do not add a runtime dependency before confirming that the standard library
-  and current dependencies are insufficient.
-- Treat external input as untrusted and never commit secrets.
+## 取得・進捗・復旧
 
-## Evolving the architecture
+`jra_van_retriever/retriever.py`のJraVanRetrieverはhistorical-basic/historical-odds/latest/realtimeを
+構成する。既存のDataRetriever名も同じクラスを指す。workflowsはモードごとの処理順序を所有する。
+acquisitionはshellを使わないJVLinkToSQLite subprocess、raw DBのOSロック、O1/O2 archiveとXML生成を所有する。
+credentialsをリポジトリへ読み込まず、ローカルのJV-Link環境を利用する。
 
-For each product requirement:
+historical-basicはbase profileだけを取得して完全版を公開する。
+workflows/historical_basic.pyはbase専用とし、旧の非週次オッズ取得・skip-existingは
+historical_odds_legacy.pyへ分離した。既存HistoricalRetrieverとretrieve_historicalの統合入口だけを
+retriever.pyへ残し、元と同じ一時ディレクトリ内のbase→DB存在確認→odds順序を維持する。
+latestは初回にseedからruntime XMLを作り、以降はruntime XMLを再利用し、seedを変更しない。
+realtimeはhistoryの0B41/0B42を取得・archive後にcurrentの0B31/0B32を取得・archiveし、
+一時XMLとskip-last-modified-updateを使用する。archiveは原列・順序を維持し、全行による重複排除を行う。
 
-1. inspect the current code, tests, and Accepted ADRs;
-2. identify the smallest coherent architecture needed for that requirement;
-3. record a durable or difficult-to-reverse decision in an ADR before relying on
-   it broadly;
-4. implement and test the requirement without speculative adjacent features;
-5. update this document to describe the resulting current system.
+週次historical-oddsは次の所有者をCompositionで利用する。
 
-An ADR is normally appropriate for decisions that establish or materially
-change a public interface, dependency direction, persisted format, configuration
-ownership, external-system boundary, security boundary, or long-lived runtime
-dependency. Accepted ADRs take precedence over assumptions in this document.
+| モジュール | 責務 |
+| --- | --- |
+| workflows/historical_odds.py | 共通ロックと年単位batchの順序・metrics・外部API互換委譲。 |
+| historical_odds_plan.py | committed台帳の参照、純粋な年・レース選択、書込を行わない計画。 |
+| historical_odds_request.py | request intent確定、XML/実行/archive、結果分類、要求結果確定。 |
+| historical_odds_recovery.py | runner停止確認、staging隔離証拠の記録後のreset。 |
+| historical_odds_publication.py | 同じロック内で完全性を再照合し、callback後に公開状態と派生報告を更新。 |
+| progress/ledger.py | 台帳取引、旧版移行、所有権、取得証拠とAPI return codeの永続化。 |
+| progress/state.py | 値型と純粋な突合。 |
+| progress/raw_observation.py | raw観測と接続を閉じた結果。 |
+| progress/output.py | 台帳確定後の派生JSON/TOML。取得・復旧の判断元にはしない。 |
+| contracts/odds.py / parsing/race_key.py | オッズ表・キー列の契約と、raw行から共有RaceKeyへの純粋変換。 |
+
+ロックbind → 必要時runner停止確認 → raw観測 → 旧台帳移行 → staging隔離証拠記録 → reset →
+復旧確定 → 再観測 → bootstrap/reconcile → 要求開始確定 → 実行/archive →
+失敗隔離/成功reset → 要求結果確定 → run確定 → 派生報告の順序を維持する。
+未解決要求は全取得モードでfail-closedとし、復旧なしの書込を拒否する。
+
+台帳は完全RaceKeyとDataSpecをキーとし、初期archive欠損をpendingとする。
+captured JVOpen/JVRTOpen=-1だけを自動provider_missingとし、証拠なし空応答はfailedで停止する。
+旧状態移行、API名/コード列追加、明示確認も従来通り。raw完了年を順に取得し、全管理年の完了後に
+一度の完全Parquet公開を行う。callback失敗ではfailedを確定し、raw/台帳を次回へ残す。
+
+## 特徴量とDatamart
+
+make_featuresの個別モジュールは入力型、計算、固有検証・正規化を所有する。
+既存のFeatureBuilder/RegisteredFeatureBuilder、共通FeatureTableRow、F01〜F21の計算と監査順序を維持する。
+catalogは定義と登録、contractsは型、generationは共通手順、serializationは純粋JSON変換、
+validationは漏洩・時点・値・表の監査、tablesはArrow構築と保存metadataの契約を所有する。
+未承認の業務式、JRA-VANコード解釈、履歴集計を追加しない。
+
+元のprevious_race_result/odds_ratio/pedigreeの固定列・metadataを維持する。
+その他の表は明示registered_namesとscalar column_types、保存metadataの整合性を要求する。
+データの物理Parquet読書きは共通reader/writerに委譲し、各機能が保存前・読込後の検証を続ける。
+
+make_datamart/builder.pyは入力tableの純粋な順序付き左結合だけを実装する。
+先頭表のキーと順序、欠損、feature別available_at、freeze_at、重複と列衝突の規則は変えない。
+tables/schema.pyが列・metadata、validation/table.pyが表固有検証、tables/parquet.pyが
+ファイルからの構築APIと保存・読込契約を所有する。packageの5公開名は維持する。
+旧builderのファイルAPIはtables/parquetへ移し、循環importや互換Facadeを残さない。
+
+## モデル
+
+modelsのpackage公開名、学習値・既定値、score/rankだけを返す推論、保存形式を維持する。
+
+| 所有者 | 責務 |
+| --- | --- |
+| dataset/rows.py | 数値値型、FeatureInput、FeatureRow、RankingRow。 |
+| dataset/schema.py | FeatureSpec/FeatureSchemaと承認済みallow-list、結果由来名の拒否、metadata。 |
+| dataset/validation.py | 値・ラベル・行キー・連続race・groupの検証と行の正規化。 |
+| dataset/dataset.py | 検証済みRankingDatasetの不変条件、from_rowsと行列API。 |
+| dataset/availability.py | freeze/available時刻、timezone、欠損保持の監査と違反型。 |
+| dataset/builder.py | 明示入力の投影、行生成、学習dataset構築。 |
+| ranking/ranker.py / rules.py | 有限scoreとrace内順位、同点規則と固定学習契約。 |
+| training/train.py | 検証済みdatasetからのLambdaRank学習。 |
+| backends/lightgbm.py | LightGBMの遅延import、native接続、学習adapter。 |
+| evaluation/metrics.py / walk_forward.py | NDCG@3・Top1・Top3、race単位の時系列分割と評価。 |
+| artifacts/native_model.py | native model/JSON metadataの保存・検証・原子的公開・復旧。 |
+| serialization/inputs.py / outputs.py | model専用の純粋JSON契約変換。 |
+
+ラベルは1着3/2着2/3着1/他0、gainは0/1/3/7、groupはrace内行数とする。
+allow-listはability/historical_oddsで、欠損値やNaNを保持し、最終オッズで補完しない。
+RankingModel.save/loadは利用中のAPIとしてNativeModelArtifactへ委譲し、成果物処理を複製しない。
+既存models/predict_model.pyは元からある互換入口として新rankerの2名を再公開する。
+feature/model serializationはI/O・Typerへ依存せず、モデル設定の外部化は導入しない。
+
+## CLI
+
+main.pyはTyperの組立・登録・起動だけを行う。cli/options.pyとcli/json_io.pyは共通option、JSON境界、構造化エラー、
+各機能CLIは対応機能の引数検証、実行、表示と終了を所有する。下位機能はCLIやTyperをimportしない。
+importとhelpは設定や入力を読まず、取得資源を作らない。
+
+既存の取得flags、preprocess/modelコマンド、引数・文言・stdout/stderr・終了コードを維持する。
+main.register_feature_commandsは既存の公開登録APIとしてmainで実装する。
+cli/options.pyがDataConfigOption/JVLinkConfigOption、cli/json_io.pyが公開のread_json_object/
+parse_json_inputs/input_error_payload/exit_input_errorを所有する。CLI固有スキーマは各機能に残す。
+取得・前処理CLIはSnapshotBuilder.from_tomlを直接呼び、他CLIのprivate factoryを参照しない。
+機能CLIはjra_van_retriever.py/preprocessor.py/make_features.py/make_datamart.py/models.pyとし、
+機能同士を登録のためにimportしない。Typer登録は全てmainが所有する。
+新規datamart buildはrepeatable --input、--output、既定configs/features.tomlの--features-configを受け、
+定義名のみを読み、既存のファイル構築・保存APIへ渡す。失敗はstderr/終了1、成功は行数をstdoutへ出す。
+CLIは出力先がいずれかの入力と同じファイルを指す場合、相対パス表記やリンクが異なっても保存前に拒否する。
+
+## 進化時の制約
+
+import時のI/O、循環依存、不要なFacade、将来用の空設定・依存は追加しない。
+公開API・保存形式・セキュリティ境界の変更は影響を整理し、長期判断をADRに残す。
+実装されていない履歴集計・nested選定・train/predict CLI・購入判断を現行機能としない。

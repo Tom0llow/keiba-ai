@@ -1,0 +1,403 @@
+"""Focused tests for the LambdaRank ranking MVP."""
+
+from __future__ import annotations
+
+from collections.abc import Callable, Mapping, Sequence
+from math import isclose, isfinite, isnan
+from types import ModuleType
+from typing import cast
+
+import pytest
+
+import models.backends.lightgbm as lightgbm_backend_module
+from models.dataset.dataset import RankingDataset
+from models.dataset.rows import FeatureRow, RankingRow
+from models.dataset.schema import FeatureSchema
+from models.evaluation.metrics import evaluate_ranking, ndcg_at_3, top1_accuracy, top3_overlap
+from models.predict_model import RankingModel
+from models.ranking.rules import TIE_BREAK_RULE
+from models.training.train import train_lambdarank
+
+
+def _training_rows() -> list[RankingRow]:
+    return [
+        RankingRow("race-1", "horse-1", {"ability": 4.0, "historical_odds": None}, 1),
+        RankingRow("race-1", "horse-2", {"ability": 3.0, "historical_odds": 2.0}, 2),
+        RankingRow("race-1", "horse-3", {"ability": 2.0, "historical_odds": 4.0}, 3),
+        RankingRow("race-1", "horse-4", {"ability": 1.0, "historical_odds": 8.0}, 4),
+        RankingRow("race-2", "horse-5", {"ability": 4.5, "historical_odds": float("nan")}, 1),
+        RankingRow("race-2", "horse-6", {"ability": 3.5, "historical_odds": 2.5}, 2),
+        RankingRow("race-2", "horse-7", {"ability": 2.5, "historical_odds": 5.0}, 3),
+        RankingRow("race-2", "horse-8", {"ability": 1.5}, 4),
+    ]
+
+
+def _schema(feature_names: Sequence[str], schema_id: str = "test-v1") -> FeatureSchema:
+    return FeatureSchema.from_names(feature_names, schema_id=schema_id)
+
+
+def test_dataset_maps_labels_and_validates_race_groups() -> None:
+    dataset = RankingDataset.from_rows(
+        _training_rows(),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
+    )
+
+    assert dataset.labels == (3, 2, 1, 0, 3, 2, 1, 0)
+    assert dataset.groups == (4, 4)
+    assert dataset.feature_matrix()[0] == [4.0, None]
+    missing_odds = dataset.feature_matrix()[4][1]
+    assert isinstance(missing_odds, float)
+    assert isnan(missing_odds)
+    assert dataset.feature_matrix()[7] == [1.5, None]
+
+    with pytest.raises(ValueError, match=r"sum\(groups\)"):
+        RankingDataset.validate_groups((4, 3), 8)
+    with pytest.raises(ValueError, match="at least 3"):
+        RankingDataset.validate_groups((2,), 2)
+
+
+def test_dataset_requires_explicit_schema_and_does_not_select_renamed_results() -> None:
+    from_rows_without_schema = cast(Callable[..., object], RankingDataset.from_rows)
+    with pytest.raises(TypeError):
+        from_rows_without_schema(_training_rows())
+
+    renamed_result = [
+        RankingRow(
+            "race-1",
+            f"horse-{position}",
+            {"ability": float(position), "result_rank": position},
+            position,
+        )
+        for position in range(1, 4)
+    ]
+    with pytest.raises(ValueError, match=r"reserved|outside the schema"):
+        RankingDataset.from_rows(
+            renamed_result,
+            feature_names=("ability",),
+            feature_schema=_schema(("ability",)),
+        )
+
+
+@pytest.mark.parametrize(
+    "reserved_name",
+    [
+        "finish_position",
+        "KakuteiJyuni",
+        "Kakutei_Jyuni",
+        "Time",
+        "TimeDiff",
+        "Odds",
+        "odds",
+        "Ninki",
+        "final_odds",
+        "winner_speed",
+        "last_odds",
+        "result_time",
+        "outcome",
+        "target",
+        "win_flag",
+        "popularity",
+        "payouts",
+    ],
+)
+def test_dataset_rejects_result_derived_feature_names(reserved_name: str) -> None:
+    rows = [
+        RankingRow("race-1", f"horse-{position}", {reserved_name: float(position)}, position)
+        for position in range(1, 4)
+    ]
+
+    with pytest.raises(ValueError, match=r"reserved|allow-list"):
+        RankingDataset.from_rows(
+            rows,
+            feature_names=(reserved_name,),
+            feature_schema=_schema((reserved_name,)),
+        )
+
+
+def test_schema_allows_explicit_historical_odds_feature_name() -> None:
+    rows = [
+        RankingRow(
+            "race-1",
+            f"horse-{position}",
+            {"historical_odds": None},
+            position,
+        )
+        for position in range(1, 4)
+    ]
+
+    dataset = RankingDataset.from_rows(
+        rows,
+        feature_names=("historical_odds",),
+        feature_schema=_schema(("historical_odds",), schema_id="historical-odds-v1"),
+    )
+
+    assert dataset.feature_matrix() == [[None], [None], [None]]
+
+
+def test_schema_rejects_unapproved_generation_rule() -> None:
+    with pytest.raises(ValueError, match="approved feature specification"):
+        FeatureSchema.from_names(
+            ("ability",),
+            schema_id="unapproved-rule-v1",
+            generation_rule="unapproved-rule",
+        )
+
+
+def test_dataset_rejects_non_contiguous_races_and_invalid_positions() -> None:
+    non_contiguous = [
+        RankingRow("race-1", "horse-1", {"ability": 1.0}, 1),
+        RankingRow("race-2", "horse-2", {"ability": 1.0}, 1),
+        RankingRow("race-1", "horse-3", {"ability": 1.0}, 2),
+    ]
+    with pytest.raises(ValueError, match="contiguous"):
+        RankingDataset.from_rows(
+            non_contiguous,
+            feature_names=("ability",),
+            feature_schema=_schema(("ability",)),
+        )
+
+    with pytest.raises(ValueError, match="positive"):
+        RankingDataset.from_rows(
+            [RankingRow("race-1", "horse-1", {"ability": 1.0}, 0)],
+            feature_names=("ability",),
+            feature_schema=_schema(("ability",)),
+        )
+
+    accepted = RankingDataset.from_rows(
+        _training_rows()[:4],
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
+    )
+    assert accepted.labels[-1] == 0
+
+    invalid_position = _training_rows()[:4]
+    invalid_position[-1] = RankingRow("race-1", "horse-4", {"ability": 1.0}, 999)
+    with pytest.raises(ValueError, match="race group size"):
+        RankingDataset.from_rows(
+            invalid_position,
+            feature_names=("ability", "historical_odds"),
+            feature_schema=_schema(("ability", "historical_odds")),
+        )
+
+
+def test_dataset_rejects_duplicate_or_non_contiguous_finish_positions() -> None:
+    invalid_rows = [
+        RankingRow("race-1", f"horse-{position}", {"ability": 1.0}, finish_position)
+        for position, finish_position in enumerate((1, 2, 2, 4), start=1)
+    ]
+
+    with pytest.raises(ValueError, match="unique and contiguous"):
+        RankingDataset.from_rows(
+            invalid_rows,
+            feature_names=("ability",),
+            feature_schema=_schema(("ability",)),
+        )
+
+    valid_rows = [
+        RankingRow("race-1", f"horse-{position}", {"ability": 1.0}, position)
+        for position in range(1, 6)
+    ]
+    dataset = RankingDataset.from_rows(
+        valid_rows,
+        feature_names=("ability",),
+        feature_schema=_schema(("ability",)),
+    )
+    assert dataset.labels == (3, 2, 1, 0, 0)
+
+
+def test_metrics_are_race_equal_and_top3_uses_overlap() -> None:
+    dataset = RankingDataset.from_rows(
+        _training_rows(),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
+    )
+    scores = (4.0, 3.0, 2.0, 1.0, 1.0, 4.0, 3.0, 2.0)
+
+    metrics = evaluate_ranking(dataset, scores)
+
+    ideal_dcg = 7.0 + 3.0 / 1.584962500721156 + 1.0 / 2.0
+    second_dcg = 3.0 + 1.0 / 1.584962500721156
+    expected_ndcg = (1.0 + second_dcg / ideal_dcg) / 2.0
+    assert isclose(metrics.ndcg_at_3, expected_ndcg)
+    assert metrics.top1_accuracy == 0.5
+    assert metrics.top3_overlap == (1.0 + 2.0 / 3.0) / 2.0
+
+    with pytest.raises(ValueError, match="real numbers"):
+        evaluate_ranking(dataset, cast(Sequence[float], ("0.1",) * len(scores)))
+    with pytest.raises(ValueError, match="real numbers"):
+        evaluate_ranking(dataset, cast(Sequence[float], (True,) * len(scores)))
+
+
+@pytest.mark.parametrize(
+    ("metric", "field"),
+    [
+        (ndcg_at_3, "ndcg_at_3"),
+        (top1_accuracy, "top1_accuracy"),
+        (top3_overlap, "top3_overlap"),
+    ],
+)
+def test_individual_metrics_match_combined_result_and_validate_scores(
+    metric: Callable[[RankingDataset, Sequence[float]], float], field: str
+) -> None:
+    dataset = RankingDataset.from_rows(
+        _training_rows(),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
+    )
+    scores = (1.0,) * len(dataset.rows)
+
+    assert metric(dataset, scores) == getattr(evaluate_ranking(dataset, scores), field)
+    with pytest.raises(ValueError, match="one value per dataset row"):
+        metric(dataset, scores[:-1])
+    for invalid in (True, "1.0", float("nan"), float("inf")):
+        with pytest.raises(ValueError, match=r"real numbers|finite"):
+            metric(dataset, cast(Sequence[float], (invalid,) * len(scores)))
+
+
+class _TieBooster:
+    def __init__(self, feature_names: Sequence[str] = ("ability",)) -> None:
+        self._feature_names = tuple(feature_names)
+        self.params: Mapping[str, object] = {
+            "objective": "lambdarank",
+            "label_gain": (0, 1, 3, 7),
+        }
+
+    def predict(self, data: object) -> object:
+        return [1.0 for _ in cast(Sequence[object], data)]
+
+    def feature_name(self) -> object:
+        return list(self._feature_names)
+
+    def save_model(self, filename: str) -> object:
+        raise AssertionError(f"save_model is not used in this test: {filename}")
+
+
+def test_prediction_ties_keep_input_row_order_and_scores_only() -> None:
+    model = RankingModel.from_native_booster(_TieBooster(), ("ability",), _schema(("ability",)))
+    rows = [
+        FeatureRow("race-1", "horse-2", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-1", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-3", {"ability": 1.0}),
+    ]
+
+    predictions = model.predict(rows)
+
+    assert model.tie_break_rule == TIE_BREAK_RULE
+    assert [(prediction.horse_id, prediction.rank) for prediction in predictions] == [
+        ("horse-1", 1),
+        ("horse-2", 2),
+        ("horse-3", 3),
+    ]
+    assert all(isfinite(prediction.score) for prediction in predictions)
+    assert not hasattr(predictions[0], "probability")
+
+
+def test_prediction_rejects_mismatched_feature_schema() -> None:
+    schema = _schema(("ability",), schema_id="ability-v1")
+    model = RankingModel.from_native_booster(_TieBooster(), ("ability",), schema)
+    rows = [
+        FeatureRow("race-1", "horse-1", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-2", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-3", {"ability": 1.0}),
+    ]
+
+    with pytest.raises(ValueError, match="feature_schema"):
+        model.predict(
+            rows,
+            feature_schema=FeatureSchema.from_names(
+                ("ability",),
+                schema_id="different-v1",
+            ),
+        )
+
+
+def test_prediction_and_evaluation_use_the_same_tie_rule_for_each_race() -> None:
+    schema = _schema(("ability",))
+    dataset = RankingDataset.from_rows(
+        [
+            RankingRow(race_id, f"horse-{size + 1 - position}", {"ability": 1.0}, position)
+            for race_id, size in (("race-1", 4), ("race-2", 3))
+            for position in range(1, size + 1)
+        ],
+        feature_names=("ability",),
+        feature_schema=schema,
+    )
+    model = RankingModel.from_native_booster(_TieBooster(), ("ability",), schema)
+    rows = tuple(FeatureRow(row.race_id, row.horse_id, row.features) for row in dataset.rows)
+
+    predictions = model.predict(rows)
+    metrics = evaluate_ranking(dataset, model.predict_scores(rows))
+
+    assert [(row.race_id, row.horse_id, row.rank) for row in predictions] == [
+        (race_id, f"horse-{rank}", rank)
+        for race_id, size in (("race-1", 4), ("race-2", 3))
+        for rank in range(1, size + 1)
+    ]
+    assert metrics.top1_accuracy == 0.0
+    assert metrics.top3_overlap == (2.0 / 3.0 + 1.0) / 2.0
+
+
+def test_prediction_rejects_race_with_fewer_than_three_rows() -> None:
+    model = RankingModel.from_native_booster(_TieBooster(), ("ability",), _schema(("ability",)))
+    rows = [
+        FeatureRow("race-1", "horse-1", {"ability": 1.0}),
+        FeatureRow("race-1", "horse-2", {"ability": 1.0}),
+    ]
+
+    with pytest.raises(ValueError, match="at least 3"):
+        model.predict(rows)
+
+
+def test_training_forces_fixed_label_gain(monkeypatch: pytest.MonkeyPatch) -> None:
+    captured_parameters: dict[str, object] = {}
+    captured_fit: dict[str, object] = {}
+
+    class _CapturingRanker:
+        booster_ = _TieBooster(("ability", "historical_odds"))
+
+        def __init__(self, **parameters: object) -> None:
+            captured_parameters.update(parameters)
+
+        def fit(
+            self,
+            features: object,
+            labels: object,
+            *,
+            group: Sequence[int],
+            feature_name: Sequence[str],
+        ) -> object:
+            captured_fit.update(
+                {
+                    "features": features,
+                    "labels": labels,
+                    "group": tuple(group),
+                    "feature_name": tuple(feature_name),
+                }
+            )
+            return None
+
+    lightgbm_module = ModuleType("lightgbm")
+    lightgbm_module.__dict__["LGBMRanker"] = _CapturingRanker
+    monkeypatch.setattr(lightgbm_backend_module, "load_lightgbm", lambda: lightgbm_module)
+
+    dataset = RankingDataset.from_rows(
+        _training_rows(),
+        feature_names=("ability", "historical_odds"),
+        feature_schema=_schema(("ability", "historical_odds")),
+    )
+    train_lambdarank(
+        dataset,
+        parameters={"label_gain": [99, 100], "objective": "regression"},
+    )
+
+    assert captured_parameters["label_gain"] == [0, 1, 3, 7]
+    assert captured_parameters["objective"] == "lambdarank"
+    assert captured_fit["labels"] == list(dataset.labels)
+    assert captured_fit["group"] == dataset.groups
+    assert captured_fit["feature_name"] == dataset.feature_names
+    fit_features = cast(Sequence[Sequence[object]], captured_fit["features"])
+    assert fit_features[0][1] is None
+    assert isinstance(fit_features[4][1], float)
+    assert isnan(fit_features[4][1])
+    assert fit_features[7][1] is None

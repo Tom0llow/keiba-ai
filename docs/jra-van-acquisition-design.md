@@ -8,6 +8,9 @@
 
 公開CLI、取得状態の永続形式、実行設定の生成は[ADR-013](decisions/ADR-013-manual-yearly-odds-acquisition.md)と[ADR-014](decisions/ADR-014-separate-basic-and-historical-odds-cli.md)で決定した。[ADR-006](decisions/ADR-006-config-driven-jvlink-settings-and-typer-cli.md)の設定所有、[ADR-007](decisions/ADR-007-archive-realtime-odds-for-training-and-inference.md)の累積アーカイブ、[ADR-008](decisions/ADR-008-separate-raw-preprocessing-and-parquet-loading.md)のParquet公開を維持する。
 
+設定ファイルとテストの現行配置は[ADR-026](decisions/ADR-026-rename-configs-and-classify-tests.md)に従う。
+本書の設定パス参照だけを更新し、取得・進捗の契約は維持する。
+
 ## 2. 確定要件と対象範囲
 
 | ID | 確定要件 | 本書での対応 |
@@ -27,7 +30,7 @@
 
 | 対象 | 現行実装 | 追加する設計 |
 | --- | --- | --- |
-| 原本DB | `config/data.toml` の `raw_db` が `data/raw/race.db` を参照する。 | 既存の設定パスを使用する。存在しない `raw.db` を新規作成・代替しない。 |
+| 原本DB | `configs/data.toml` の `raw_db` が `data/raw/race.db` を参照する。 | 既存の設定パスを使用する。存在しない `raw.db` を新規作成・代替しない。 |
 | 取得入口 | `uv run python src/main.py --retrieve --mode=historical-basic/latest/realtime`。 | `historical-odds` による手動年単位取得の入口を追加する。 |
 | 対象レース | `NL_RA_RACE` の開始日以降をキー順で走査する。 | 対象年の上下限、今回の候補集合、終了条件を明示する。 |
 | 取得済み除外 | `historical_odds.skip_existing` によってO1/O2を個別に除外する。 | `provider_missing` と取得済みを除外し、未試行・失敗分を再開する。 |
@@ -107,7 +110,7 @@ uv run python src/main.py --retrieve --mode=historical-odds
 
 ### 6.1. 固定の取得方針
 
-既存の `config/data.toml` はDB・前処理・runtimeの保存先を所有する。`config/jvlink.toml` は既存のDataSpecと取得設定を維持し、次の表を追加している。
+既存の `configs/data.toml` はDB・前処理・runtimeの保存先を所有する。`configs/jvlink.toml` は既存のDataSpecと取得設定を維持し、次の表を追加している。
 
 ```toml
 [historical_odds.batch]
@@ -375,8 +378,8 @@ OSロックはプロセスの異常終了で解放されるものを使い、ロ
 | `src/data/retriever/setting.py` | batch設定の読み込み・検証。JV-Link XMLの生成は既存の仕組みを使用。 |
 | `src/data/retriever/odds_archive.py` | 要求対象のみの保存、DataSpec別挿入結果、ステージング検証。既存 `archive()` の合計整数の契約は維持する。 |
 | `src/data/retriever/jvlinktosqlite.py` | 成功・空応答・失敗の観測を実物仕様に合わせて拡張する。 |
-| `config/jvlink.toml` | 固定の取得年を追加する。 |
-| 対応する `src/tests/` | 設定、年選択、状態、保存、復旧、CLIの受入テスト。 |
+| `configs/jvlink.toml` | 固定の取得年を追加する。 |
+| 対応する `src/tests/unit/`・`src/tests/integration/` | 設定、年選択、状態、保存、復旧、CLIの受入テスト。 |
 
 内部の戻り値はレース・DataSpec別の `AcquisitionResult` と年単位の `BatchResult` を候補とし、要求数・保存数・失敗数・対象年・run IDを持たせる。時刻と外部実行は引数や注入可能な境界で管理する。製品コードから生のJV-Dataを新しく独自解析する仕組みは導入しない。
 

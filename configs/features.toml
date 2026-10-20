@@ -1,0 +1,85 @@
+# Feature group IDs, names and registration order.
+
+[[features]]
+id = "F01"
+name = "recent_performance"
+
+[[features]]
+id = "F02"
+name = "past_racing_ability"
+
+[[features]]
+id = "F03"
+name = "condition_adjusted_ability"
+
+[[features]]
+id = "F04"
+name = "recent_stability"
+
+[[features]]
+id = "F05"
+name = "condition_suitability"
+
+[[features]]
+id = "F06"
+name = "rest_and_condition_change"
+
+[[features]]
+id = "F07"
+name = "jockey_performance"
+
+[[features]]
+id = "F08"
+name = "trainer_performance"
+
+[[features]]
+id = "F09"
+name = "within_race_relative"
+
+[[features]]
+id = "F10"
+name = "basic_conditions_and_weight"
+
+[[features]]
+id = "F11"
+name = "jockey_combination"
+
+[[features]]
+id = "F12"
+name = "running_style_and_position"
+
+[[features]]
+id = "F13"
+name = "expected_race_development"
+
+[[features]]
+id = "F14"
+name = "pedigree_suitability"
+
+[[features]]
+id = "F15"
+name = "history_volume_and_missingness"
+
+[[features]]
+id = "F16"
+name = "past_body_weight"
+
+[[features]]
+id = "F17"
+name = "hill_and_wood_workouts"
+
+[[features]]
+id = "F18"
+name = "past_lap_and_running_style"
+
+[[features]]
+id = "F19"
+name = "market_characteristics"
+
+[[features]]
+id = "F20"
+name = "same_gate_and_trainer_relative"
+
+[[features]]
+id = "F21"
+name = "opponent_pagerank"

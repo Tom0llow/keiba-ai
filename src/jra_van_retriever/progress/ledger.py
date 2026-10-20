@@ -1,0 +1,676 @@
+"""Persist and validate the authoritative historical odds progress ledger."""
+
+from __future__ import annotations
+
+import json
+import sqlite3
+from collections.abc import Iterator
+from contextlib import closing, contextmanager
+from datetime import date, datetime
+from pathlib import Path
+
+from domain.race_key import RaceKey
+from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked, canonical_path
+from jra_van_retriever.config.profiles import HistoricalOddsBatch, JVLinkProfile
+from jra_van_retriever.contracts.odds import ARCHIVE_TABLES as ARCHIVE_TABLES
+from jra_van_retriever.contracts.odds import KEY_COLUMNS as KEY_COLUMNS
+from jra_van_retriever.progress.output import atomic_write as atomic_write
+from jra_van_retriever.progress.raw_observation import (
+    read_raw_snapshot as read_raw_snapshot,
+)
+from jra_van_retriever.progress.state import (
+    RawSnapshot as RawSnapshot,
+)
+from jra_van_retriever.progress.state import (
+    SpecState as SpecState,
+)
+from jra_van_retriever.progress.state import (
+    _legacy_policy_hash as _legacy_policy_hash,
+)
+from jra_van_retriever.progress.state import (
+    candidate_hash as candidate_hash,
+)
+from jra_van_retriever.progress.state import (
+    policy_hash as policy_hash,
+)
+from jra_van_retriever.progress.state import (
+    race_key_from_id as race_key_from_id,
+)
+from jra_van_retriever.progress.state import (
+    reconcile_states as reconcile_states,
+)
+
+LEDGER_FILENAME = "historical-odds-progress.db"
+TERMINAL_STATES = {"acquired", "provider_missing"}
+API_NAMES = frozenset({"JVOpen", "JVRTOpen", "JVStatus", "JVRead", "JVGets"})
+NO_DATA_API_NAMES = frozenset({"JVOpen", "JVRTOpen"})
+STATE_REASONS = {
+    "pending": frozenset({"new_candidate", "unrequested"}),
+    "running": frozenset({"request_started"}),
+    "acquired": frozenset(
+        {
+            "external_archive_observed",
+            "initial_archive_observed",
+            "recovered_archive_commit",
+            "requested_archive_committed",
+        }
+    ),
+    "provider_missing": frozenset(
+        {
+            "jvopen_no_data",
+            "legacy_provider_missing",
+            "provider_confirmed_missing",
+        }
+    ),
+    "failed": frozenset(
+        {
+            "archive_schema_mismatch",
+            "empty_response_unverified",
+            "jvlink_error",
+            "recovered_unconfirmed",
+            "staging_race_mismatch",
+            "staging_schema_invalid",
+            "staging_table_missing",
+        }
+    ),
+}
+
+
+class ProgressLedger:
+    """Own versioned state, transactions, migrations and acquisition evidence."""
+
+    def __init__(
+        self, path: Path, raw_db: Path, profile: JVLinkProfile, batch: HistoricalOddsBatch
+    ) -> None:
+        self.path = path.expanduser().resolve()
+        self.raw_db = raw_db.expanduser().resolve()
+        self.profile = profile
+        self.batch = batch
+        self.policy_hash = policy_hash(profile, batch)
+
+    @contextmanager
+    def _transaction(self) -> Iterator[sqlite3.Connection]:
+        with closing(sqlite3.connect(self.path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            _ensure_api_result_columns(database)
+            yield database
+            database.execute(
+                "UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='state_revision'"
+            )
+
+    def bootstrap(self, snapshot: RawSnapshot, now: datetime) -> None:
+        """Freeze initial candidates without classifying missing archive rows."""
+        if self.path.exists():
+            raise AcquisitionBlocked("existing ledger must be validated, never reinitialized")
+        self.path.parent.mkdir(parents=True, exist_ok=True)
+        with closing(sqlite3.connect(self.path)) as database, database:
+            database.executescript("""
+                PRAGMA user_version=1;
+                CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+                CREATE TABLE race_specs (
+                    race_id TEXT NOT NULL, data_spec TEXT NOT NULL, year INTEGER NOT NULL,
+                    state TEXT NOT NULL CHECK(state IN ('pending','running','acquired','provider_missing','failed')),
+                    reason TEXT NOT NULL, last_run TEXT, attempts INTEGER NOT NULL DEFAULT 0,
+                    before_rows INTEGER NOT NULL DEFAULT 0, after_rows INTEGER NOT NULL DEFAULT 0,
+                    requested_at TEXT, updated_at TEXT NOT NULL, returncode INTEGER,
+                    api_name TEXT, api_returncode INTEGER,
+                    PRIMARY KEY(race_id, data_spec));
+                CREATE TABLE years (year INTEGER PRIMARY KEY, publication TEXT NOT NULL, snapshot_id TEXT);
+                CREATE TABLE runs (run_id TEXT PRIMARY KEY, year INTEGER, cutoff TEXT NOT NULL,
+                    started_at TEXT NOT NULL, finished_at TEXT, status TEXT NOT NULL,
+                    candidate_hash TEXT NOT NULL, report TEXT NOT NULL, quarantine TEXT NOT NULL DEFAULT '[]');
+            """)
+            metadata = {
+                "schema_version": "1",
+                "state_revision": "1",
+                "raw_db": canonical_path(self.raw_db),
+                "policy_hash": self.policy_hash,
+                "bootstrap_at": now.isoformat(),
+                "bootstrap_candidate_hash": candidate_hash(snapshot.races),
+                "recovery_required": "false",
+                "archive_schemas": json.dumps(snapshot.schemas, sort_keys=True),
+            }
+            database.executemany("INSERT INTO metadata VALUES (?,?)", metadata.items())
+            for year in range(self.batch.first_year, self.batch.last_year + 1):
+                database.execute("INSERT INTO years VALUES (?,?,NULL)", (year, "pending"))
+            for key in snapshot.races:
+                for spec in sorted(self.profile.realtime_data_specs):
+                    count = snapshot.counts.get((key.race_id, spec), 0)
+                    if count:
+                        state, reason = "acquired", "initial_archive_observed"
+                    else:
+                        state, reason = "pending", "unrequested"
+                    database.execute(
+                        "INSERT INTO race_specs (race_id,data_spec,year,state,reason,before_rows,after_rows,updated_at) VALUES (?,?,?,?,?,?,?,?)",
+                        (
+                            key.race_id,
+                            spec,
+                            key.race_date.year,
+                            state,
+                            reason,
+                            count,
+                            count,
+                            now.isoformat(),
+                        ),
+                    )
+
+    def migrate_legacy_frontier(self, snapshot: RawSnapshot, now: datetime) -> bool:
+        """Migrate one recognized frontier ledger without discarding raw data."""
+        if not self.path.is_file():
+            return False
+        with closing(sqlite3.connect(self.path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
+            if (
+                database.execute("PRAGMA user_version").fetchone()[0] != 1
+                or dict(database.execute("SELECT key,value FROM metadata")).get("schema_version")
+                != "1"
+            ):
+                raise AcquisitionBlocked("unsupported progress ledger schema version")
+            metadata = dict(database.execute("SELECT key,value FROM metadata"))
+            if metadata.get("raw_db") != canonical_path(self.raw_db):
+                raise AcquisitionBlocked("progress ledger raw database or policy differs")
+            if metadata.get("policy_hash") == self.policy_hash:
+                return False
+            if metadata.get("bootstrap_reason") != "user_accepted_existing_gaps":
+                raise AcquisitionBlocked(
+                    "progress ledger raw database or policy differs; explicit migration is required"
+                )
+            frontier = _parse_legacy_frontier(metadata.get("frontier"))
+            if (
+                not self.batch.first_year <= frontier.race_date.year <= self.batch.last_year
+                or frontier.jyo_code not in {f"{code:02d}" for code in range(1, 11)}
+                or self.profile.race_start_date is None
+                or frontier.race_date < self.profile.race_start_date
+                or metadata.get("policy_hash")
+                != _legacy_policy_hash(self.profile, self.batch, frontier)
+            ):
+                raise AcquisitionBlocked(
+                    "progress ledger raw database or policy differs; explicit migration is required"
+                )
+            try:
+                prior_schemas = json.loads(metadata["archive_schemas"])
+            except (KeyError, TypeError, ValueError) as exc:
+                raise AcquisitionBlocked("invalid progress archive schema metadata") from exc
+            if not isinstance(prior_schemas, dict) or any(
+                snapshot.schemas.get(spec) != schema for spec, schema in prior_schemas.items()
+            ):
+                raise AcquisitionBlocked("archive schema disappeared or changed")
+            _ensure_api_result_columns(database)
+            converted_years = {
+                row[0]
+                for row in database.execute(
+                    "SELECT year FROM race_specs WHERE state='provider_missing' "
+                    "AND reason='user_accepted_existing_gaps'"
+                )
+            }
+            database.execute(
+                "UPDATE race_specs SET state='pending',reason='unrequested',before_rows=0,"
+                "after_rows=0,last_run=NULL,requested_at=NULL,returncode=NULL,api_name=NULL,"
+                "api_returncode=NULL,updated_at=? WHERE state='provider_missing' "
+                "AND reason='user_accepted_existing_gaps'",
+                (now.isoformat(),),
+            )
+            database.execute("UPDATE years SET publication='pending' WHERE publication='baseline'")
+            for year in converted_years:
+                database.execute("UPDATE years SET publication='pending' WHERE year=?", (year,))
+            database.execute(
+                "UPDATE metadata SET value=? WHERE key='policy_hash'", (self.policy_hash,)
+            )
+            database.executemany(
+                "INSERT INTO metadata (key,value) VALUES (?,?) "
+                "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
+                (
+                    ("migration_at", now.isoformat()),
+                    ("migration_reason", "remove_initial_gap_classification"),
+                ),
+            )
+            database.execute("DELETE FROM metadata WHERE key IN ('frontier','bootstrap_reason')")
+            database.execute(
+                "UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='state_revision'"
+            )
+        return True
+
+    def read(self) -> tuple[dict[tuple[str, str], SpecState], dict[int, str], int]:
+        """Validate ledger ownership and return its committed states."""
+        with closing(sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)) as database:
+            database.execute("BEGIN")
+            metadata = dict(database.execute("SELECT key,value FROM metadata"))
+            if (
+                database.execute("PRAGMA user_version").fetchone()[0] != 1
+                or metadata.get("schema_version") != "1"
+            ):
+                raise AcquisitionBlocked("unsupported progress ledger schema version")
+            if (
+                metadata.get("raw_db") != canonical_path(self.raw_db)
+                or metadata.get("policy_hash") != self.policy_hash
+            ):
+                raise AcquisitionBlocked(
+                    "progress ledger raw database or policy differs; explicit migration is required"
+                )
+            if metadata.get("recovery_required") != "false":
+                raise AcquisitionBlocked("staging recovery is incomplete")
+            states: dict[tuple[str, str], SpecState] = {}
+            race_spec_columns = {
+                row[1] for row in database.execute("PRAGMA table_info(race_specs)")
+            }
+            has_api_columns = {"api_name", "api_returncode"} <= race_spec_columns
+            api_columns = ",api_name,api_returncode" if has_api_columns else ",NULL,NULL"
+            for row in database.execute(
+                "SELECT race_id,data_spec,state,reason,before_rows,after_rows,attempts"
+                f"{api_columns} FROM race_specs"
+            ):
+                key = race_key_from_id(row[0])
+                if (
+                    key.jyo_code not in {f"{code:02d}" for code in range(1, 11)}
+                    or not self.batch.first_year <= key.race_date.year <= self.batch.last_year
+                ):
+                    raise AcquisitionBlocked("progress ledger race lies outside the policy")
+                if (
+                    row[1] not in self.profile.realtime_data_specs
+                    or row[2] not in STATE_REASONS
+                    or row[3] not in STATE_REASONS[row[2]]
+                ):
+                    raise AcquisitionBlocked("unsupported or unresolved race/spec state")
+                _validate_api_observation(
+                    row[2], row[3], row[7], row[8], allow_legacy_no_data=not has_api_columns
+                )
+                if any(type(value) is not int or value < 0 for value in row[4:7]):
+                    raise AcquisitionBlocked("invalid progress row counts")
+                states[(row[0], row[1])] = SpecState(*row[:7])
+            years = dict(database.execute("SELECT year,publication FROM years"))
+            if set(years) != set(range(self.batch.first_year, self.batch.last_year + 1)) or not set(
+                years.values()
+            ) <= {"published", "pending", "failed"}:
+                raise AcquisitionBlocked("invalid publication year states")
+            revision = int(metadata["state_revision"])
+            if revision < 1:
+                raise AcquisitionBlocked("invalid ledger revision")
+        return states, years, revision
+
+    def running_requests(self) -> tuple[tuple[str, RaceKey, frozenset[str]], ...]:
+        """Return unresolved requests for an explicit operator recovery."""
+        if not self.path.is_file():
+            return ()
+        try:
+            with closing(sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)) as database:
+                if database.execute("PRAGMA user_version").fetchone()[0] != 1:
+                    raise AcquisitionBlocked("unsupported progress ledger schema version")
+                metadata = dict(database.execute("SELECT key,value FROM metadata"))
+                if metadata.get("schema_version") != "1":
+                    raise AcquisitionBlocked("unsupported progress ledger schema version")
+                if (
+                    metadata.get("raw_db") != canonical_path(self.raw_db)
+                    or metadata.get("policy_hash") != self.policy_hash
+                ):
+                    raise AcquisitionBlocked("progress ledger raw database or policy differs")
+                if metadata.get("recovery_required") != "true":
+                    raise AcquisitionBlocked("no unresolved progress recovery is recorded")
+                try:
+                    archive_schemas = json.loads(metadata["archive_schemas"])
+                except (KeyError, TypeError, ValueError) as exc:
+                    raise AcquisitionBlocked("invalid progress archive schema metadata") from exc
+                if not isinstance(archive_schemas, dict) or not all(
+                    isinstance(spec, str) and isinstance(schema, str)
+                    for spec, schema in archive_schemas.items()
+                ):
+                    raise AcquisitionBlocked("invalid progress archive schema metadata")
+                grouped: dict[tuple[str, str], set[str]] = {}
+                race_spec_columns = {
+                    row[1] for row in database.execute("PRAGMA table_info(race_specs)")
+                }
+                has_api_columns = {"api_name", "api_returncode"} <= race_spec_columns
+                api_columns = ",api_name,api_returncode" if has_api_columns else ",NULL,NULL"
+                for row in database.execute(
+                    "SELECT last_run,race_id,data_spec,state,reason,before_rows,after_rows,attempts"
+                    f"{api_columns} FROM race_specs"
+                ):
+                    run_id, race_id, data_spec, state, reason = row[:5]
+                    counts = row[5:8]
+                    key = race_key_from_id(race_id)
+                    if (
+                        key.jyo_code not in {f"{code:02d}" for code in range(1, 11)}
+                        or not self.batch.first_year <= key.race_date.year <= self.batch.last_year
+                        or data_spec not in self.profile.realtime_data_specs
+                        or state not in STATE_REASONS
+                        or reason not in STATE_REASONS[state]
+                        or any(type(value) is not int or value < 0 for value in counts)
+                    ):
+                        raise AcquisitionBlocked("invalid progress ledger state")
+                    _validate_api_observation(
+                        state,
+                        reason,
+                        row[8],
+                        row[9],
+                        allow_legacy_no_data=not has_api_columns,
+                    )
+                    if state == "running":
+                        if not isinstance(run_id, str) or not run_id:
+                            raise AcquisitionBlocked("running progress row has no run id")
+                        grouped.setdefault((run_id, race_id), set()).add(data_spec)
+                years = dict(database.execute("SELECT year,publication FROM years"))
+                if set(years) != set(
+                    range(self.batch.first_year, self.batch.last_year + 1)
+                ) or not set(years.values()) <= {"published", "pending", "failed"}:
+                    raise AcquisitionBlocked("invalid publication year states")
+                for run_id, _ in grouped:
+                    if not database.execute(
+                        "SELECT 1 FROM runs WHERE run_id=?", (run_id,)
+                    ).fetchone():
+                        raise AcquisitionBlocked("running progress row refers to an unknown run")
+        except sqlite3.DatabaseError as exc:
+            raise AcquisitionBlocked("progress ledger is incomplete or invalid") from exc
+        return tuple(
+            (run_id, race_key_from_id(race_id), frozenset(specs))
+            for (run_id, race_id), specs in grouped.items()
+        )
+
+    def recover_running(
+        self,
+        key: RaceKey,
+        specs: frozenset[str],
+        now: datetime,
+        acquired_counts: dict[str, int] | None = None,
+    ) -> None:
+        """Resolve quarantined requests from an observed archive commit or failure."""
+        counts = acquired_counts or {}
+        with self._transaction() as database:
+            for spec in specs:
+                before_row = database.execute(
+                    "SELECT before_rows FROM race_specs WHERE race_id=? AND data_spec=? "
+                    "AND state='running'",
+                    (key.race_id, spec),
+                ).fetchone()
+                if before_row is None:
+                    continue
+                after_rows = counts.get(spec, 0)
+                if after_rows > before_row[0]:
+                    state, reason = "acquired", "recovered_archive_commit"
+                else:
+                    state, reason = "failed", "recovered_unconfirmed"
+                database.execute(
+                    "UPDATE race_specs SET state=?,reason=?,after_rows=?,updated_at=?,returncode=NULL,api_name=NULL,api_returncode=NULL "
+                    "WHERE race_id=? AND data_spec=? AND state='running'",
+                    (state, reason, after_rows, now.isoformat(), key.race_id, spec),
+                )
+                if state == "acquired":
+                    database.execute(
+                        "UPDATE years SET publication='pending' WHERE year=?",
+                        (key.race_date.year,),
+                    )
+            unresolved = database.execute(
+                "SELECT 1 FROM race_specs WHERE state='running' LIMIT 1"
+            ).fetchone()
+            database.execute(
+                "UPDATE metadata SET value=? WHERE key='recovery_required'",
+                ("true" if unresolved else "false",),
+            )
+
+    def reconcile(self, snapshot: RawSnapshot, now: datetime) -> dict[str, int]:
+        """Adopt external archive additions and refuse loss of acquired data."""
+        states, _, _ = self.read()
+        proposed, changed_years, adopted = reconcile_states(
+            states, snapshot, self.profile.realtime_data_specs
+        )
+        with self._transaction() as database:
+            metadata = dict(database.execute("SELECT key,value FROM metadata"))
+            prior_schemas = json.loads(metadata["archive_schemas"])
+            if any(snapshot.schemas.get(spec) != schema for spec, schema in prior_schemas.items()):
+                raise AcquisitionBlocked("archive schema disappeared or changed")
+            for pair, entry in proposed.items():
+                if entry == states.get(pair):
+                    continue
+                year = race_key_from_id(entry.race_id).race_date.year
+                database.execute(
+                    "INSERT INTO race_specs (race_id,data_spec,year,state,reason,before_rows,after_rows,attempts,updated_at) VALUES (?,?,?,?,?,?,?,?,?) "
+                    "ON CONFLICT(race_id,data_spec) DO UPDATE SET state=excluded.state,reason=excluded.reason,before_rows=excluded.before_rows,after_rows=excluded.after_rows,updated_at=excluded.updated_at",
+                    (
+                        entry.race_id,
+                        entry.data_spec,
+                        year,
+                        entry.state,
+                        entry.reason,
+                        entry.before_rows,
+                        entry.after_rows,
+                        entry.attempts,
+                        now.isoformat(),
+                    ),
+                )
+            for year in changed_years:
+                database.execute("UPDATE years SET publication='pending' WHERE year=?", (year,))
+            database.execute(
+                "UPDATE metadata SET value=? WHERE key='archive_schemas'",
+                (json.dumps(snapshot.schemas, sort_keys=True),),
+            )
+        return adopted
+
+    def start_run(
+        self,
+        run_id: str,
+        year: int | None,
+        cutoff: date,
+        now: datetime,
+        races: tuple[RaceKey, ...],
+        report: dict[str, object],
+    ) -> None:
+        """Persist the fixed run envelope before any external request."""
+        with self._transaction() as database:
+            database.execute(
+                "INSERT INTO runs (run_id,year,cutoff,started_at,status,candidate_hash,report) VALUES (?,?,?,?,?,?,?)",
+                (
+                    run_id,
+                    year,
+                    cutoff.isoformat(),
+                    now.isoformat(),
+                    "running",
+                    candidate_hash(races),
+                    json.dumps(report, sort_keys=True),
+                ),
+            )
+
+    def request(
+        self,
+        run_id: str,
+        key: RaceKey,
+        specs: frozenset[str],
+        counts: dict[str, int],
+        now: datetime,
+    ) -> None:
+        """Commit write-ahead running state and pre-request archive counts."""
+        with self._transaction() as database:
+            for spec in specs:
+                cursor = database.execute(
+                    "UPDATE race_specs SET state='running',reason='request_started',last_run=?,attempts=attempts+1,before_rows=?,after_rows=?,requested_at=?,updated_at=?,returncode=NULL,api_name=NULL,api_returncode=NULL WHERE race_id=? AND data_spec=? AND state IN ('pending','failed')",
+                    (
+                        run_id,
+                        counts[spec],
+                        counts[spec],
+                        now.isoformat(),
+                        now.isoformat(),
+                        key.race_id,
+                        spec,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise AcquisitionBlocked("request no longer matches an eligible ledger state")
+            database.execute("UPDATE metadata SET value='true' WHERE key='recovery_required'")
+
+    def finish_request(
+        self,
+        key: RaceKey,
+        results: dict[str, tuple[str, str, int]],
+        now: datetime,
+        *,
+        recovered: bool,
+        returncode: int | None = None,
+        api_results: dict[str, tuple[str, int]] | None = None,
+    ) -> None:
+        """Confirm results while retaining process and DataSpec API return codes."""
+        with self._transaction() as database:
+            for spec, (state, reason, after) in results.items():
+                if state not in STATE_REASONS or reason not in STATE_REASONS[state]:
+                    raise ValueError(f"unsupported state/reason pair: {state}/{reason}")
+                api_result = api_results.get(spec) if api_results is not None else None
+                _validate_api_observation(
+                    state,
+                    reason,
+                    api_result[0] if api_result else None,
+                    api_result[1] if api_result else None,
+                )
+                database.execute(
+                    "UPDATE race_specs SET state=?,reason=?,after_rows=?,updated_at=?,returncode=?,api_name=?,api_returncode=? WHERE race_id=? AND data_spec=? AND state='running'",
+                    (
+                        state,
+                        reason,
+                        after,
+                        now.isoformat(),
+                        returncode,
+                        api_result[0] if api_result else None,
+                        api_result[1] if api_result else None,
+                        key.race_id,
+                        spec,
+                    ),
+                )
+                if state == "acquired":
+                    database.execute(
+                        "UPDATE years SET publication='pending' WHERE year=?", (key.race_date.year,)
+                    )
+            database.execute(
+                "UPDATE metadata SET value=? WHERE key='recovery_required'",
+                ("false" if recovered else "true",),
+            )
+
+    def confirm_provider_missing(
+        self,
+        key: RaceKey,
+        specs: frozenset[str],
+        now: datetime,
+        archive_counts: dict[str, int],
+    ) -> None:
+        """Promote explicitly verified empty responses to provider-side gaps."""
+        # Validate ledger ownership and schema before allowing a terminal-state change.
+        if not self.path.is_file():
+            raise AcquisitionBlocked("provider-missing confirmation requires an existing ledger")
+        self.read()
+        if not specs or not specs <= self.profile.realtime_data_specs:
+            raise ValueError("provider-missing confirmation contains unsupported DataSpecs")
+        if any(archive_counts.get(spec, 0) != 0 for spec in specs):
+            raise AcquisitionBlocked("provider-missing confirmation conflicts with archive rows")
+        with self._transaction() as database:
+            rows = {
+                spec: database.execute(
+                    "SELECT state,reason FROM race_specs WHERE race_id=? AND data_spec=?",
+                    (key.race_id, spec),
+                ).fetchone()
+                for spec in specs
+            }
+            if any(row is None for row in rows.values()):
+                raise AcquisitionBlocked("provider-missing confirmation targets an unknown race")
+            if any(
+                row[0] != "failed" or row[1] != "empty_response_unverified"
+                for row in rows.values()
+                if row is not None
+            ):
+                raise AcquisitionBlocked(
+                    "provider-missing confirmation requires empty-response failures"
+                )
+            for spec in specs:
+                database.execute(
+                    "UPDATE race_specs SET state='provider_missing',reason='provider_confirmed_missing',"
+                    "after_rows=0,updated_at=? WHERE race_id=? AND data_spec=? AND state='failed' "
+                    "AND reason='empty_response_unverified'",
+                    (now.isoformat(), key.race_id, spec),
+                )
+            database.execute(
+                "UPDATE years SET publication='pending' WHERE year=?", (key.race_date.year,)
+            )
+
+    def record_quarantine(self, run_id: str, artifacts: list[dict[str, object]]) -> None:
+        """Retain immutable staging evidence without counting it as acquired data."""
+        with self._transaction() as database:
+            prior = json.loads(
+                database.execute(
+                    "SELECT quarantine FROM runs WHERE run_id=?", (run_id,)
+                ).fetchone()[0]
+            )
+            database.execute(
+                "UPDATE runs SET quarantine=? WHERE run_id=?",
+                (json.dumps(prior + artifacts, sort_keys=True), run_id),
+            )
+
+    def publication(self, year: int, state: str, snapshot_id: str | None = None) -> None:
+        """Record preprocessing independently of raw acquisition outcomes."""
+        if state not in {"published", "failed"}:
+            raise ValueError("invalid publication outcome")
+        with self._transaction() as database:
+            database.execute(
+                "UPDATE years SET publication=?,snapshot_id=? WHERE year=?",
+                (state, snapshot_id, year),
+            )
+
+    def finish_run(self, run_id: str, report: dict[str, object], now: datetime) -> None:
+        """Persist final metrics before regenerating derived files."""
+        with self._transaction() as database:
+            database.execute(
+                "UPDATE runs SET finished_at=?,status=?,report=? WHERE run_id=?",
+                (now.isoformat(), report["status"], json.dumps(report, sort_keys=True), run_id),
+            )
+
+
+def _ensure_api_result_columns(database: sqlite3.Connection) -> None:
+    """Add API-result columns to a v1 ledger without changing process returncodes."""
+    columns = {row[1] for row in database.execute("PRAGMA table_info(race_specs)")}
+    needs_migration = "api_name" not in columns or "api_returncode" not in columns
+    if "api_name" not in columns:
+        database.execute("ALTER TABLE race_specs ADD COLUMN api_name TEXT")
+    if "api_returncode" not in columns:
+        database.execute("ALTER TABLE race_specs ADD COLUMN api_returncode INTEGER")
+    if needs_migration:
+        database.execute(
+            "UPDATE race_specs SET reason='legacy_provider_missing' "
+            "WHERE state='provider_missing' AND reason='jvopen_no_data'"
+        )
+
+
+def _parse_legacy_frontier(value: object) -> RaceKey:
+    """Parse the removed frontier metadata without restoring it as configuration."""
+    if not isinstance(value, str):
+        raise AcquisitionBlocked("invalid legacy frontier metadata")
+    components = value.split("/")
+    if len(components) != 5:
+        raise AcquisitionBlocked("invalid legacy frontier metadata")
+    date_text, *race_components = components
+    try:
+        race_date = date.fromisoformat(date_text)
+    except ValueError as exc:
+        raise AcquisitionBlocked("invalid legacy frontier metadata") from exc
+    if race_date.isoformat() != date_text:
+        raise AcquisitionBlocked("invalid legacy frontier metadata")
+    try:
+        return RaceKey(race_date, *race_components)
+    except ValueError as exc:
+        raise AcquisitionBlocked("invalid legacy frontier metadata") from exc
+
+
+def _validate_api_observation(
+    state: str,
+    reason: str,
+    api_name: str | None,
+    api_returncode: int | None,
+    *,
+    allow_legacy_no_data: bool = False,
+) -> None:
+    """Require API evidence whenever a reason claims JVOpen found no data."""
+    if (api_name is None) != (api_returncode is None):
+        raise AcquisitionBlocked("incomplete API return observation")
+    if api_name is not None and api_name not in API_NAMES:
+        raise AcquisitionBlocked("unsupported API return observation")
+    if api_returncode is not None and type(api_returncode) is not int:
+        raise AcquisitionBlocked("invalid API return code")
+    if (
+        state == "provider_missing"
+        and reason == "jvopen_no_data"
+        and (api_name not in NO_DATA_API_NAMES or api_returncode != -1)
+    ):
+        if allow_legacy_no_data and api_name is None and api_returncode is None:
+            return
+        raise AcquisitionBlocked("provider-missing state lacks JVOpen/JVRTOpen -1 evidence")

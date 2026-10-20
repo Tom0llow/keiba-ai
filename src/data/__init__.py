@@ -1,1 +1,1 @@
-"""Tools for preparing and loading race data."""
+"""Common data I/O, transformation and snapshot lifecycle boundaries."""

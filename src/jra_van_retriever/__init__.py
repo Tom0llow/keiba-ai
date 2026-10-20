@@ -1,0 +1,1 @@
+"""Jra van retriever responsibilities."""

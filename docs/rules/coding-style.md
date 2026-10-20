@@ -316,10 +316,21 @@ def clamp(value: float, lower: float, upper: float) -> float:
 
 ## 17. Architecture
 
-The current repository has a CLI in `src/main.py`, application modules under
-`src/data/`, `src/features/`, and `src/models/`, and tests under `src/tests/`.
-It is not installed as a Python distribution. `ARCHITECTURE.md` describes the
-implemented module boundaries.
+The repository assembles its CLI in `src/main.py` and executes feature-specific
+CLI handling under `src/cli/`. `configuration/` owns shared settings, physical
+I/O belongs to `data/loader/` and `data/saver/`, pure conversion to
+`data/preprocessor/`, and snapshot lifecycle to `data/storage/`. Business modules are
+`jra_van_retriever/`, `make_features/`, `make_datamart/`, `models/`, and shared
+`domain/`. ADR-025 records these source boundaries. ADR-026 places the three
+root configuration TOMLs under `configs/` and classifies tests under
+`src/tests/unit/` and `src/tests/integration/`. The existing environment smoke test
+remains at `src/tests/test_project_environment.py`. Type checks target all of `src`.
+CLI option types belong to `cli/options.py`, JSON boundary handling to
+`cli/json_io.py`, and all command registration to `main.py`. Do not import
+private functions from sibling CLI modules.
+Feature/model JSON conversion stays pure in each `serialization/` package;
+generic JSON output belongs to `data/saver/write_json.py`. Lower modules do not
+depend on Typer, `cli` or `main`. The project is not a Python distribution.
 
 - Add modules only for responsibilities required by the current task.
 - Keep imports free of runtime side effects and avoid circular dependencies.
