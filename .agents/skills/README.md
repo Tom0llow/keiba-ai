@@ -13,6 +13,7 @@ This repository provides focused Codex workflows under `.agents/skills/`.
 | `merge-approved` | Guarded squash merge after explicit approval of the exact reviewed HEAD |
 | `data-assessment` | Assess data management against seven DMBOK environmental elements and nine data-quality dimensions |
 | `data-preprocessing` | Preview and apply approved transformations from raw to processed or datamart |
+| `table-definition` | Document existing or planned raw, processed, and datamart tables |
 
 Codex may select a user-facing skill implicitly from its description, or it can
 be invoked explicitly from the Codex IDE/CLI. When `AGENTS.md` requires the
