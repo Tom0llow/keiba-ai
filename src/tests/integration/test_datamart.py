@@ -22,7 +22,7 @@ from make_features.contracts.rows import FeatureTableRow
 from make_features.odds_ratio import OddsRatioInput, build_odds_ratio
 from make_features.previous_race_result import PreviousRaceResultInput, build_previous_race_result
 from make_features.tables.build import build_feature_table
-from make_features.tables.parquet import write_feature_table
+from make_features.tables.parquet import read_feature_table, write_feature_table
 
 FREEZE_AT = datetime(2026, 1, 1, 12, tzinfo=UTC)
 
@@ -55,6 +55,55 @@ def test_datamart_cli_builds_ordered_validated_parquet(tmp_path: Path) -> None:
     assert read_datamart(output).equals(
         join_feature_tables([_base_table(), _odds_table()]), check_metadata=True
     )
+
+
+@pytest.mark.parametrize("input_index", [0, 1])
+@pytest.mark.parametrize("output_alias", ["literal", "lexicalalias", "hardlink"])
+def test_datamart_cli_rejects_output_aliasing_any_input(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    input_index: int,
+    output_alias: str,
+) -> None:
+    config = Path("configs/features.toml").resolve()
+    tables = [_base_table(), _odds_table()]
+    paths = [tmp_path / "first.parquet", tmp_path / "second.parquet"]
+    for table, path in zip(tables, paths, strict=True):
+        write_feature_table(table, path)
+    original_contents = [path.read_bytes() for path in paths]
+    source = paths[input_index]
+    output = source
+    if output_alias == "lexicalalias":
+        (tmp_path / "alias").mkdir()
+        output = Path("alias") / ".." / source.name
+    elif output_alias == "hardlink":
+        output = tmp_path / "output.parquet"
+        output.hardlink_to(source)
+    monkeypatch.chdir(tmp_path)
+
+    result = CliRunner().invoke(
+        app,
+        [
+            "datamart",
+            "build",
+            "--input",
+            str(paths[0]),
+            "--input",
+            str(paths[1]),
+            "--output",
+            str(output),
+            "--features-config",
+            str(config),
+        ],
+    )
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert "cannot build datamart:" in result.stderr
+    assert "output must not overwrite an input feature table" in result.stderr
+    for table, path, contents in zip(tables, paths, original_contents, strict=True):
+        assert path.read_bytes() == contents
+        assert read_feature_table(path).equals(table, check_metadata=True)
 
 
 @pytest.mark.parametrize("invalid_contents", [None, b"not parquet"])

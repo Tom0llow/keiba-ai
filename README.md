@@ -401,6 +401,7 @@ uv run python src/main.py datamart build --input previous.parquet --input odds.p
 `--input`は結合順に繰り返す。`--features-config`は既定で`configs/features.toml`を使用し、
 宣言された特徴量名を読込・結合・保存の検証へ渡す。元の3特徴量は従来の固定スキーマも使用できる。
 F01〜F21と独自IDの登録では、既存APIと同じ列・metadata・時点検証を維持する。
+`--output`がいずれかの`--input`と同じファイルを指す場合は、相対パス表記やリンクが異なっても拒否する。
 入力や結合の失敗は標準エラーへ表示して終了コード1とし、保存処理へ進まない。
 成功時は`datamart saved: N rows`を標準出力へ表示する。
 

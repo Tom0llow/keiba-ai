@@ -20,6 +20,8 @@ def datamart_build(
 ) -> None:
     """Join feature tables and save a validated datamart."""
     try:
+        if output.exists() and any(output.samefile(source) for source in inputs):
+            raise ValueError("output must not overwrite an input feature table")
         names = tuple(definition.name for definition in load_feature_definitions(features_config))
         table = make_datamart(inputs, registered_names=names)
         write_datamart(table, output, registered_names=names)

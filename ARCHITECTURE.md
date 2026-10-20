@@ -271,6 +271,7 @@ parse_json_inputs/input_error_payload/exit_input_errorを所有する。CLI固�
 機能同士を登録のためにimportしない。Typer登録は全てmainが所有する。
 新規datamart buildはrepeatable --input、--output、既定configs/features.tomlの--features-configを受け、
 定義名のみを読み、既存のファイル構築・保存APIへ渡す。失敗はstderr/終了1、成功は行数をstdoutへ出す。
+CLIは出力先がいずれかの入力と同じファイルを指す場合、相対パス表記やリンクが異なっても保存前に拒否する。
 
 ## 進化時の制約
 
