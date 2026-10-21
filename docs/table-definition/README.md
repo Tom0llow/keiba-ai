@@ -1,11 +1,11 @@
 # `data/processed` テーブル定義書
 
-2026-10-11時点の`data/raw/race.db`と`data/processed/CURRENT`が指すsnapshotの実体を照合した物理定義。
+2026-10-20時点の`data/raw/race.db`と`data/processed/CURRENT`が指すsnapshotの実体を照合した物理定義。
 snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,382行、Parquet合計12,721,941,245 byte。
 論理名、業務上の項目意味、品質基準は未承認のため、物理名から推測していない。
 
 設定の現在の配置は`configs/data.toml`である（[ADR-026](../decisions/ADR-026-rename-configs-and-classify-tests.md)）。
-以下の実体照合と実装参照は2026-10-11時点の記録を保持する。
+以下は今回の現物再照合結果。過去の日付付きアセスメント・処理記録は履歴として保持する。
 
 ## データ経路と変換規則
 
@@ -15,14 +15,14 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 | raw | `data/raw/race.db`。39表の取得・アーカイブ・staging表を含む。 |
 | processed | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/`。rawの全ユーザー表を同名で1対1に保存。`CURRENT`が公開対象を選ぶ。 |
 | realtime processed | `data/processed/realtime/<race-id>/`。今回の評価対象外。 |
-| datamart | 現在確認できる実装はない。利用先はTo confirm。 |
+| datamart | `src/make_datamart/`とCLIは実装済み。入力は正規化済み特徴量中間Parquet。今回のraw/CURRENTの39表から直接自動生成する契約ではなく、実データは今回生成していない。 |
 
-`config/data.toml`が入力と出力のルートを定める。`src/main.py preprocess rebuild`は、rawの全ユーザー表を一貫したread-only snapshotからバッチ出力し、全表の検証後に`CURRENT`を切り替える。
+`configs/data.toml`が入力と出力のルートを定める。`src/main.py preprocess rebuild`は、rawの全ユーザー表を一貫したread-only snapshotからバッチ出力し、全表の検証後に`CURRENT`を切り替える。
 列名・列順を維持し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として保存する。空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
 
 ## 表一覧
 
-行数・列数・サイズは2026-10-11のsnapshot Parquetメタデータとファイルから取得した。raw側の主キーは参考情報であり、Parquet側の制約ではない。
+行数・列数・サイズは2026-10-20のsnapshot Parquetメタデータとファイルから取得した。raw側の主キーは参考情報であり、Parquet側の制約ではない。
 
 | 表 | 行数 | 列数 | サイズ (byte) | raw側の宣言主キー |
 | --- | ---: | ---: | ---: | --- |
@@ -77,7 +77,7 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 | NULL許容 | Parquetは全7,979列がNULL許容。rawの明示NOT NULL182列もParquetでは強制しない。 |
 | キー | SQLiteの主キー列は183列。ParquetファイルはPK/FK/CHECK/既定値を強制しない。 |
 | 行数 | raw-to-Parquet処理の表別行数検証とsnapshotメタデータが一致し、合計251,654,382行。 |
-| 値 | 文字列/NULL以外の実値は変換境界で停止する。全セルの独立比較は未実施。 |
+| 値 | 文字列/NULL以外の実値は変換境界で停止する。先頭最大1,000行/表、計35,211行でraw・現行版・試行保存値が一致。全セルの独立比較は未実施。 |
 
 ## 未確定事項
 
@@ -95,6 +95,10 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 ## 根拠と制限
 
 - 実物: `data/raw/race.db`の`sqlite_schema`/`PRAGMA table_info`、`data/processed/CURRENT`、snapshot Parquetのメタデータ。データの値は定義書に掲載しない。
-- 実装・設定: `config/data.toml`、`src/main.py`、`src/data/preprocesser/read_sqlite.py`、`src/data/preprocesser/snapshot.py`。
-- 再作成日: 2026-10-11。既存の平置き`data/processed/*.parquet`はレガシー成果物として上書きせず、今回の定義書はCURRENTのsnapshotを対象とした。
+- 実装・設定: `configs/data.toml`、`src/main.py`、`src/data/loader/read_sqlite.py`、`src/data/preprocessor/sqlite_to_arrow.py`、`src/data/storage/snapshot_builder.py`。
+- 再作成日: 2026-10-20。既存の平置き`data/processed/*.parquet`はレガシー成果物として上書きせず、今回の定義書はCURRENTのsnapshotを対象とした。
 - 業務仕様書、提供元の仕様、所有者への確認は得られていない。業務上の型・意味・必須性・品質合否は定義していない。
+
+## 今回の独立再生成
+
+[アセスメント](../data-assessment/race-db-2026-10-20.md)と[前処理記録](../data-preprocessing/race-parquet-2026-10-20.md)を参照する。新規出力は`output/data-assessment-2026-10-20/full-processed/snapshots/cb9f958f118944a9bf4809791b5e37a8/`、251,654,382行、12,721,941,245 byte。全39表の件数・全列スキーマがrawと一致した。上記39表の個別定義は既存CURRENTの公開版を対象としており、再生成によって既存公開先は切り替わっていない。

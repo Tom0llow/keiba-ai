@@ -1,0 +1,7 @@
+interface:
+  display_name: "Data Assessment"
+  short_description: "Assess data with DMBOK management and quality views"
+  default_prompt: "Use $data-assessment to assess the specified data and record the evidence."
+
+policy:
+  allow_implicit_invocation: true

@@ -2,6 +2,8 @@
 
 [一覧に戻る](README.md)
 
+2026-10-20にrawと現行公開版を再照合。表別の全件数・全列スキーマ、先頭最大1,000行の値を確認した。今回の全量再生成先は[処理記録](../data-preprocessing/race-parquet-2026-10-20.md)を参照する。
+
 ## 表の定義
 
 | 項目 | 定義 |
@@ -10,8 +12,9 @@
 | 論理名 | To confirm |
 | 層・形式 | `processed snapshot`、Parquet |
 | 保存先 | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/NL_HY_BAMEIORIGIN.parquet` |
+| 今回の全量再生成先 | `output/data-assessment-2026-10-20/full-processed/snapshots/cb9f958f118944a9bf4809791b5e37a8/NL_HY_BAMEIORIGIN.parquet` |
 | 直接の入力 | `data/raw/race.db` の `NL_HY_BAMEIORIGIN` 表 |
-| 取得元 | To confirm |
+| 取得元 | 採用した取得境界はJRA-VAN/JV-Link → JVLinkToSQLite（ADR-005）。個別データの原本版・利用条件はTo confirm。 |
 | 技術的な目的 | raw のユーザー表。入力表の各行・各列を同名のParquetへ保存する。 |
 | 業務上の目的・行粒度 | To confirm。物理的には入力1行に出力1行が対応する。 |
 | 利用先 | To confirm。学習・分析・予測での個別利用は未確認。 |
@@ -24,7 +27,7 @@
 | 機微区分・アクセス権 | To confirm |
 | 確認時の行数・列数 | 179,278 行・6 列 |
 | 確認時のファイルサイズ | 7,004,394 byte |
-| 品質確認 | rawとの表名・列名・列順、変換時の行数、Parquetスキーマを照合済み。業務品質基準はTo confirm。 |
+| 品質確認 | 2026-10-20にrawとの全件数・全列スキーマ、先頭1,000行の値を再照合。rawとの全セル独立比較は未実施。業務品質基準はTo confirm。 |
 
 ## 加工と対応関係
 

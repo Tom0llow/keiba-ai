@@ -1,0 +1,7 @@
+interface:
+  display_name: "Table Definition"
+  short_description: "Document existing or planned tables across data layers"
+  default_prompt: "Use $table-definition to document an existing schema or an approved table design."
+
+policy:
+  allow_implicit_invocation: true
