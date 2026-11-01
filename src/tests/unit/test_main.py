@@ -32,6 +32,9 @@ def cli_color_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         ["model"],
         ["model", "features"],
         ["model", "walk-forward"],
+        ["model", "train"],
+        ["model", "predict"],
+        ["model", "prepare-input"],
     ],
 )
 def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[str]) -> None:

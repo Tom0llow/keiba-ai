@@ -38,12 +38,12 @@ tables/parquetへ移した。全旧ファイルの対応と責務は[移行記�
 | 原本からの加工 | `DataPreprocesser`がread-only SQLiteから文字列とNULLを維持してParquetを公開する。`src/make_features/`が明示入力から特徴量別中間Parquetを生成し、`src/make_datamart/`がそれらを結合する。 | JRA-VAN業務コード解釈、受信履歴からの過去集計、原本Parquetから中間入力を作る変換は未実装。 |
 | 公開 | 完全snapshotとrace-local O1/O2 versionを完成後にCURRENTで公開する。失敗時は従前の参照を維持する。 | snapshotの完成は、過去の出馬表・訂正履歴を保持したことを意味しない。 |
 | 読み込み | `DataLoader`は完全表・Arrow batch・RaceKey指定のO1/O2をParquetから読む。 | 各読取でCURRENTを再解決するため、複数表を同一版へ固定する公開APIがない。 |
-| CLI | `src/main.py`で登録する機能別`src/cli/`の取得フラグ、`preprocess rebuild`、`model audit/features/explanatory-variables/walk-forward`、`datamart build`。 | train/predict成果物CLI、nested選定は未実装。特徴量中間テーブルはPython APIで生成し、datamartはPython APIまたは`datamart build`で保存する。 |
-| モデル | ADR-009〜011によりLambdaRank境界、FeatureSchema、時点監査、race-level walk-forward、native成果物形式を決定し、`src/models/`と`src/make_features/`へ実装済み。 | JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物の製品統合は未実装。 |
+| CLI | `src/main.py`で登録する機能別`src/cli/`の取得フラグ、`preprocess rebuild`、`model audit/features/explanatory-variables/calculate-features/walk-forward/train/predict`、`datamart build`。 | nested選定は未実装。特徴量中間テーブルはPython APIで生成し、datamartはPython APIまたは`datamart build`で保存する。 |
+| モデル | ADR-009〜011のLambdaRank・schema・監査・walk-forward・native形式に加え、ADR-027の明示JSONによる学習・予測とHydra/MLflow実験管理を実装。 | JRA-VAN業務コードの解釈、rawからの過去集計、nested walk-forwardは未実装。 |
 
 既存の`src/tests/integration/test_data_pipeline.py`は、原本削除後のParquet読取、変換失敗時のCURRENT維持、対象レースだけのO1/O2公開を検証する。これを学習・推論や時点再現の検証済み証拠とは扱わない。
 
-モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、race-level walk-forward、native成果物の保存/再読込、`src/models/dataset/builder.py`の明示数値入力に対する投影・時点監査、および`src/make_features/`の説明変数別中間テーブルとdatamartの保存・結合である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。現時点のallow-listは事前能力値と履歴オッズであり、血統文字列などの中間列は数値FeatureSchemaへ自動投入しない。曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。JRA-VAN業務コードの解釈、過去集計、nested walk-forward、train/predict成果物、購入判断は未実装であり、上流の決定と別実装単位として残す。
+モデルMVPの実装済み範囲は、`src/models/`のRankingDataset、FeatureSchema、LightGBM学習・推論・評価、race-level walk-forward、native成果物の保存/再読込、`src/models/dataset/builder.py`の明示数値入力に対する投影・時点監査、および`src/make_features/`の説明変数別中間テーブルとdatamartの保存・結合である。ラベル・gain・group・同点規則、欠損値を補完しない契約、承認済み特徴量allow-listと結果由来列の拒否を実装し、単体・統合テストで検証する。旧allow-listの事前能力値と履歴オッズを維持し、ADR-029により全21群の計算から承認済み数値列を明示選択して数値FeatureSchemaへ投影する。計算設定・単位・依存時計を結び付けて再検証し、血統文字列などの中間列は自動投入しない。曖昧な最終オッズ列や新しい特徴量は時点・生成規則を確定してから明示的に追加する。ADR-027により明示JSON入力のtrain/predictとHydra/MLflowによる設定・結果・モデル版管理を追加した。JRA-VAN業務コードの解釈、rawからの過去集計、nested walk-forward、購入判断は未実装であり、上流の決定と別実装単位として残す。
 
 ### 2.2. 要件・仕様・ADRへの追跡
 
@@ -96,6 +96,9 @@ Parquetにはrawの主キー・NOT NULLが強制制約として引き継がれ�
 
 ## 4. 時点契約と利用可能性の監査
 
+ADR-028の計算経路は、正規化された証跡宣言の型・時刻・改訂整合性を検証する。
+外部の原観測と過去受信記録の照合は代行しない。証跡のない現存Parquetでの実データ学習は開始しない。
+
 ### 4.1. 時刻と証跡の候補契約
 
 時刻はタイムゾーン付きで保存し、比較基準を統一する。表示はJSTとする案で、元の時刻文字列とその解釈根拠も保持する。日付だけの項目を便宜上0時に変換して、発走前に利用できた証拠へ置き換えない。
@@ -139,7 +142,7 @@ ADR-025の責務別配置で取得・加工・読込の契約を維持する。�
 | `src/make_features/previous_race_result.py` | 前レース結果の中間テーブル生成。 | 正規化済み入力のみを受け、Parquet保存は共通のテーブル契約へ委譲する。 |
 | `src/make_features/odds_ratio.py` | オッズ比率の中間テーブル生成。 | オッズ履歴不足はNULLで保持し、補完や最終オッズへの暗黙 fallback を行わない。 |
 | `src/make_features/pedigree.py` | 血統識別子の中間テーブル生成。 | 文字列を保持し、未承認のカテゴリ符号化を行わない。 |
-| `src/make_features/recent_performance.py`〜`src/make_features/opponent_pagerank.py` | F01〜F21それぞれの専用Input、Builder、build、normalizeを所有する。 | 共通基底`FeatureBuilder`を利用し、明示値と証跡から`FeatureTableRow`と中間テーブルを生成する。業務式、履歴窓、閾値、JRA-VANコード解釈は承認後に個別実装する。 |
+| `src/make_features/recent_performance.py`〜`src/make_features/opponent_pagerank.py` | F01〜F21それぞれの専用Input、Builder、build、normalize、calculateを所有する。 | 共通基底`FeatureBuilder`を利用し、明示値と証跡から`FeatureTableRow`と中間テーブルを生成する。ADR-028の正規化観測からの純粋計算を個別実装し、履歴窓・閾値は必須Hydra設定とする。rawコード解釈と受信履歴の照合は別境界。 |
 | `src/make_features/explanatory_variables.py` | 個別説明変数の生成と監査をまとめる薄いAPI。 | `FeatureBatchInput`を受け、説明変数ID別の共通中間行と監査を返す。モデルallow-listへ自動投入しない。 |
 | `src/make_features/contracts/`、`validation/`、`generation/`、`catalog/` | 型、監査、共通生成、設定登録を責務別に管理する。 | 共通中間行は`FeatureTableRow`だけ。ID・名前・順序は`configs/features.toml`が所有し、登録・監査・個別生成へ明示する。 |
 | `src/data/loader/read_json.py` | 明示パスからのUTF-8 JSON object読込。 | Typer・特徴量の業務契約へ依存せず、デコード値を保持する。ParquetのDataLoaderとは独立したreader。 |
@@ -187,7 +190,10 @@ Xは承認された特徴量の列allow-listから組み立てる。ラベルと
 
 ## 7. 特徴量の設計候補と加工判断
 
-本節は21特徴量群の**加工設計候補**であり、列の追加、数値化、窓・閾値の採用や製品実装の承認ではない。[現行の列契約](feature-list.md)にあるモデル入力`ability / historical_odds`と、中間列`previous_race_finish_position / odds_ratio / sire / broodmare_sire`は変更しない。以下の候補名を現行allow-listへ追加したり、既存中間テーブルへ勝手に列を増やしたりしない。新しい中間列・モデル列は規則ID、型・単位、時点、欠損方針を承認した別の実装単位で導入する。
+本節の正規化観測からの共通式・21群の計算は[ADR-028](decisions/ADR-028-calculate-all-feature-groups-from-timestamped-observations.md)に基づき実装した。
+実際の入力・設定・列名・検証は[計算手順](feature-calculation.md)と[現行列契約](feature-list.md)を参照する。
+原列の意味・倍率の解釈、時点証拠の復元と実運用の窓・閾値選定は引き続き候補である。
+モデル入力`ability / historical_odds`、元の中間列とmetadataは維持し、計算列をモデルへ自動投入しない。
 
 ### 7.1. 原列と項目別の正規化契約
 
@@ -466,7 +472,7 @@ available_atは群の担当/枠版・全依存能力・固定馬集合の最大�
 | 4 | F13/F09/F20の相手集合・相対化 | 上流値が監査済み、全相手依存のavailable_at、固定集合と部分観測件数、取消後に遡及しない試験。 |
 | 5 | 特徴量別中間Parquet→datamart→承認したFeatureSchema | ADR-012/DEC-13。新規列の契約承認、キー/時点/列衝突/NULL保持。現行allow-listへの自動投入を禁止。 |
 
-F15は下流全群の監査前提、F03は能力相対・同群相対の前提、F12は想定展開の前提となる。全群を一括実装・採用することは受入条件にしない。最初の採用集合と追加群を内側で段階比較し、観測件数・欠損理由・条件別件数・処理時間と共に記録する。
+F15は下流全群の監査前提、F03は能力相対・同群相対の前提、F12は想定展開の前提となる。ADR-028で全群の純粋計算を先に実装した。モデルへの全群一括採用は行わない。最初の採用集合と追加群を内側で段階比較し、観測件数・欠損理由・条件別件数・処理時間と共に記録する。
 
 未承認のパラメータは次の理由・選定手順を持つ候補とし、値を省略した場合の既定値は作らない。候補範囲/比較回数を内側評価の前に固定し、群別の追加効果と費用を同じレース・馬集合・時点で比較する。
 
@@ -580,7 +586,9 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 既存`configs/data.toml`はraw/processed/runtimeパス、`configs/jvlink.toml`は取得profileと対象RaceKeyを所有する。[ADR-006](decisions/ADR-006-config-driven-jvlink-settings-and-typer-cli.md)を維持し、モデル設定に取得XMLや秘密情報を複製しない。
 
-`configs/model.toml`を追加する候補とし、標準ライブラリtomllibで読む。用途別の最小設定は次のとおりとする。
+実装済みの実験設定はADR-027に従い`configs/experiments/`のHydra YAMLで管理する。
+既存TOMLは維持する。以前の`configs/model.toml`候補はこの実装範囲では採用しない。
+以下のraw加工・nested評価に関する追加設定は未実装の候補として残す。
 
 | 設定候補 | 内容 |
 | --- | --- |
@@ -594,7 +602,7 @@ Top3は予測と実際の上位3頭集合の共通頭数を評価し、順序は
 
 ### 11.2. コマンド案と既存との区別
 
-実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、JSON入力を受ける`model audit/features/explanatory-variables/walk-forward`、および`datamart build`である。Parquetの業務列から特徴量を作る変換とtrain/predict成果物コマンドは別実装単位として残す。
+実装済みなのは`uv run python src/main.py --retrieve --mode=historical-basic/historical-odds/latest/realtime`、`uv run python src/main.py preprocess rebuild`、JSON入力を受ける`model audit/features/explanatory-variables/calculate-features/walk-forward/train/predict`、および`datamart build`である。train/predictはADR-027のHydra/MLflow設定と明示数値JSONを使う。Parquetの業務列から特徴量を作る変換は別実装単位として残す。
 
 ADR-025に従い、CLIの組立・登録・起動は`src/main.py`、機能別の引数検証・実行・表示・終了は`src/cli/`が担当する。特徴量・モデル固有の純粋な入力・出力変換は各機能の`serialization/`、汎用JSON出力は`src/data/saver/write_json.py`、汎用読込は`src/data/loader/read_json.py`が担当する。`configs/features.toml`のID・名前・順序を一回読み込み、不変登録を各APIへ渡す。CLIの引数・終了コード・`feature_ids`等JSONキーは維持し、`--features-config`でカタログパスを指定できる。
 
@@ -604,8 +612,8 @@ ADR-025に従い、CLIの組立・登録・起動は`src/main.py`、機能別の
 | `model features` | 承認済みschemaと時刻付きFeatureInput JSON。 | 欠損を保持したFeatureRowsと監査結果。 |
 | `model explanatory-variables` | F01〜F21の各説明変数値、`available_at` / `source_event_at`、`source_scope` / `status`、漏洩確認フラグを含むJSON。 | 共通中間行の説明変数値と時点・欠損・整合性の監査結果。現行の`FeatureSchema`へは投入しない。 |
 | `model walk-forward` | 着順付きFeatureInput JSONとrace-level分割設定。 | 拡大型Walk-forwardのfold境界と指標。 |
-| `model train` | 固定した選定設定、承認済み学習範囲。 | モデル一式と再現manifest。 |
-| `model predict` | モデルID、RaceKey、入力参照、freeze_at。 | score/rankと実行・監査情報。 |
+| `model train` | 着順付きFeatureInput JSON、Hydra設定、末尾holdoutレース数。 | nativeモデル一式、MLflow新version、3指標、holdout予測、実行記録。 |
+| `model predict` | FeatureInput JSON、Hydra設定、MLflow登録名と厳密version、全件/最大freeze日選択。 | score/rankと実行・監査情報。 |
 
 取得フラグとの併用は現行サブコマンドの規則に合わせて拒否する。コマンドは入力・必須決定事項を先に検証し、時点監査に失敗した場合は外部取得や学習を開始しない。終了コードは監査・入力契約違反時に1、JSON出力はUTF-8の標準JSONとし、欠損NaNは`null`へ変換する。
 

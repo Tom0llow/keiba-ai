@@ -7,10 +7,12 @@ from dataclasses import dataclass
 
 import pyarrow as pa
 
+from make_features.contracts.observations import CalculatedValues
 from make_features.contracts.rows import FeatureTableRow
-from make_features.contracts.types import FeatureDefinition, FeatureValuesInput
+from make_features.contracts.types import FeatureDefinition, FeatureScalar, FeatureValuesInput
 from make_features.generation.base import RegisteredFeatureBuilder
 from make_features.generation.normalization import normalize_audited_feature_inputs
+from make_features.generation.observations import CalculationContext, Start
 from make_features.tables.schema import IntermediateFeatureTable
 
 
@@ -43,3 +45,65 @@ def _normalize_pedigree_suitability(
     records: Sequence[FeatureValuesInput],
 ) -> list[FeatureTableRow]:
     return normalize_audited_feature_inputs(records)
+
+
+def calculate_pedigree_suitability(context: CalculationContext, horse_id: str) -> CalculatedValues:
+    """Aggregate normalized parent-linked offspring starts under explicit self policy."""
+    coverage = context.require_coverage("pedigree")
+    context.require_coverage("history")
+    if (
+        not set(context.by_horse) | set(context.source.card.expected_horse_ids)
+        <= context.pedigrees.keys()
+    ):
+        raise ValueError(
+            "pedigree coverage claims complete but normalized horse mappings are absent"
+        )
+    target = context.pedigrees.get(horse_id)
+    values: dict[str, FeatureScalar] = {}
+    reasons: dict[str, str] = {}
+    for parent in ("sire", "broodmare_sire"):
+        identity = getattr(target, parent) if target else None
+        selected: list[Start] = []
+        for race in context.races:
+            for runner in race.runners:
+                pedigree = context.pedigrees.get(runner.horse_id)
+                if (
+                    identity is not None
+                    and pedigree
+                    and getattr(pedigree, parent) == identity
+                    and (context.parameters.pedigree_include_self or runner.horse_id != horse_id)
+                ):
+                    selected.append((race, runner))
+        unknown_parent = identity is None or any(
+            getattr(context.pedigrees[runner.horse_id], parent) is None
+            for _, runner in context.population
+            if context.parameters.pedigree_include_self or runner.horse_id != horse_id
+        )
+        starts = context.matching_starts(context.rolling(selected)) if not unknown_parent else None
+        values.update(
+            {
+                f"{parent}_condition_{key}": value
+                for key, value in context.performance(starts, conditioned=True).items()
+            }
+        )
+        values[f"{parent}_condition_offspring_count"] = (
+            len({s[1].horse_id for s in starts}) if starts is not None else None
+        )
+        reasons.update(
+            {
+                key: "unknown_normalized_parent"
+                if unknown_parent
+                else "unknown_condition"
+                if starts is None
+                else "no_condition_offspring_history"
+                if not starts
+                else "undefined_prior"
+                for key, value in values.items()
+                if key.startswith(parent) and value is None
+            }
+        )
+    return context.result(
+        values,
+        extra=[coverage.evidence, *(p.evidence for p in context.pedigrees.values())],
+        reasons=reasons,
+    )

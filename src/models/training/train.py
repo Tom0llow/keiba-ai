@@ -41,13 +41,21 @@ def train_lambdarank(
     """
     if not dataset.rows:
         raise ValueError("ranking dataset must contain at least one row")
+    ranker_parameters = effective_lambdarank_parameters(parameters)
+    booster = fit_native_ranker(dataset, ranker_parameters)
+    return RankingModel.from_native_booster(booster, dataset.feature_names, dataset.feature_schema)
+
+
+def effective_lambdarank_parameters(
+    parameters: Mapping[str, object] | None = None,
+) -> dict[str, object]:
+    """Return the defaults, overrides and fixed values actually passed to LightGBM."""
     ranker_parameters = dict(_DEFAULT_PARAMETERS)
     if parameters is not None:
         ranker_parameters.update(parameters)
     ranker_parameters["objective"] = OBJECTIVE
     ranker_parameters["label_gain"] = list(LABEL_GAIN)
-    booster = fit_native_ranker(dataset, ranker_parameters)
-    return RankingModel.from_native_booster(booster, dataset.feature_names, dataset.feature_schema)
+    return ranker_parameters
 
 
-__all__ = ["LightGBMUnavailableError", "train_lambdarank"]
+__all__ = ["LightGBMUnavailableError", "effective_lambdarank_parameters", "train_lambdarank"]

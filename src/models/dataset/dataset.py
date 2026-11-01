@@ -38,7 +38,9 @@ class RankingDataset:
         """Validate all row, label, feature, and group invariants."""
         if not self.rows:
             raise ValueError("ranking dataset must contain at least one row")
-        validate_feature_names(self.feature_names)
+        validate_feature_names(
+            self.feature_names, calculation_contract=self.feature_schema.calculation_contract
+        )
         if self.feature_schema.feature_names != self.feature_names:
             raise ValueError("feature_schema names must match feature_names")
         _validate_race_rows(self.rows)
@@ -51,7 +53,7 @@ class RankingDataset:
         if self.groups != expected_groups:
             raise ValueError("groups must match the contiguous race rows")
         for row in self.rows:
-            _validate_features(row.features, self.feature_names)
+            _validate_features(row.features, self.feature_names, self.feature_schema)
 
     @classmethod
     def from_rows(
@@ -76,11 +78,11 @@ class RankingDataset:
         Raises:
             ValueError: If rows, features, or race boundaries are invalid.
         """
-        normalized_rows = tuple(_normalize_ranking_row(row) for row in rows)
+        normalized_rows = tuple(_normalize_ranking_row(row, feature_schema) for row in rows)
         if not normalized_rows:
             raise ValueError("ranking dataset must contain at least one row")
         names = tuple(feature_names)
-        validate_feature_names(names)
+        validate_feature_names(names, calculation_contract=feature_schema.calculation_contract)
         if feature_schema.feature_names != names:
             raise ValueError("feature_schema names must match feature_names")
         allowed = set(names)

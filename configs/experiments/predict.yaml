@@ -1,0 +1,11 @@
+defaults:
+  - mlflow: local
+  - _self_
+
+data:
+  input: ???
+  selection: all
+  date_timezone: Asia/Tokyo
+model:
+  version: ???
+output_dir: output/experiments

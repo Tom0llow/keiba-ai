@@ -106,6 +106,27 @@ class WalkForwardEvaluation:
         return iter(self.fold_results)
 
 
+@dataclass(frozen=True)
+class ChronologicalHoldout:
+    """Hold a strictly later, race-complete test window and its training prefix."""
+
+    train: RankingDataset
+    test: RankingDataset
+
+
+def make_chronological_holdout(dataset: RankingDataset, *, test_races: int) -> ChronologicalHoldout:
+    """Reserve the final races after validating the existing strict chronology."""
+    if isinstance(test_races, bool) or not isinstance(test_races, int) or test_races < 1:
+        raise ValueError("test_races must be a positive integer")
+    races = _race_slices(dataset)
+    if len(races) <= test_races:
+        raise ValueError("holdout requires at least one training race before the test races")
+    return ChronologicalHoldout(
+        train=_dataset_for_races(dataset, races[:-test_races]),
+        test=_dataset_for_races(dataset, races[-test_races:]),
+    )
+
+
 def make_walk_forward_folds(
     dataset: RankingDataset,
     config: WalkForwardConfig,
@@ -116,6 +137,9 @@ def make_walk_forward_folds(
     ``freeze_at``.  The train window expands from the first race, validation
     immediately follows train, and test immediately follows validation.
     """
+    contract = dataset.feature_schema.calculation_contract
+    if contract is not None:
+        raise ValueError("calculated inputs require the label-use audit in model train")
     races = _race_slices(dataset)
     window_size = config.min_train_races + config.validation_races + config.test_races
     if len(races) < window_size:
@@ -255,10 +279,12 @@ def _mean_metrics(metrics: Iterator[RankingMetrics]) -> RankingMetrics:
 
 
 __all__ = [
+    "ChronologicalHoldout",
     "WalkForwardConfig",
     "WalkForwardEvaluation",
     "WalkForwardFold",
     "WalkForwardFoldResult",
     "evaluate_walk_forward",
+    "make_chronological_holdout",
     "make_walk_forward_folds",
 ]

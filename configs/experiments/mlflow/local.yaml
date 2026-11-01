@@ -1,0 +1,4 @@
+database: output/mlflow/mlflow.db
+artifact_root: output/mlflow/artifacts
+experiment_name: ranking
+registered_model_name: lambdarank

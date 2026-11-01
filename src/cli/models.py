@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
+import json
+import os
 from pathlib import Path
-from typing import Annotated
+from typing import Annotated, Literal
 
 import typer
 
@@ -21,6 +23,67 @@ from models.serialization.outputs import (
     model_evaluation_payload,
     model_features_payload,
 )
+
+ExperimentConfigOption = Annotated[
+    Path, typer.Option("--config-dir", help="Hydra YAML configuration directory.")
+]
+ExperimentNameOption = Annotated[
+    str | None, typer.Option("--config-name", help="Hydra configuration name (without .yaml).")
+]
+ExperimentOverrideOption = Annotated[
+    list[str] | None, typer.Option("--override", help="Repeatable Hydra key=value override.")
+]
+
+
+def model_train(
+    config_dir: ExperimentConfigOption = Path("configs/experiments"),
+    config_name: ExperimentNameOption = None,
+    overrides: ExperimentOverrideOption = None,
+) -> None:
+    """Train a chronological holdout experiment and register a native model version."""
+    _configured_experiment("train", config_dir, config_name, overrides)
+
+
+def model_predict(
+    config_dir: ExperimentConfigOption = Path("configs/experiments"),
+    config_name: ExperimentNameOption = None,
+    overrides: ExperimentOverrideOption = None,
+) -> None:
+    """Predict scores and ranks using an exact registered native model version."""
+    _configured_experiment("predict", config_dir, config_name, overrides)
+
+
+def _configured_experiment(
+    action: Literal["train", "predict"],
+    config_dir: Path,
+    config_name: str | None,
+    overrides: list[str] | None,
+) -> None:
+    # Keep Hydra, MLflow and all experiment I/O out of imports and CLI help.
+    os.environ["MLFLOW_DISABLE_TELEMETRY"] = "true"
+    from hydra.errors import HydraException
+    from mlflow.exceptions import MlflowException
+    from omegaconf.errors import OmegaConfBaseException
+
+    from configuration.experiments import load_experiment_config
+    from models.experiments.runner import run_experiment
+
+    try:
+        config = load_experiment_config(
+            config_dir, action=action, config_name=config_name, overrides=overrides or ()
+        )
+        result = run_experiment(config)
+    except (
+        OSError,
+        ValueError,
+        ImportError,
+        HydraException,
+        OmegaConfBaseException,
+        MlflowException,
+    ) as exc:
+        typer.echo(f"model {action} failed: {exc}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(json.dumps(result, ensure_ascii=False, allow_nan=False))
 
 
 def model_audit(

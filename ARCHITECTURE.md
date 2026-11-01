@@ -94,11 +94,11 @@ and literal argv integration remain separate manual installation checks.
 ## 現行の機能境界
 
 ```text
-configs/                        # 既存3 TOMLの値・キーを維持
+configs/                        # 既存3 TOMLとHydra実験YAML
 src/
 ├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # options/json_ioと機能CLI5ファイル
-├─ configuration/               # TOML物理読込・共通パス・DataPaths
+├─ cli/                         # options/json_ioと機能別CLI
+├─ configuration/               # TOML・共通パス・DataPaths・Hydra実験設定
 ├─ data/                        # 共通データ基盤
 │  ├─ loader/                   # JSON・Parquet・SQLite物理読込
 │  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
@@ -107,7 +107,7 @@ src/
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
-├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments
 ├─ domain/                      # 共有RaceKey
 └─ tests/
    ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
@@ -140,8 +140,11 @@ XML生成は`acquisition/setting_xml.py`が型付きprofileから行い、TOML�
 独自の非空IDを受け付ける既存契約も維持し、F01〜F21限定の新制約は導入しない。
 実装と定義の対応はcatalog/registry.pyが所有する。
 
-依存は`機能の設定 → configuration → 標準ライブラリ`の一方向である。
-configurationは業務機能へ依存しない。暗黙の設定読込、singleton、model設定の新設はない。
+共通TOML読込とパス解決の依存は`機能の設定 → configuration → 標準ライブラリ`の一方向である。
+configurationは業務機能へ依存しない。暗黙の設定読込とsingletonは設けない。
+ADR-027により`configuration/experiments.py`が明示呼出し時にHydra Compose APIで
+`configs/experiments/`のYAMLとグループ・上書きを合成する。既存3 TOMLは変更しない。
+実験の相対パスは呼出時cwdから解決し、生成物とMLflowのSQLite/artifactはcwdの`output/`内に限定する。
 
 ## データI/O・変換・スナップショット
 
@@ -219,7 +222,14 @@ make_featuresの個別モジュールは入力型、計算、固有検証・正�
 既存のFeatureBuilder/RegisteredFeatureBuilder、共通FeatureTableRow、F01〜F21の計算と監査順序を維持する。
 catalogは定義と登録、contractsは型、generationは共通手順、serializationは純粋JSON変換、
 validationは漏洩・時点・値・表の監査、tablesはArrow構築と保存metadataの契約を所有する。
-未承認の業務式、JRA-VANコード解釈、履歴集計を追加しない。
+ADR-028で各21ファイルにcalculate APIを追加し、正規化観測からの数値計算を所有する。
+contracts/observations.pyが出典・版・hash・実際の発表/受信/事象時計、完全出馬表/通常結果、
+距離付き調教/ラップ、正規化父/母父、発売集合とオッズ、coverageと必須パラメータを定義する。
+validation/observations.pyが時点・改訂競合・完全集合・測定距離を検証し、generation/observations.pyと
+statistics.pyがas-of版、馬/担当者index、窓・共通統計を提供する。個別計算とgraph fitはcontext内で共有する。
+generation/calculate.pyは既存registryのcalculateを呼び、既存FeatureBatchInput/監査/中間行へ投影する。
+混合依存・欠損理由・診断・パラメータをserialization/observations.pyが純粋JSON変換する。
+原本とのhash/受信証拠照合やrawコードの解釈は追加していない。現存Parquetを厳格時点入力へ変換しない。
 
 元のprevious_race_result/odds_ratio/pedigreeの固定列・metadataを維持する。
 その他の表は明示registered_namesとscalar column_types、保存metadataの整合性を要求する。
@@ -249,25 +259,52 @@ modelsのpackage公開名、学習値・既定値、score/rankだけを返す推
 | evaluation/metrics.py / walk_forward.py | NDCG@3・Top1・Top3、race単位の時系列分割と評価。 |
 | artifacts/native_model.py | native model/JSON metadataの保存・検証・原子的公開・復旧。 |
 | serialization/inputs.py / outputs.py | model専用の純粋JSON契約変換。 |
+| experiments/inputs.py / provenance.py | 明示JSONとhashの読込・監査、最大freeze日選択、ソース・lock・依存の識別記録。 |
+| experiments/tracking.py / runner.py | 明示したローカルMLflow SQLiteのrun/registry/native artifact管理と学習・予測の組立。 |
 
 ラベルは1着3/2着2/3着1/他0、gainは0/1/3/7、groupはrace内行数とする。
-allow-listはability/historical_oddsで、欠損値やNaNを保持し、最終オッズで補完しない。
+旧allow-listはability/historical_oddsを維持する。ADR-029のdataset/calculated.pyが追加の閉じた数値列と計算契約を所有し、
+型・単位・生成規則・順序付き列と意味上設定のhashを再検証する。欠損値やNaNを保持し、最終オッズで補完しない。
 RankingModel.save/loadは利用中のAPIとしてNativeModelArtifactへ委譲し、成果物処理を複製しない。
 既存models/predict_model.pyは元からある互換入口として新rankerの2名を再公開する。
-feature/model serializationはI/O・Typerへ依存せず、モデル設定の外部化は導入しない。
+feature/model serializationはI/O・Typerへ依存しない。
+
+ADR-027の`model train`は末尾の設定レース数をholdoutへ分離し、厳密な時系列順とレース境界を
+検証してtrainだけを学習する。NDCG@3、Top1精度、Top3一致割合とholdout予測、設定、実効学習値、
+入力hash、schema、時点監査、期間・件数、ソース集合hashと依存versionをMLflowへ保存する。
+学習ごとに登録名の新versionを作り、既存native一式と学習時点を示すtraining.jsonを記録する。
+run作成後の失敗はFAILEDとし、各実行は新run IDディレクトリを所有する。
+
+`model predict`は登録名と厳密なversionを指定し、FINISHED学習run、READY版、ローカルsource、
+hashと既存RankingModel.loadでnative一式を検証する。schema一致と学習末時点より後のレースを要求し、
+score/rankだけを返す。latest_dateは入力JSONのfreeze_atを設定timezoneへ変換した最大日付であり、
+OS更新時刻や提供元の最新公開状態を意味しない。rawからの業務加工、入力時刻推定、取得は行わない。
+
+ADR-029のserialization/projection.pyは計算結果から明示した承認数値列だけを投影し、別の完全通常結果を
+計算後に結合する。全計算payloadと出典manifestをprepared JSONへ保持する。実験層はlabel_sourcesを
+検証し、学習結果available_atの最大label_known_throughが最初のholdout freezeより前であることを要求する。
+training.jsonとMLflowへその値と学習結果出典・保証区分を保存し、予測は学習末freezeと結果known時刻の
+両方より後を要求する。旧入力/成果物はラベル時点未保証を明示する。新列もnative形式番号3を維持するが旧コードでは読めない。
 
 ## CLI
 
 main.pyはTyperの組立・登録・起動だけを行う。cli/options.pyとcli/json_io.pyは共通option、JSON境界、構造化エラー、
 各機能CLIは対応機能の引数検証、実行、表示と終了を所有する。下位機能はCLIやTyperをimportしない。
 importとhelpは設定や入力を読まず、取得資源を作らない。
+model prepare-inputはcli/model_projection.pyがHydra必須parameters/selected_columnsと正規化観測を読み、
+全21群の計算と明示列投影、任意の別結果入力結合、新規JSON保存を組み立てる。configuration/model_projection.pyは
+Hydra合成だけを行う。
+model calculate-featuresはcli/make_features.pyが正規化JSONとHydra必須パラメータを読み、
+全21群の値・依存manifestを新規JSONへ保存する。configuration/feature_calculation.pyは
+Hydraの合成だけを行い、特徴量型への変換・監査を下位のserialization/validationへ委譲する。
+入力・既存成果物の上書きは拒否し、保存は共通write_jsonの排他的作成を使う。
 
 既存の取得flags、preprocess/modelコマンド、引数・文言・stdout/stderr・終了コードを維持する。
 main.register_feature_commandsは既存の公開登録APIとしてmainで実装する。
 cli/options.pyがDataConfigOption/JVLinkConfigOption、cli/json_io.pyが公開のread_json_object/
 parse_json_inputs/input_error_payload/exit_input_errorを所有する。CLI固有スキーマは各機能に残す。
 取得・前処理CLIはSnapshotBuilder.from_tomlを直接呼び、他CLIのprivate factoryを参照しない。
-機能CLIはjra_van_retriever.py/preprocessor.py/make_features.py/make_datamart.py/models.pyとし、
+機能CLIはjra_van_retriever.py/preprocessor.py/make_features.py/make_datamart.py/models.py/model_projection.pyとし、
 機能同士を登録のためにimportしない。Typer登録は全てmainが所有する。
 新規datamart buildはrepeatable --input、--output、既定configs/features.tomlの--features-configを受け、
 定義名のみを読み、既存のファイル構築・保存APIへ渡す。失敗はstderr/終了1、成功は行数をstdoutへ出す。
@@ -275,6 +312,18 @@ CLIは出力先がいずれかの入力と同じファイルを指す場合、�
 
 ## 進化時の制約
 
+ADR-030の参考経路では`data/loader/fixed_snapshot.py`がCURRENTを一度だけ固定し、
+`reference_input.py`が必要列・レース・期間・馬IDでArrow読込を限定する。
+`make_features/reference_raw.py`と`reference_snapshot.py`は純粋な原列換算・集合検証・
+通常結果の全レース保留・KettoNum対応・前日調教・父/母父・同期O1/O2を所有する。
+`ReferenceEvidence`はnullable実発表時計、null受信時計、宣言利用境界と根拠を区別する。
+旧SourceEvidenceと厳格入口は維持し、参考専用入口が同じ21群計算を共有する。
+`models/serialization/reference.py`は固定原投影から再計算し、出典・依存集合catalogで重複を抑える。
+`snapshot_reference_21_groups_v1`の設定と参考規則をschemaへ固定し、結果利用境界をrunnerへ接続する。
+Hydra設定は`configs/reference_input/`、組立CLIは`prepare-reference-input`である。
+MLflowへprepared一式と参考保証を保存し、最新予測も厳密版・schema・ラベル利用境界を検証する。
+これは固定snapshot内の採用母集団についての参考実験で、過去の受信・訂正時計の証明ではない。
+
 import時のI/O、循環依存、不要なFacade、将来用の空設定・依存は追加しない。
 公開API・保存形式・セキュリティ境界の変更は影響を整理し、長期判断をADRに残す。
-実装されていない履歴集計・nested選定・train/predict CLI・購入判断を現行機能としない。
+実装されていないrawからの履歴集計・nested選定・購入判断を現行機能としない。

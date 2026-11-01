@@ -10,10 +10,10 @@ data loading, feature generation, and ranking-model evaluation. Its current
 source boundary is:
 
 ```text
-configs/                        # 既存3 TOMLの値・キーを維持
+configs/                        # 既存3 TOMLとHydra実験YAML
 src/
 ├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # options/json_ioと機能CLI5ファイル
+├─ cli/                         # options/json_ioと機能別CLI
 ├─ configuration/               # TOML物理読込・共通パス・DataPaths
 ├─ data/                        # 共通データ基盤
 │  ├─ loader/                   # JSON・Parquet・SQLite物理読込
@@ -64,6 +64,14 @@ coherent responsibility and have a name that describes that responsibility.
   clients deep in the package.
 - Common TOML reading and relative/user path resolution belong to `configuration/`.
   Feature configuration uses this foundation; the foundation never imports features.
+- Hydra experiment composition belongs to `configuration/experiments.py`; explicit
+  experiment orchestration and local MLflow tracking/registry belong to
+  `models/experiments/` under ADR-027. Keep existing native model serialization and
+  training rules independent of Hydra, MLflow, raw acquisition and CLI.
+- ADR-029 places the closed calculated numeric resolver and semantic contract in models/dataset;
+  pure projection and separate result-label joining belong to models/serialization/projection.py.
+  The experiment layer validates label availability before holdout and prediction boundaries.
+  configuration/model_projection.py composes mandatory Hydra settings without business imports.
 - Physical JSON/Parquet/SQLite I/O belongs to `data/loader/` and `data/saver/`.
   Feature/model contract conversion stays pure in each `serialization/` package.
 - Keep pure SQLite-to-Arrow conversion in `data/preprocessor/`; storage layout,

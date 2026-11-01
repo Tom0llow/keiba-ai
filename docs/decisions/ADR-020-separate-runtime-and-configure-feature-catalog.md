@@ -6,6 +6,8 @@
 - Supersedes: ADR-019（配置・登録・CLI境界の判断）
 - Superseded by: ADR-021（共有パス・レースキーの配置判断のみ）、ADR-022（CLI配置判断のみ）、ADR-026（ルート設定ファイルの配置のみ）
 
+- Partial supersession: [ADR-028](ADR-028-calculate-all-feature-groups-from-timestamped-observations.md)（外部計算済み値のみという制限。既存build・監査・保存契約は維持）
+
 ## Context
 
 ユーザーは取得・前処理・読込・CLIの責務分離、特徴量共通処理の分類、

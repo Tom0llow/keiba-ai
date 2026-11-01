@@ -1,0 +1,75 @@
+defaults:
+  - prepare
+  - _self_
+# Explicit initial experiment values; these are not optimized production settings.
+include_labels: true
+calculation_settings:
+  rule_id: jv_reference_trial_v1
+  history_start: '2026-08-01'
+  lag_count: 4
+  count_window: 5
+  days_window: 30
+  half_life_days: 30.0
+  condition_keys: [surface, distance_m]
+  condition_window_order: filter_then_window
+  smoothing_alpha: 2.0
+  minimum_count: 1
+  partial_rank: true
+  tie_policy: competition
+  metric: elapsed_sec
+  metric_direction: lower
+  class_order: [unmapped_class_no_ordering_applied]
+  style_window: 3
+  style_minimum_count: 1
+  leader_threshold: 0.25
+  front_threshold: 0.5
+  pedigree_include_self: false
+  workout_distance_m: 800
+  workout_section_distance_m: 200
+  market_anchor_seconds: 600
+  market_max_age_seconds: 600
+  market_version_tolerance_seconds: 60
+  graph_days: 30
+  graph_half_life_days: null
+  graph_edge_rule: all_pairs
+  graph_base_weight: inverse_field_minus_one
+  graph_damping: 0.85
+  graph_tolerance: 0.00000001
+  graph_max_iterations: 200
+reference_rules:
+  source_rule_id: jv_data_4901_reference_v1
+  schedule_basis: assumed_stored_schedule
+  reception_basis: assumed_received_at_publication
+  card_basis: stored_pre_race_fields_revision_unverified
+  pedigree_basis: stored_parent_identifiers_revision_unverified
+  workout_basis: previous_day_sessions_assumed_available
+  parameter_basis: retrospective_fixed_configuration
+  coverage_scope: complete_within_fixed_snapshot_selected_normal_population
+  exception_policy: hold_whole_race_with_reason
+  class_policy: unknown_class_preserve_null
+  freeze_offset_seconds: 300
+  minimum_supported_year: 2005
+  venues: ['01', '02', '03', '04', '05', '06', '07', '08', '09', '10']
+  result_delay_days: 7
+selected_columns:
+  - recent_performance__past_finish_lag1
+  - past_racing_ability__past_velocity_mps_lag1
+  - condition_adjusted_ability__past_ability_time_mean
+  - recent_stability__past_elapsed_sec_mean
+  - condition_suitability__horse_condition_smoothed_win_rate
+  - rest_and_condition_change__days_since_previous_start
+  - jockey_performance__jockey_smoothed_win_rate
+  - trainer_performance__trainer_smoothed_win_rate
+  - within_race_relative__relative_elapsed_sec_rank
+  - basic_conditions_and_weight__race_distance_m
+  - jockey_combination__horse_jockey_win_rate
+  - running_style_and_position__past_corner4_relative_lag1
+  - expected_race_development__opponent_front_share
+  - pedigree_suitability__sire_condition_win_rate
+  - history_volume_and_missingness__past_observed_start_count
+  - past_body_weight__past_weight_lag1_kg
+  - hill_and_wood_workouts__hc_last_clock_sec
+  - past_lap_and_running_style__past_pace_velocity_gap_mps_lag1
+  - market_characteristics__market_win_odds
+  - same_gate_and_trainer_relative__same_gate_ability_diff
+  - opponent_pagerank__opponent_graph_score
