@@ -51,7 +51,9 @@ class RankingModel:
 
     def __post_init__(self) -> None:
         """Validate the fixed model contract."""
-        validate_feature_names(self.feature_names)
+        validate_feature_names(
+            self.feature_names, calculation_contract=self.feature_schema.calculation_contract
+        )
         if self.feature_schema.feature_names != self.feature_names:
             raise ValueError("feature_schema names must match feature_names")
         if self.objective != OBJECTIVE:
@@ -83,7 +85,9 @@ class RankingModel:
         schema = feature_schema or self.feature_schema
         if schema != self.feature_schema:
             raise ValueError("feature_schema does not match the trained model")
-        normalized = validate_feature_rows(rows, self.feature_names)
+        normalized = validate_feature_rows(
+            rows, self.feature_names, feature_schema=self.feature_schema
+        )
         return self._predict_scores(normalized)
 
     def _predict_scores(self, rows: Sequence[FeatureRow]) -> tuple[float, ...]:
@@ -103,7 +107,9 @@ class RankingModel:
         feature_schema: FeatureSchema | None = None,
     ) -> tuple[RankingPrediction, ...]:
         """Return only race-local finite scores and ranks for all input rows."""
-        normalized = validate_feature_rows(rows, self.feature_names)
+        normalized = validate_feature_rows(
+            rows, self.feature_names, feature_schema=self.feature_schema
+        )
         if feature_schema is not None and feature_schema != self.feature_schema:
             raise ValueError("feature_schema does not match the trained model")
         scores = self._predict_scores(normalized)

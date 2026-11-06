@@ -9,6 +9,7 @@ from types import MappingProxyType
 from models.dataset.rows import FeatureRow, FeatureValue, RankingRow
 from models.dataset.schema import (
     _APPROVED_FEATURE_SPECS,
+    FeatureSchema,
     _is_reserved_result_feature_name,
     validate_feature_names,
 )
@@ -21,13 +22,19 @@ from models.ranking.rules import (
 def validate_feature_rows(
     rows: Sequence[FeatureRow],
     feature_names: Sequence[str],
+    *,
+    feature_schema: FeatureSchema | None = None,
 ) -> tuple[FeatureRow, ...]:
     """Validate and freeze feature rows against a trained feature schema."""
-    normalized_rows = tuple(_normalize_feature_row(row) for row in rows)
+    normalized_rows = tuple(_normalize_feature_row(row, feature_schema) for row in rows)
     if not normalized_rows:
         raise ValueError("prediction requires at least one row")
     names = tuple(feature_names)
-    validate_feature_names(names)
+    validate_feature_names(
+        names, calculation_contract=feature_schema.calculation_contract if feature_schema else None
+    )
+    if feature_schema is not None and names != feature_schema.feature_names:
+        raise ValueError("feature_schema names must match feature_names")
     allowed = set(names)
     unexpected = sorted(
         {name for row in normalized_rows for name in row.features if name not in allowed}
@@ -50,11 +57,13 @@ def label_for_finish_position(finish_position: int) -> int:
     return 0
 
 
-def _normalize_ranking_row(row: RankingRow) -> RankingRow:
+def _normalize_ranking_row(
+    row: RankingRow, feature_schema: FeatureSchema | None = None
+) -> RankingRow:
     if not isinstance(row, RankingRow):
         raise TypeError("rows must contain RankingRow values")
     _validate_identity(row.race_id, row.horse_id)
-    _validate_features(row.features, None)
+    _validate_features(row.features, None, feature_schema)
     return RankingRow(
         race_id=row.race_id,
         horse_id=row.horse_id,
@@ -64,11 +73,13 @@ def _normalize_ranking_row(row: RankingRow) -> RankingRow:
     )
 
 
-def _normalize_feature_row(row: FeatureRow) -> FeatureRow:
+def _normalize_feature_row(
+    row: FeatureRow, feature_schema: FeatureSchema | None = None
+) -> FeatureRow:
     if not isinstance(row, FeatureRow):
         raise TypeError("rows must contain FeatureRow values")
     _validate_identity(row.race_id, row.horse_id)
-    _validate_features(row.features, None)
+    _validate_features(row.features, None, feature_schema)
     return FeatureRow(
         race_id=row.race_id,
         horse_id=row.horse_id,
@@ -88,6 +99,7 @@ def _validate_identity(race_id: str, horse_id: str) -> None:
 def _validate_features(
     features: Mapping[str, FeatureValue],
     feature_names: Sequence[str] | None,
+    feature_schema: FeatureSchema | None = None,
 ) -> None:
     if not isinstance(features, Mapping):
         raise TypeError("features must be a mapping")
@@ -98,9 +110,14 @@ def _validate_features(
     for name, value in features.items():
         if not isinstance(name, str) or not name:
             raise ValueError("feature names must be non-empty strings")
-        if _is_reserved_result_feature_name(name):
+        if feature_schema is not None and feature_schema.calculation_contract is not None:
+            if name not in feature_schema.feature_names:
+                raise ValueError(
+                    f"feature name is outside the verified calculation schema: {name!r}"
+                )
+        elif _is_reserved_result_feature_name(name):
             raise ValueError(f"result-derived feature name is reserved: {name!r}")
-        if name not in _APPROVED_FEATURE_SPECS:
+        elif name not in _APPROVED_FEATURE_SPECS:
             raise ValueError(f"feature name is outside the approved allow-list: {name!r}")
         if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
             raise TypeError(f"feature {name!r} must be numeric or None")

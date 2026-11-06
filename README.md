@@ -10,11 +10,11 @@ retrieval boundary through JVLinkToSQLite, versioned Parquet publication, and a
 Parquet-only loader boundary. It remains a non-distributed Python project.
 
 ```text
-configs/                        # 既存3 TOMLの値・キーを維持
+configs/                        # 既存3 TOMLとHydra実験YAML
 src/
 ├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # options/json_ioと機能CLI5ファイル
-├─ configuration/               # TOML物理読込・共通パス・DataPaths
+├─ cli/                         # options/json_ioと機能別CLI
+├─ configuration/               # TOML・共通パス・DataPaths・Hydra実験設定
 ├─ data/                        # 共通データ基盤
 │  ├─ loader/                   # JSON・Parquet・SQLite物理読込
 │  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
@@ -23,7 +23,7 @@ src/
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
-├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments
 ├─ domain/                      # 共有RaceKey
 └─ tests/
    ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
@@ -267,8 +267,9 @@ Realtimeもレース別Parquet版を公開してから`read_parquet.py`で読む
 
 The agreed product requirements are in `docs/requirements.md`, and decided
 behavior is in `docs/specification.md`. Design proposals and open questions
-remain in `docs/discussions/`; no prediction or betting model pipeline has been
-implemented yet.
+remain in `docs/discussions/`. Explicit, audited numeric inputs support LambdaRank
+training and prediction; raw-to-feature business calculations and betting decisions
+remain separate work.
 
 The detailed LambdaRank MVP implementation proposal is in
 [implementation design](docs/implementation-design.md).
@@ -407,4 +408,79 @@ F01〜F21と独自IDの登録では、既存APIと同じ列・metadata・時点�
 
 共通設定の物理読込は`configuration.loader.load_toml`、パス解決は
 `configuration.path_resolver.resolve_path`が所有する。機能設定がこの基盤へ依存し、
-基盤から取得・特徴量・モデルへの依存はない。モデル設定の外部化は今回導入しない。
+基盤から取得・特徴量・モデルへの依存はない。
+
+## HydraとMLflowによる学習・予測
+
+リポジトリのルートから実行する。入力は既存`model audit/features`と同じ明示JSONであり、
+`schema_id`、順序付き`feature_names`、各馬の`race_id`/`horse_id`/timezone付き`freeze_at`、
+`features`、特徴量別`available_at`を含む。学習入力には全行の`finish_position`も必要となる。
+旧入力の数値allow-listは`ability`と`historical_odds`を維持する。計算した21群の数値列を使う場合は、
+[model prepare-input](docs/model-input-preparation.md)で明示選択と計算契約・ラベル出典を持つ入力を作る。
+欠損は保持し、最終オッズによる補完や、raw Parquetからの能力値・利用可能時刻の推測は行わない。
+既存の入力検証・保存と、新しい正規化観測からの計算・モデル投影は別の入口である。
+
+```powershell
+uv run python src/main.py model train --override "data.input=output/inputs/training.json" --override "split.test_races=10" --override "model.parameters.n_estimators=50"
+uv run python src/main.py model predict --override "data.input=output/inputs/prediction.json" --override "model.version=1" --override "data.selection=latest_date"
+uv run mlflow ui --backend-store-uri sqlite:///output/mlflow/mlflow.db --host 127.0.0.1
+```
+
+`configs/experiments/train.yaml`と`predict.yaml`をHydra Compose APIで合成する。
+`model/lambdarank.yaml`、`mlflow/local.yaml`の既定グループと反復`--override`で、
+学習パラメータ、入力、holdoutレース数、出力、MLflowの実験名・登録名・保存先を管理する。
+独自YAMLは`--config-dir`と`--config-name`で選ぶ。相対パスは実行時の作業ディレクトリから解決し、
+出力・MLflowデータベース・artifactはその`output/`内に限定する。既存3 TOMLは変更しない。
+
+学習は共通freeze_atを持つレースを厳密な時間順で受け取り、末尾の設定レース数をholdoutにする。
+それより前の全レースだけで学習し、holdoutのNDCG@3・Top1精度・Top3一致割合とscore/rankを記録する。
+各学習はMLflow登録名の新versionを作成する。予測は`mlflow.registered_model_name`と正整数の
+`model.version`を固定し、schema、native成果物、学習末時点より後であることを検証する。
+予測値はscore/rankであり、確率や購入案は生成しない。
+
+`latest_date`は、入力JSON内のfreeze_atを`data.date_timezone`（既定Asia/Tokyo）へ変換した
+最大日付の全レースを選ぶ。ローカル取得済みの最新日、提供元の最新公開日、未来のライブ予測とは
+区別する。OSのファイル更新時刻は使わず、データの自動取得もしない。古い入力ならその入力の最新日となる。
+
+各runは`output/experiments/<run_id>/`へ解決済み設定、監査と分割の件数・期間、予測、実効学習値、
+入力hash、ソースhash一覧、uv.lock hash、依存versionを保存し、MLflow artifactへ記録する。
+既定のSQLiteは`output/mlflow/mlflow.db`、artifactは`output/mlflow/artifacts`。
+学習のnative一式は既存のmodel/metadata/ready形式を維持し、版に学習時点とhashを紐付ける。
+失敗runはFAILEDとなり、入力と既存出力は置き換えない。SQLiteとartifactは一緒に保全する。
+合成入力を使う統合テストの成功は、実データの学習結果として扱わない。
+設計の理由と境界は[ADR-027](docs/decisions/ADR-027-manage-ranking-experiments-with-hydra-and-mlflow.md)を参照する。
+
+## 正規化観測から全21群を計算する
+
+既存21ファイルの`calculate_*`は、証跡付き正規化観測から履歴・条件補正・調教・市場・
+対戦グラフ等を数値計算する。既存の計算済み値を受ける`build_*`と旧モデルallow-listは維持する。
+
+```powershell
+uv run python src/main.py model calculate-features --input output/inputs/normalized.json --output output/features/calculated.json --config-dir output/feature-config
+```
+
+`output/feature-config/calculate.yaml`には`configs/feature_calculation/calculate.yaml`の
+全必須パラメータ（`???`）を、選定証跡と共に明示する。運用値の既定採用はない。
+入力は`schema_version=1 / observations`を持つJSONであり、原観測の出典・版・hashと
+実際の発表/受信/事象時計、完全な固定出馬表・過去通常結果、coverageを要求する。
+対象と同日の履歴や当該結果は利用せず、各過去出走の基準もその出走より過去だけで求める。
+出力は値・既存監査・全依存manifest・欠損理由を持つ新規JSONで、既存出力を上書きしない。
+
+[入力・設定・時点・列契約](docs/feature-calculation.md)を参照する。
+JSONの証跡宣言を検証できても、外部の原本・過去受信履歴を照合したことにはならない。
+現存raw/Parquetの証跡不足を時刻の仮置きで補わず、厳格な実データ学習・最新予測は
+必要な証拠がそろうまで開始しない。モデル列への自動写像・自動採用も行わない。
+
+学習へ接続する場合は[計算結果のモデル入力準備](docs/model-input-preparation.md)に従う。
+計算列の選定と意味上設定をHydraで明示し、計算契約のhashと学習ラベルの受信時刻を検証する。
+
+## 現存Parquetから全21群で参考学習する
+
+`model prepare-reference-input`は固定snapshotと明示manifestから全21群を計算する。
+ユーザーが選択した保存発走時刻・発表時受信の仮定、過去訂正時点未検証を実測時計と区別し、
+通常結果以外はレース全体を理由付きで保留する。対象の最終結果・馬場・馬体重・オッズを
+特徴量へ流用せず、欠損も保持する。既存の厳格経路は引き続き実測証跡を要求する。
+
+[設定、manifest例、加工影響、準備・MLflow学習・厳密版予測の手順](docs/experiments/reference-real-input.md)
+と[ADR-030](docs/decisions/ADR-030-connect-pinned-snapshots-with-explicit-reference-assumptions.md)を参照する。
+`configs/reference_input/trial.yaml`は全21群から各1列を選ぶ明示的な初期実験設定で、最適値ではない。

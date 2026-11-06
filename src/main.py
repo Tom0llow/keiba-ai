@@ -4,9 +4,12 @@ import typer
 
 from cli.jra_van_retriever import main
 from cli.make_datamart import datamart_build
-from cli.make_features import model_explanatory_variables
-from cli.models import model_audit, model_features, model_walk_forward
+from cli.make_features import model_calculate_features, model_explanatory_variables
+from cli.model_projection import model_prepare_input
+from cli.models import model_audit, model_features, model_predict, model_train, model_walk_forward
 from cli.preprocessor import preprocess_rebuild
+from cli.real_market import model_prepare_real_input
+from cli.reference_input import model_prepare_reference_input
 
 
 def register_feature_commands(model_app: typer.Typer) -> None:
@@ -14,6 +17,7 @@ def register_feature_commands(model_app: typer.Typer) -> None:
     model_app.command("audit")(model_audit)
     model_app.command("features")(model_features)
     model_app.command("explanatory-variables")(model_explanatory_variables)
+    model_app.command("calculate-features")(model_calculate_features)
 
 
 app = typer.Typer(no_args_is_help=True)
@@ -29,6 +33,11 @@ app.callback(invoke_without_command=True)(main)
 preprocess_app.command("rebuild")(preprocess_rebuild)
 model_app.command("walk-forward")(model_walk_forward)
 register_feature_commands(model_app)
+model_app.command("train")(model_train)
+model_app.command("predict")(model_predict)
+model_app.command("prepare-input")(model_prepare_input)
+model_app.command("prepare-real-input")(model_prepare_real_input)
+model_app.command("prepare-reference-input")(model_prepare_reference_input)
 datamart_app.command("build")(datamart_build)
 
 if __name__ == "__main__":

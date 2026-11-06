@@ -2,69 +2,119 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
 
 from make_features.basic_conditions_and_weight import (
     BasicConditionsAndWeightBuilder,
     BasicConditionsAndWeightInput,
+    calculate_basic_conditions_and_weight,
 )
 from make_features.condition_adjusted_ability import (
     ConditionAdjustedAbilityBuilder,
     ConditionAdjustedAbilityInput,
+    calculate_condition_adjusted_ability,
 )
 from make_features.condition_suitability import (
     ConditionSuitabilityBuilder,
     ConditionSuitabilityInput,
+    calculate_condition_suitability,
 )
+from make_features.contracts.observations import CalculatedValues
 from make_features.contracts.types import FeatureDefinition, FeatureValuesInput
 from make_features.expected_race_development import (
     ExpectedRaceDevelopmentBuilder,
     ExpectedRaceDevelopmentInput,
+    calculate_expected_race_development,
 )
 from make_features.generation.base import RegisteredFeatureBuilder
+from make_features.generation.observations import CalculationContext
 from make_features.hill_and_wood_workouts import (
     HillAndWoodWorkoutsBuilder,
     HillAndWoodWorkoutsInput,
+    calculate_hill_and_wood_workouts,
 )
 from make_features.history_volume_and_missingness import (
     HistoryVolumeAndMissingnessBuilder,
     HistoryVolumeAndMissingnessInput,
+    calculate_history_volume_and_missingness,
 )
-from make_features.jockey_combination import JockeyCombinationBuilder, JockeyCombinationInput
-from make_features.jockey_performance import JockeyPerformanceBuilder, JockeyPerformanceInput
+from make_features.jockey_combination import (
+    JockeyCombinationBuilder,
+    JockeyCombinationInput,
+    calculate_jockey_combination,
+)
+from make_features.jockey_performance import (
+    JockeyPerformanceBuilder,
+    JockeyPerformanceInput,
+    calculate_jockey_performance,
+)
 from make_features.market_characteristics import (
     MarketCharacteristicsBuilder,
     MarketCharacteristicsInput,
+    calculate_market_characteristics,
 )
-from make_features.opponent_pagerank import OpponentPagerankBuilder, OpponentPagerankInput
-from make_features.past_body_weight import PastBodyWeightBuilder, PastBodyWeightInput
+from make_features.opponent_pagerank import (
+    OpponentPagerankBuilder,
+    OpponentPagerankInput,
+    calculate_opponent_pagerank,
+)
+from make_features.past_body_weight import (
+    PastBodyWeightBuilder,
+    PastBodyWeightInput,
+    calculate_past_body_weight,
+)
 from make_features.past_lap_and_running_style import (
     PastLapAndRunningStyleBuilder,
     PastLapAndRunningStyleInput,
+    calculate_past_lap_and_running_style,
 )
-from make_features.past_racing_ability import PastRacingAbilityBuilder, PastRacingAbilityInput
+from make_features.past_racing_ability import (
+    PastRacingAbilityBuilder,
+    PastRacingAbilityInput,
+    calculate_past_racing_ability,
+)
 from make_features.pedigree_suitability import (
     PedigreeSuitabilityBuilder,
     PedigreeSuitabilityInput,
+    calculate_pedigree_suitability,
 )
-from make_features.recent_performance import RecentPerformanceBuilder, RecentPerformanceInput
-from make_features.recent_stability import RecentStabilityBuilder, RecentStabilityInput
+from make_features.recent_performance import (
+    RecentPerformanceBuilder,
+    RecentPerformanceInput,
+    calculate_recent_performance,
+)
+from make_features.recent_stability import (
+    RecentStabilityBuilder,
+    RecentStabilityInput,
+    calculate_recent_stability,
+)
 from make_features.rest_and_condition_change import (
     RestAndConditionChangeBuilder,
     RestAndConditionChangeInput,
+    calculate_rest_and_condition_change,
 )
 from make_features.running_style_and_position import (
     RunningStyleAndPositionBuilder,
     RunningStyleAndPositionInput,
+    calculate_running_style_and_position,
 )
 from make_features.same_gate_and_trainer_relative import (
     SameGateAndTrainerRelativeBuilder,
     SameGateAndTrainerRelativeInput,
+    calculate_same_gate_and_trainer_relative,
 )
-from make_features.trainer_performance import TrainerPerformanceBuilder, TrainerPerformanceInput
-from make_features.within_race_relative import WithinRaceRelativeBuilder, WithinRaceRelativeInput
+from make_features.trainer_performance import (
+    TrainerPerformanceBuilder,
+    TrainerPerformanceInput,
+    calculate_trainer_performance,
+)
+from make_features.within_race_relative import (
+    WithinRaceRelativeBuilder,
+    WithinRaceRelativeInput,
+    calculate_within_race_relative,
+)
 
 
 @dataclass(frozen=True, slots=True)
@@ -74,6 +124,7 @@ class FeatureRegistration:
     definition: FeatureDefinition
     builder_type: type[RegisteredFeatureBuilder]
     input_type: type[FeatureValuesInput]
+    calculate: Callable[[CalculationContext, str], CalculatedValues]
 
 
 @dataclass(frozen=True, slots=True)
@@ -133,44 +184,118 @@ def create_feature_registry(definitions: Sequence[FeatureDefinition]) -> Feature
 
 
 _IMPLEMENTATIONS = MappingProxyType[
-    str, tuple[type[RegisteredFeatureBuilder], type[FeatureValuesInput]]
+    str,
+    tuple[
+        type[RegisteredFeatureBuilder],
+        type[FeatureValuesInput],
+        Callable[[CalculationContext, str], CalculatedValues],
+    ],
 ](
     {
         "basic_conditions_and_weight": (
             BasicConditionsAndWeightBuilder,
             BasicConditionsAndWeightInput,
+            calculate_basic_conditions_and_weight,
         ),
         "condition_adjusted_ability": (
             ConditionAdjustedAbilityBuilder,
             ConditionAdjustedAbilityInput,
+            calculate_condition_adjusted_ability,
         ),
-        "condition_suitability": (ConditionSuitabilityBuilder, ConditionSuitabilityInput),
-        "expected_race_development": (ExpectedRaceDevelopmentBuilder, ExpectedRaceDevelopmentInput),
-        "hill_and_wood_workouts": (HillAndWoodWorkoutsBuilder, HillAndWoodWorkoutsInput),
+        "condition_suitability": (
+            ConditionSuitabilityBuilder,
+            ConditionSuitabilityInput,
+            calculate_condition_suitability,
+        ),
+        "expected_race_development": (
+            ExpectedRaceDevelopmentBuilder,
+            ExpectedRaceDevelopmentInput,
+            calculate_expected_race_development,
+        ),
+        "hill_and_wood_workouts": (
+            HillAndWoodWorkoutsBuilder,
+            HillAndWoodWorkoutsInput,
+            calculate_hill_and_wood_workouts,
+        ),
         "history_volume_and_missingness": (
             HistoryVolumeAndMissingnessBuilder,
             HistoryVolumeAndMissingnessInput,
+            calculate_history_volume_and_missingness,
         ),
-        "jockey_combination": (JockeyCombinationBuilder, JockeyCombinationInput),
-        "jockey_performance": (JockeyPerformanceBuilder, JockeyPerformanceInput),
-        "market_characteristics": (MarketCharacteristicsBuilder, MarketCharacteristicsInput),
-        "opponent_pagerank": (OpponentPagerankBuilder, OpponentPagerankInput),
-        "past_body_weight": (PastBodyWeightBuilder, PastBodyWeightInput),
-        "past_lap_and_running_style": (PastLapAndRunningStyleBuilder, PastLapAndRunningStyleInput),
-        "past_racing_ability": (PastRacingAbilityBuilder, PastRacingAbilityInput),
-        "pedigree_suitability": (PedigreeSuitabilityBuilder, PedigreeSuitabilityInput),
-        "recent_performance": (RecentPerformanceBuilder, RecentPerformanceInput),
-        "recent_stability": (RecentStabilityBuilder, RecentStabilityInput),
-        "rest_and_condition_change": (RestAndConditionChangeBuilder, RestAndConditionChangeInput),
+        "jockey_combination": (
+            JockeyCombinationBuilder,
+            JockeyCombinationInput,
+            calculate_jockey_combination,
+        ),
+        "jockey_performance": (
+            JockeyPerformanceBuilder,
+            JockeyPerformanceInput,
+            calculate_jockey_performance,
+        ),
+        "market_characteristics": (
+            MarketCharacteristicsBuilder,
+            MarketCharacteristicsInput,
+            calculate_market_characteristics,
+        ),
+        "opponent_pagerank": (
+            OpponentPagerankBuilder,
+            OpponentPagerankInput,
+            calculate_opponent_pagerank,
+        ),
+        "past_body_weight": (
+            PastBodyWeightBuilder,
+            PastBodyWeightInput,
+            calculate_past_body_weight,
+        ),
+        "past_lap_and_running_style": (
+            PastLapAndRunningStyleBuilder,
+            PastLapAndRunningStyleInput,
+            calculate_past_lap_and_running_style,
+        ),
+        "past_racing_ability": (
+            PastRacingAbilityBuilder,
+            PastRacingAbilityInput,
+            calculate_past_racing_ability,
+        ),
+        "pedigree_suitability": (
+            PedigreeSuitabilityBuilder,
+            PedigreeSuitabilityInput,
+            calculate_pedigree_suitability,
+        ),
+        "recent_performance": (
+            RecentPerformanceBuilder,
+            RecentPerformanceInput,
+            calculate_recent_performance,
+        ),
+        "recent_stability": (
+            RecentStabilityBuilder,
+            RecentStabilityInput,
+            calculate_recent_stability,
+        ),
+        "rest_and_condition_change": (
+            RestAndConditionChangeBuilder,
+            RestAndConditionChangeInput,
+            calculate_rest_and_condition_change,
+        ),
         "running_style_and_position": (
             RunningStyleAndPositionBuilder,
             RunningStyleAndPositionInput,
+            calculate_running_style_and_position,
         ),
         "same_gate_and_trainer_relative": (
             SameGateAndTrainerRelativeBuilder,
             SameGateAndTrainerRelativeInput,
+            calculate_same_gate_and_trainer_relative,
         ),
-        "trainer_performance": (TrainerPerformanceBuilder, TrainerPerformanceInput),
-        "within_race_relative": (WithinRaceRelativeBuilder, WithinRaceRelativeInput),
+        "trainer_performance": (
+            TrainerPerformanceBuilder,
+            TrainerPerformanceInput,
+            calculate_trainer_performance,
+        ),
+        "within_race_relative": (
+            WithinRaceRelativeBuilder,
+            WithinRaceRelativeInput,
+            calculate_within_race_relative,
+        ),
     }
 )

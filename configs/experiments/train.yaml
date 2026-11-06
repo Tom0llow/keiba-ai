@@ -1,0 +1,10 @@
+defaults:
+  - model: lambdarank
+  - mlflow: local
+  - _self_
+
+data:
+  input: ???
+split:
+  test_races: 1
+output_dir: output/experiments

@@ -8,13 +8,12 @@ from math import isnan
 from pathlib import Path
 
 
-def write_json(path: Path, payload: Mapping[str, object]) -> None:
+def write_json(path: Path, payload: Mapping[str, object], *, overwrite: bool = True) -> None:
     """Write UTF-8 result JSON, converting missing NaN values to null."""
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        json.dumps(_json_safe(payload), ensure_ascii=False, allow_nan=False, indent=2) + "\n",
-        encoding="utf-8",
-    )
+    content = json.dumps(_json_safe(payload), ensure_ascii=False, allow_nan=False, indent=2) + "\n"
+    with path.open("w" if overwrite else "x", encoding="utf-8") as stream:
+        stream.write(content)
 
 
 def _json_safe(value: object) -> object:

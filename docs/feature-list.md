@@ -3,7 +3,7 @@
 ## 位置付け
 
 この文書は、現行実装における説明変数の列契約を整理したものである。対象は、
-学習・推論の `FeatureSchema` が受け付ける変数と、`src/features/` が作成する
+学習・推論の `FeatureSchema` が受け付ける変数と、`src/make_features/` が作成する
 中間テーブルの値列である。中間テーブルの列が、そのままモデルの説明変数に
 なることを意味しない。
 
@@ -29,7 +29,7 @@
 
 ## 2. 特徴量別の中間テーブル
 
-`src/features/` では、特徴量の生成・検証・再計算単位を分離するため、次の値列を
+`src/make_features/` では、特徴量の生成・検証・再計算単位を分離するため、次の値列を
 中間 Parquet テーブルとして扱う。これらは現時点で数値 `FeatureSchema` に自動投入
 されない。
 
@@ -74,8 +74,45 @@
 3. `historical_odds` や中間テーブルのオッズ値を、後から取得した最終オッズで
    置き換えない。
 4. 血統の文字列列を、辞書・カテゴリ符号化を決めないまま数値説明変数へ変換しない。
-5. JRA-VAN の業務コード解釈、履歴集計、時点付きデータからモデル入力へ写像する
-   規則は、別途確定するまで未実装・未確定として扱う。
+5. JRA-VANの業務コード解釈と、原本から時点証跡付き正規化観測への変換は未実装である。
+   正規化済み観測からの21群の純粋計算をADR-028、承認済み数値列を明示選択して
+   モデル入力へ投影する経路をADR-029で実装した。全列の自動採用は行わない。
+
+## 5. 正規化観測から計算する21群
+
+[ADR-028](decisions/ADR-028-calculate-all-feature-groups-from-timestamped-observations.md)で
+各既存ファイルへ`calculate_*`を追加した。完全な入力・パラメータと時点・欠損契約は
+[計算手順](feature-calculation.md)を参照する。以下は実際に出力する列名で、`{k}`は
+明示lag数、`{metric}`は設定で選んだ指標である。窓長や規則は出力パラメータへ保存し、
+候補文書の`_n / _W / _h`という名前をそのまま列へ使わない。
+
+| 群 | 計算する主な列・型 | 単位・母集団 |
+| --- | --- | --- |
+| F01 | `past_finish_lag{k}` int、`past_finish_relative_lag{k}` float、`past_start_count / past_win_rate / past_top3_rate` | 着順、割合、馬別n走。 |
+| F02 | `past_elapsed_sec / past_signed_gap_sec / past_velocity_mps / past_last3f_sec / past_last3f_rank / past_last3f_relative / past_last3f_known_count`の`_lag{k}` | 秒、m/s、過去全馬の終い600m測定での順位・既知数。 |
+| F03 | `past_condition_{time,velocity}_advantage`、`past_ability_{time,velocity}_{mean,ewma}` float、`past_condition_reference_count`と`_lag{k}` int | 過去出走ごとの自己を含まない勝者基準、score。現行`ability`への自動写像ではない。 |
+| F04 | `past_{metric}_{mean,max,std,ewma,trend,count,valid_count}` | 元指標、傾きは元指標/日、件数はint。 |
+| F05 | `horse_condition_{start_count,win_rate,top3_rate,relative_finish_mean,small_sample,smoothed_win_rate,smoothed_top3_rate,prior_win_rate,prior_top3_rate}` | 条件件数窓。率float、件数int、少標本bool。 |
+| F06 | `days_since_previous_start / starts_in_window_days / distance_delta_m` int、`surface_changed` bool、`class_transition` string | JST暦日、W日、m。 |
+| F07 | `jockey_* / jockey_condition_*` | F05と同じ率・件数・priorの組、騎手のW日全騎乗。 |
+| F08 | `trainer_* / trainer_condition_*` | 同じ組、出走当時の調教師に属したW日全出走。 |
+| F09 | `relative_{metric}_{rank,mean_diff,leader_gap,zscore,known_count,field_size}` | 固定馬集合、既知数/頭数int、他float。 |
+| F10 | `race_distance_m / horse_age_years / gate_number / frozen_field_size` int、`carried_weight_kg / carried_weight_delta_kg` float、`horse_number / sex / surface / venue / course / going / class_code` string | 正規化カード、前走斤量差。番号文字列のゼロを保持。 |
+| F11 | `horse_jockey_* / jockey_trainer_*`、`horse_jockey_frequency` float、`jockey_changed_since_previous` bool | W日組合せ出走、頻度の分母は馬の出走数。 |
+| F12 | `past_corner4_relative_lag{k} / past_corner4_to_finish_gain_lag{k} / past_corner4_to_finish_relative_gain_lag{k}`、`past_corner4_relative_mean / past_corner4_relative_std / past_corner4_valid_count` | 相対位置、順位改善、馬別n走。 |
+| F13 | `pre_race_style` string、`field_leader_count / field_front_count / style_unknown_count / opponent_leader_count / opponent_front_count / opponent_unknown_count / opponent_known_count` int、`opponent_front_share` float | 排他的脚質と固定集合、自身を相手へ数えない。 |
+| F14 | `{sire,broodmare_sire}_condition_*` | F05の率・件数・priorの組と`offspring_count`、W日産駒出走。 |
+| F15 | `past_observed_start_count / condition_observed_start_count / past_metric_valid_count` int、`history_complete / is_first_observed_start / is_first_condition / has_metric_history` bool、`past_missing_reason` string | 宣言scope内の全観測。件数窓内の初条件ではない。 |
+| F16 | `past_weight_lag1_kg / past_weight_delta_last2_kg / past_weight_mean_kg / past_weight_std_kg / past_weight_vs_mean_kg / past_weight_ratio_mean` float、`past_weight_valid_count` int | 過去計量だけ、kg・比。 |
+| F17 | `{hc,wc}_{last_clock_sec,last_section_sec,finish_accel_sec,clock_mean_sec,clock_best_sec,self_clock_diff_sec,same_day_course_diff_sec}` float、`{hc,wc}_{workout_count,self_reference_count,same_day_reference_count}` int | 指定距離の末尾時計、W期間と同施設/コース、自己基準はW内で当該記録より前。 |
+| F18 | `past_{race_early_velocity_mps,race_late_velocity_mps,pace_velocity_gap_mps,last3f_vs_race_sec}_lag{k}` float | 過去レースの正確な半距離、m/s・秒。 |
+| F19 | 既存`market_*`、`market_pair_support_i`、`ticket_total_{type} / ticket_total_growth_{type} / ticket_total_growth_rate_{type}`、追加`market_pair_known_opponent_count` int、`market_complete_win_set / market_complete_pair_set` bool | 同時点の単複・馬連、typeはtansyo/fukusyo/wakuren/umaren。票数は券種全体。 |
+| F20 | `{same_gate,same_trainer}_{peer_count,known_peer_count}` int、`{same_gate,same_trainer}_{ability_diff,ability_rank}` float | 固定相手とF03の標準化時間能力平均。差は無次元で、metric設定によらない。 |
+| F21 | `opponent_graph_score` float、`opponent_graph_start_count / unique_opponent_count` int、`opponent_graph_known` bool | 期間内全通常結果のloser→betterグラフ。未知scoreはNULL。 |
+
+全列はNULL許容とする。保存のArrow型は利用者が明示し、実行結果の型から自動推測しない。
+原測定理由、群別の欠損理由、件数・基準・グラフ診断、採用した版の全依存をJSON manifestへ保持する。
+計算APIは既存明示値APIと並存する。業務rawコードの意味・受信証拠の復元や、モデル列採用は行わない。
 
 ## 参照
 

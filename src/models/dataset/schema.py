@@ -5,7 +5,9 @@ from __future__ import annotations
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from types import MappingProxyType
+from typing import cast
 
+from models.dataset.calculated import CalculationContract
 from models.dataset.rows import FeatureValueType, MissingValuePolicy
 
 
@@ -124,6 +126,7 @@ class FeatureSchema:
 
     schema_id: str
     features: tuple[FeatureSpec, ...]
+    calculation_contract: CalculationContract | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.schema_id, str) or not self.schema_id:
@@ -131,7 +134,14 @@ class FeatureSchema:
         if not self.features:
             raise ValueError("feature schema must contain at least one feature")
         names = tuple(feature.name for feature in self.features)
-        validate_feature_names(names)
+        validate_feature_names(names, calculation_contract=self.calculation_contract)
+        if self.calculation_contract is not None:
+            if self.schema_id != f"calculated-{self.calculation_contract.sha256}":
+                raise ValueError("calculated schema_id does not match calculation contract")
+            expected = _calculated_specs(self.calculation_contract)
+            if self.features != expected:
+                raise ValueError("calculated feature specifications do not match their contract")
+            return
         for feature in self.features:
             if _APPROVED_FEATURE_SPECS.get(feature.name) != feature:
                 raise ValueError(
@@ -166,7 +176,7 @@ class FeatureSchema:
 
     def as_metadata(self) -> dict[str, object]:
         """Return a JSON-compatible schema description."""
-        return {
+        metadata: dict[str, object] = {
             "schema_id": self.schema_id,
             "features": [
                 {
@@ -180,9 +190,71 @@ class FeatureSchema:
                 for feature in self.features
             ],
         }
+        if self.calculation_contract is not None:
+            metadata["calculation_contract"] = self.calculation_contract.as_metadata()
+        return metadata
+
+    @classmethod
+    def calculated(cls, contract: CalculationContract) -> FeatureSchema:
+        """Create only code-approved numeric specifications for a verified contract."""
+        return cls(f"calculated-{contract.sha256}", _calculated_specs(contract), contract)
+
+    @classmethod
+    def from_metadata(cls, value: object) -> FeatureSchema:
+        """Read semantic metadata and revalidate every specification."""
+        if not isinstance(value, dict):
+            raise ValueError("feature_schema must be an object")
+        data = cast(dict[str, object], value)
+        raw_features = data.get("features")
+        if not isinstance(raw_features, list):
+            raise ValueError("feature_schema requires features")
+        specs = []
+        for raw in raw_features:
+            if not isinstance(raw, dict):
+                raise ValueError("feature specifications must be objects")
+            feature = cast(dict[str, object], raw)
+            if set(feature) != {
+                "name",
+                "generation_rule",
+                "result_derived",
+                "value_type",
+                "unit",
+                "missing_value_policy",
+            }:
+                raise ValueError("invalid feature specification fields")
+            specs.append(
+                FeatureSpec(
+                    name=cast(str, feature["name"]),
+                    generation_rule=cast(str, feature["generation_rule"]),
+                    result_derived=cast(bool, feature["result_derived"]),
+                    value_type=cast(FeatureValueType, feature["value_type"]),
+                    unit=cast(str | None, feature["unit"]),
+                    missing_value_policy=cast(MissingValuePolicy, feature["missing_value_policy"]),
+                )
+            )
+        contract = (
+            CalculationContract.from_metadata(data["calculation_contract"])
+            if "calculation_contract" in data
+            else None
+        )
+        return cls(cast(str, data.get("schema_id")), tuple(specs), contract)
 
 
-def validate_feature_names(feature_names: Sequence[str]) -> None:
+def _calculated_specs(contract: CalculationContract) -> tuple[FeatureSpec, ...]:
+    return tuple(
+        FeatureSpec(
+            column.name,
+            f"{contract.settings['implementation']}:{contract.sha256}:{column.meaning}",
+            False,
+            unit=column.unit,
+        )
+        for column in contract.columns()
+    )
+
+
+def validate_feature_names(
+    feature_names: Sequence[str], *, calculation_contract: CalculationContract | None = None
+) -> None:
     """Validate ordered model feature names against the approved numeric allow-list."""
     if not feature_names:
         raise ValueError("at least one feature is required")
@@ -190,6 +262,11 @@ def validate_feature_names(feature_names: Sequence[str]) -> None:
         raise ValueError("feature names must be non-empty strings")
     if len(set(feature_names)) != len(feature_names):
         raise ValueError("feature names must be unique")
+    if calculation_contract is not None:
+        if tuple(feature_names) != calculation_contract.names:
+            raise ValueError("calculated feature names do not match their verified contract")
+        calculation_contract.columns()
+        return
     reserved = sorted(name for name in feature_names if _is_reserved_result_feature_name(name))
     if reserved:
         raise ValueError(f"result-derived feature names are reserved: {reserved!r}")

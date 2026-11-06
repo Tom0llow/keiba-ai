@@ -1,0 +1,10 @@
+processed_root: ???
+snapshot_id: null
+parameters:
+  freeze_offset_seconds: 300
+  reception_basis: assumed_received_at_publication
+  schedule_basis: ???
+# null prepares prediction features and never reads SE results.
+# Labels require {basis: provided_result_evidence, result_delay_days: null}
+# or explicit {basis: assumed_snapshot_results, result_delay_days: <chosen days>}.
+labels: null

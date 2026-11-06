@@ -1,0 +1,4 @@
+# Copy the complete explicit parameters from the reviewed calculation configuration.
+# No operational settings or model columns are selected implicitly.
+parameters: ???
+selected_columns: ???

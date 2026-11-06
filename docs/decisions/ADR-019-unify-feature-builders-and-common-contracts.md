@@ -6,6 +6,8 @@
 - Supersedes: ADR-017, ADR-018
 - Superseded by: ADR-020（配置・登録・CLI境界。生成・監査・保存契約は継承）
 
+- Partial supersession: [ADR-028](ADR-028-calculate-all-feature-groups-from-timestamped-observations.md)（外部計算済み値のみという制限。既存build・監査・保存契約は維持）
+
 ## Context
 
 既存の説明変数は個別モジュールで入力・正規化・中間テーブル生成を所有する一方、

@@ -13,8 +13,7 @@ from pathlib import Path
 from typing import cast
 
 from models.backends.lightgbm import NativeBooster, load_native_booster, validate_native_booster
-from models.dataset.rows import FeatureValueType, MissingValuePolicy
-from models.dataset.schema import FeatureSchema, FeatureSpec, validate_feature_names
+from models.dataset.schema import FeatureSchema
 from models.ranking.rules import LABEL_GAIN, OBJECTIVE, TIE_BREAK_RULE
 
 _MODEL_FORMAT_VERSION = 3
@@ -234,10 +233,6 @@ def _metadata_feature_names(metadata: Mapping[str, object]) -> tuple[str, ...]:
     if not isinstance(value, list) or not all(isinstance(name, str) for name in value):
         raise ValueError("model metadata has invalid feature_names")
     names = tuple(cast(list[str], value))
-    try:
-        validate_feature_names(names)
-    except ValueError as exc:
-        raise ValueError("model metadata has invalid feature_names") from exc
     return names
 
 
@@ -245,33 +240,8 @@ def _metadata_feature_schema(
     metadata: Mapping[str, object],
     feature_names: Sequence[str],
 ) -> FeatureSchema:
-    value = metadata.get("feature_schema")
-    if not isinstance(value, dict):
-        raise ValueError("model metadata has invalid feature_schema")
-    schema_data = cast(dict[str, object], value)
-    schema_id = schema_data.get("schema_id")
-    raw_features = schema_data.get("features")
-    if not isinstance(schema_id, str) or not isinstance(raw_features, list):
-        raise ValueError("model metadata has invalid feature_schema")
-    specs: list[FeatureSpec] = []
     try:
-        for raw_feature in raw_features:
-            if not isinstance(raw_feature, dict):
-                raise ValueError("feature schema entries must be objects")
-            feature = cast(dict[str, object], raw_feature)
-            specs.append(
-                FeatureSpec(
-                    name=cast(str, feature.get("name")),
-                    generation_rule=cast(str, feature.get("generation_rule")),
-                    result_derived=cast(bool, feature.get("result_derived")),
-                    value_type=cast(FeatureValueType, feature.get("value_type")),
-                    unit=cast(str | None, feature.get("unit")),
-                    missing_value_policy=cast(
-                        MissingValuePolicy, feature.get("missing_value_policy")
-                    ),
-                )
-            )
-        schema = FeatureSchema(schema_id=schema_id, features=tuple(specs))
+        schema = FeatureSchema.from_metadata(metadata.get("feature_schema"))
     except (TypeError, ValueError) as exc:
         raise ValueError("model metadata has invalid feature_schema") from exc
     if schema.feature_names != tuple(feature_names):

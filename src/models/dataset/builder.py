@@ -122,7 +122,9 @@ def generate_features(
         ]
     else:
         generated_feature_rows = list(
-            validate_feature_rows(generated_feature_rows, feature_schema.feature_names)
+            validate_feature_rows(
+                generated_feature_rows, feature_schema.feature_names, feature_schema=feature_schema
+            )
         )
         dataset = None
 
