@@ -33,8 +33,8 @@ uv run pytest src/tests/integration
 Both the default run and the existing CI command `uv run pytest src/tests`
 discover the classified tests and environment smoke test. Pytest uses importlib
 mode so split modules may retain the same filename without import collisions.
-Mypy continues to target `src`, which includes every test. Existing CI, pre-commit,
-and guarded-workflow commands therefore keep their full validation scope.
+Mypy continues to target `src`, which includes every test. Existing CI and
+pre-commit commands therefore keep their full validation scope.
 
 Run the nearest test first when changing behavior:
 
@@ -51,27 +51,13 @@ uv run mypy src
 uv run pytest
 ```
 
-Trust-boundary PowerShell validation is also required:
-
-```powershell
-$guardInvocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 -CodexExecutablePath $guardInvocation.codexPath
-```
-
-Without installed invocation metadata, pass a separately verified allow-listed
-native Codex executable explicitly; do not rely on an auto-updated PATH entry.
-
-This command requires the self-contained native `codex.exe` for a Codex CLI
-version explicitly listed in `scripts/guard-tests/codex-cli-version.txt` and
-runs real `codex execpolicy check` cases. Node launcher shims such as
-`codex.cmd` and `codex.ps1` are unsupported. A missing, shimmed, or unlisted CLI
-is a failed validation, not a reason to skip execution-policy coverage.
-
-The `Quality` CI job repeats this real regression for every allow-listed Codex
-version under both PowerShell 7 and Windows PowerShell 5.1.
-The regression also verifies with a temporary Git repository that ignored
-untracked agent instructions and skill paths cannot bypass protected-path or
-clean-tree checks.
+The agent-workflow integration tests need PowerShell 7 (`pwsh`) on `PATH`:
+`src/tests/integration/test_github_app_helper.py` runs
+`scripts/github-app/github-app.ps1` against a local fake GitHub API, and
+`src/tests/integration/test_agent_skills_layout.py` requires the shared skill
+symbolic links in `.claude/skills/` (on Windows: Developer Mode and
+`core.symlinks=true`). A missing `pwsh` or a link checked out as a text file is
+a test failure, not a reason to skip.
 
 ## 3. Behavior changes
 

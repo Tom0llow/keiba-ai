@@ -1,17 +1,17 @@
 ---
 name: fix-bug
-description: Diagnose and implement the code-and-test fix for incorrect behavior or a regression. When repository rules require autonomous-task, use this inside that lifecycle; use it standalone only for explicitly local-only work. Do not use for feature additions or read-only review.
+description: Diagnose and implement the code-and-test fix for incorrect behavior or a regression. Shared by Claude Code and Codex; inside the Claude-led task lifecycle Codex applies it through implement-plan. Do not use for feature additions or read-only review.
 ---
 
 # Fix Bug
 
 Fix the bug by reproducing it, identifying the root cause, adding regression coverage, and applying the smallest correct change.
 
-This skill owns diagnosis and implementation, not lifecycle coordination. When
-repository rules require `autonomous-task`, enter that workflow first and use
-this skill for its fix phase. Standalone use is limited to explicitly local-only
-work. This skill itself never commits, pushes, opens a pull request, or merges;
-the autonomous coordinator performs its guarded Git/GitHub phases.
+This skill owns diagnosis and implementation, not lifecycle coordination. In
+the Claude-led task lifecycle (`docs/rules/agent-collaboration.md`), Codex
+applies it to an approved plan through `implement-plan`. Standalone use is for
+explicitly local-only work. This skill itself never commits, pushes, opens a
+pull request, or merges.
 
 ## 1. Read repository instructions
 

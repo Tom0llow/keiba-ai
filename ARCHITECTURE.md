@@ -18,42 +18,11 @@ an explicit requirement or an Accepted architecture decision record (ADR).
 - Formatter and linter: Ruff
 - Type checker: mypy
 - Test framework: pytest
-- Automation: GitHub Actions and guarded PowerShell wrappers
+- Automation: GitHub Actions, GitHub rulesets, and a GitHub App agent identity
 
 The locked development environment is defined by `pyproject.toml` and `uv.lock`.
 The project has no build system, so `uv sync` installs its dependencies without
 installing this repository as a Python distribution.
-
-Host-side autonomous Git/GitHub operations run only from hash-verified wrapper
-copies installed in the protected Codex user guard store. Every installation
-publishes a new immutable directory identified by repository policy ID, source
-SHA, and installation ID; earlier immutable directories remain untouched.
-`.git/codex-guard/` contains only invocation metadata, and tracked files under
-`scripts/` are reviewable sources, not executable trust anchors. A
-repository-and-checkout-bound user-layer execution rule permits only the
-installed wrappers' absolute paths. The manifest and runtime verification bind
-the canonical physical PowerShell, Git, GitHub CLI, and Codex CLI paths and the
-approved Codex CLI version. The trusted Codex path is a self-contained native
-`codex.exe`; Node launcher shims such as `codex.cmd` and `codex.ps1` are outside
-the supported boundary. This boundary also uses a protected system PowerShell
-host and an exclusive repository workflow lock as defined by ADR-001.
-
-PR and CI observations are bound to one explicit expected HEAD SHA through
-merge readiness and human approval. PR inspection observes the current PR base
-object ID as `baseSha`, then creates the complete local binary diff from the
-recorded task `startSha` (`diffBaseSha`) through the expected head with external
-diff and text conversion disabled. Checks use the check-runs and commit-status
-APIs for that expected head. Every observation reports `baseSha` and `headSha`;
-PR inspection also reports `diffBaseSha`. Merge readiness is bound to the PR
-number and HEAD SHA; rebinding the task to a replacement PR clears prior
-readiness and merge-attempt evidence. Merge readiness and the final unmerged-PR
-merge path revalidate the protected `main` branch's required contexts, strict
-status setting, and GitHub Actions application ID. If the remote merge succeeds
-before a communication or cleanup failure, the remaining task state permits
-recovery only after the same PR, task HEAD, merge-ready SHA, approved SHA, and
-recorded pre-merge attempt and merge timestamp agree. Incomplete cleanup keeps
-the guarded task state for an exact-PR/exact-SHA retry. User-layer trust paths
-are rejected under both the writable repository and system temporary directory.
 
 Repository-wide verification uses:
 
@@ -65,31 +34,43 @@ uv run mypy src
 uv run pytest
 ```
 
-Guard trust-boundary validation runs separately:
+## Development automation
 
-```powershell
-$invocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 `
-  -CodexExecutablePath $invocation.codexPath
+ADR-031 defines how Claude Code and Codex collaborate and where trust is
+enforced. Roles and handoffs are in `docs/rules/agent-collaboration.md`; Git,
+PR, CI, and merge rules are in `docs/rules/git-workflow.md`.
+
+```text
+.agents/skills/              # Codex-only skills + canonical shared skills
+.claude/
+├─ skills/                   # Claude-only cc-* skills + links to shared skills
+├─ agents/reviewer.md        # independent read-only review subagent
+└─ settings.json             # Claude Code permissions
+.codex/                      # Codex config and execution rules (no Git/gh/network)
+.github/
+├─ workflows/ci.yml          # required Quality and Test checks
+├─ CODEOWNERS                # human owner approves every change
+└─ rulesets/                 # main-protection and main-merge-restriction
+scripts/github-app/github-app.ps1   # App JWT -> installation token helper
 ```
 
-The `Quality` CI job performs that real regression for every allow-listed Codex
-CLI version with both PowerShell 7 and Windows PowerShell 5.1.
-
-Task start and commit use write-ahead state under `.git`: an interrupted
-operation can be resumed only by invoking the same wrapper with the same
-arguments, while unrelated task-state-dependent guarded operations fail closed.
-
-ADR-016 extends this boundary with byte-preserving UTF-8 native execution,
-baseline required-check verification, SHA-bound PR metadata updates, and
-prompt-gated archival of human-merged tasks. Base updates prepare a conflict-free
-merge without touching the index or worktree, reject external merge drivers,
-and record pending state before advancing the branch. State version 7 retains
-the original `initialStartSha` and advances `startSha` to the verified current
-main used as the task diff base. Version 6 remains readable. New HEADs and PR
-metadata edits invalidate readiness and require renewed review. Reinstallation
-rejects active task state and Store/MSIX PowerShell hosts. Runtime shell startup
-and literal argv integration remain separate manual installation checks.
+- Claude Code designs and coordinates tasks, verifies Codex output, runs dual
+  independent reviews, and performs all agent Git/GitHub writes as the
+  `keiba-ai-agent` GitHub App. Codex implements in `.worktrees/<task-id>/`
+  without Git mutations, `gh`, or network access.
+- `github-app.ps1` signs an RS256 App JWT with a private key kept outside the
+  repository and exchanges it for a one-hour installation token scoped to this
+  repository. It serves the Git credential protocol only for the
+  `x-access-token` push URL and runs only allow-listed `gh` subcommands. The App
+  has no `workflows` permission.
+- `main` is protected server-side: a PR with code-owner approval of the latest
+  push, resolved conversations, strict `Quality` and `Test` checks bound to the
+  GitHub Actions app, linear history, and no force push or deletion, with no
+  bypass. A second ruleset lets only administrators update `main`, through a
+  PR, so the App cannot merge.
+- Shared skills are relative per-skill symbolic links from `.claude/skills/`
+  into `.agents/skills/`; `src/tests/integration/test_agent_skills_layout.py`
+  verifies the layout.
 
 ## 現行の機能境界
 

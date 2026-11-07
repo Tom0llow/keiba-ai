@@ -1,14 +1,17 @@
 # Project-local Codex configuration.
 #
-# Network policy:
-# - ordinary workspace sandbox commands stay offline
-# - autonomous Git/GitHub operations must use the reviewed wrapper copies in
-#   the protected Codex user guard store through its generated absolute-path
-#   rule; `.git/codex-guard/` contains only repository invocation metadata
-# - direct GitHub CLI access requires approval; ordinary Git inspection stays
-#   inside the sandbox
-# - this avoids exposing credentials to the sandbox and keeps Git/GitHub
-#   mutations behind narrow wrappers.
+# Codex is the implementer in the Claude-led task lifecycle
+# (docs/rules/agent-collaboration.md). It edits files and runs local
+# validation only:
+# - shell commands stay inside the workspace-write sandbox with networking off;
+# - Git mutations, GitHub CLI, and nested Codex runs are forbidden by
+#   .codex/rules/default.rules;
+# - commits, pushes, and PRs are made by Claude Code with the GitHub App
+#   identity, and only a human can merge main.
+#
+# Claude Code launches task runs with `codex exec` in `.worktrees/<task-id>/`
+# and passes the equivalent sandbox settings explicitly, because this project
+# file applies only to trusted project paths.
 
 approval_policy = "on-request"
 approvals_reviewer = "user"
@@ -30,16 +33,7 @@ sandbox = "unelevated"
 inherit = "all"
 
 # Keep KEY / SECRET / TOKEN variables out of ordinary Codex subprocesses.
-# GitHub authentication is expected to use the host credential store from
-# allow-listed host-side commands, not GH_TOKEN inside the sandbox.
 ignore_default_excludes = false
 
 [history]
 persistence = "save-all"
-
-[features]
-multi_agent = true
-
-[agents]
-enabled = true
-max_concurrent_threads_per_session = 4

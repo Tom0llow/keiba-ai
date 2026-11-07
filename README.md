@@ -5,7 +5,7 @@ preprocessing, processed-data loading, and an AI-driven development foundation.
 
 ## Current status
 
-The repository contains the guarded development workflow, a local JRA-VAN data
+The repository contains the Claude Code + Codex development workflow, a local JRA-VAN data
 retrieval boundary through JVLinkToSQLite, versioned Parquet publication, and a
 Parquet-only loader boundary. It remains a non-distributed Python project.
 
@@ -299,30 +299,25 @@ uv run pytest
 型検査は`src`全体を対象とし、分類した全テストも含む。環境確認テストは従来の
 `src/tests/test_project_environment.py`に置き、既定実行と`pytest src/tests`の両方で収集する。
 
-Guard trust-boundary validation is run separately by the Quality workflow and can
-also be invoked with:
-
-```powershell
-$guardInvocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 -CodexExecutablePath $guardInvocation.codexPath
-```
-
-Without installed invocation metadata, supply a verified native `codex.exe`
-whose version is listed in `scripts/guard-tests/codex-cli-version.txt`.
+The agent-workflow integration tests require PowerShell 7 (`pwsh`). On Windows,
+enable Developer Mode and `git config core.symlinks true` so the shared skill
+links in `.claude/skills/` check out as symbolic links.
 
 ## Development workflow
 
-Non-trivial autonomous changes use the guarded workflow described in
-`docs/AUTONOMOUS_DEVELOPMENT.md`. Host-side Git/GitHub operations use installed,
-hash-verified wrappers; mutable repository copies under `scripts/agent/` are
-reviewable sources rather than trust anchors. The workflow stops at
-`MERGE_READY`; merging requires explicit human approval of the exact PR and HEAD
-SHA.
+Claude Code and Codex collaborate under ADR-031
+(`docs/rules/agent-collaboration.md`). Run a non-trivial change with `/cc-task`
+in Claude Code:
 
-Guard source repairs require review and reinstallation from protected `main`.
-See [guarded workflow repair and manual setup](docs/GUARDED_WORKFLOW_REPAIR.md)
-for the PowerShell MSI migration, pinned CLI regression, guard reinstallation,
-and execution-tool integration checks.
+1. Claude Code writes `.handoff/<task-id>/plan.md`; you approve it.
+2. Codex implements it in `.worktrees/<task-id>/`; Claude Code verifies the
+   result and runs a dual independent review (Claude subagent + Codex).
+3. Claude Code pushes and opens a PR as the `keiba-ai-agent` GitHub App and
+   drives CI.
+4. You review, approve, and merge the PR on GitHub. Rulesets on `main` require
+   your approval of the latest push and prevent the App from merging.
+
+One-time agent identity setup is described in `docs/rules/git-workflow.md`.
 
 Repository instructions are in `AGENTS.md`. Current architectural facts are in
 `ARCHITECTURE.md`.
@@ -387,9 +382,8 @@ Import pure datamart joins from `make_datamart.builder`, file-based construction
 file-based names previously imported from `make_datamart.builder` move to `make_datamart.tables.parquet`. The former
 the earlier combined data modules, `features/common/`, `features/make_features.py` and module `SPEC`
 constants are removed. The current `src/data/` groups the already separated data responsibilities. Acquired data and existing Parquet artifacts remain in
-their original locations and formats. `docs/GUARDED_WORKFLOW_REPAIR.md` remains
-available because removing its guarded workflow references requires a separate
-manual authorization.
+their original locations and formats. `docs/GUARDED_WORKFLOW_REPAIR.md`
+was removed with the guarded workflow under ADR-031.
 
 ## Datamart CLI
 

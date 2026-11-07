@@ -1,17 +1,17 @@
 ---
 name: implement-feature
-description: Implement the code-and-test phase of a new feature or intentional behavior change. When repository rules require autonomous-task, use this inside that lifecycle; use it standalone only for explicitly local-only work. Do not use for bug-only fixes or read-only review.
+description: Implement the code-and-test phase of a new feature or intentional behavior change. Shared by Claude Code and Codex; inside the Claude-led task lifecycle Codex applies it through implement-plan. Do not use for bug-only fixes or read-only review.
 ---
 
 # Implement Feature
 
 Implement the requested feature as the smallest coherent change that satisfies the requirement and preserves repository architecture.
 
-This skill owns the implementation phase, not lifecycle coordination. When
-repository rules require `autonomous-task`, enter that workflow first and use
-this skill for its implementation work. Standalone use is limited to explicitly
-local-only work. This skill itself never commits, pushes, opens a pull request,
-or merges; the autonomous coordinator performs its guarded Git/GitHub phases.
+This skill owns the implementation phase, not lifecycle coordination. In the
+Claude-led task lifecycle (`docs/rules/agent-collaboration.md`), Codex applies
+it to an approved plan through `implement-plan`. Standalone use is for
+explicitly local-only work. This skill itself never commits, pushes, opens a
+pull request, or merges.
 
 ## 1. Read repository instructions
 

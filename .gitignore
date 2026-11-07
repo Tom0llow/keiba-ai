@@ -224,3 +224,10 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# Claude Code personal settings
+.claude/settings.local.json
+
+# Agent task handoffs and worktrees (see docs/rules/agent-collaboration.md)
+/.handoff/
+/.worktrees/

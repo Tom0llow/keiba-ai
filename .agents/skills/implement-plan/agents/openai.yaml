@@ -1,0 +1,7 @@
+interface:
+  display_name: "Implement Plan"
+  short_description: "Implement an approved .handoff plan in the current worktree"
+  default_prompt: "Implement the approved plan named in the prompt, validate it, and report the result."
+
+policy:
+  allow_implicit_invocation: false
