@@ -13,7 +13,7 @@ source boundary is:
 configs/                        # Existing three TOMLs and Hydra experiment YAML
 src/
 ├─ main.py                      # CLI assembly, registration, and startup
-├─ cli/                         # options/json_io and per-function CLIs
+├─ cli/                         # options/json_io and per-functional-area CLIs
 ├─ configuration/               # Physical TOML loading, shared paths, and DataPaths
 ├─ data/                        # Shared data foundation
 │  ├─ loader/                   # Physical JSON, Parquet, and SQLite reads
@@ -27,7 +27,7 @@ src/
 ├─ domain/                      # Shared RaceKey
 └─ tests/
    ├─ unit/                     # Isolated tests for pure logic and mocked external boundaries
-   ├─ integration/              # Tests using real files, databases, processes, and connections between functions
+   ├─ integration/              # Tests using real files, databases, processes, and connections between functional areas
    └─ test_project_environment.py # Existing environment contract check
 ```
 
