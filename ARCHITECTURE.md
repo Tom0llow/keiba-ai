@@ -1,30 +1,29 @@
-# Architecture — keiba-ai
+# アーキテクチャ — keiba-ai
 
-## Status
+## 状態
 
-This repository contains development automation, local JRA-VAN race-data
-retrieval, raw-to-processed preprocessing, and Parquet loading for training and
-prediction. It remains uninstalled as a Python distribution.
+このリポジトリは、開発自動化、ローカルでのJRA-VANレースデータ取得、rawからprocessedへの前処理、
+学習と予測のためのParquet読込を含む。引き続き、Pythonの配布物としてはインストールされていない。
 
-An earlier local prototype is not a source of current requirements or design
-authority. Product behavior and durable architectural decisions must come from
-an explicit requirement or an Accepted architecture decision record (ADR).
+以前のローカルの試作版は、現行の要件の出典でも、設計の判断根拠でもない。製品の動作と永続的な
+アーキテクチャ上の決定は、明示的な要件、またはAcceptedのアーキテクチャ決定記録（ADR）に
+基づかなければならない。
 
-## Current runtime and tooling
+## 現行の実行環境とツール
 
 - Python: 3.12
-- Environment and dependency manager: uv
-- Data CLI: Typer
-- Formatter and linter: Ruff
-- Type checker: mypy
-- Test framework: pytest
-- Automation: GitHub Actions, GitHub rulesets, and a GitHub App agent identity
+- 環境・依存関係の管理ツール: uv
+- データCLI: Typer
+- フォーマッターとリンター: Ruff
+- 型チェッカー: mypy
+- テストフレームワーク: pytest
+- 自動化: GitHub Actions、GitHubのruleset、GitHub Appによるエージェント識別
 
-The locked development environment is defined by `pyproject.toml` and `uv.lock`.
-The project has no build system, so `uv sync` installs its dependencies without
-installing this repository as a Python distribution.
+ロック済みの開発環境は`pyproject.toml`と`uv.lock`で定義する。プロジェクトにはビルドシステムが
+ないため、`uv sync`は、このリポジトリをPythonの配布物としてインストールせずに依存関係を
+インストールする。
 
-Repository-wide verification uses:
+リポジトリ全体の検証には次を使う。
 
 ```bash
 uv sync --locked
@@ -34,43 +33,39 @@ uv run mypy src
 uv run pytest
 ```
 
-## Development automation
+## 開発自動化
 
-ADR-031 defines how Claude Code and Codex collaborate and where trust is
-enforced. Roles and handoffs are in `docs/rules/agent-collaboration.md`; Git,
-PR, CI, and merge rules are in `docs/rules/git-workflow.md`.
+ADR-031は、Claude CodeとCodexが協働する方法と、信頼を強制する場所を定める。役割と引き継ぎは
+`docs/rules/agent-collaboration.md`に、Git、PR、CI、マージの規則は
+`docs/rules/git-workflow.md`にある。
 
 ```text
-.agents/skills/              # Codex-only skills + canonical shared skills
+.agents/skills/              # Codex専用スキル + 共用スキルの正本
 .claude/
-├─ skills/                   # Claude-only cc-* skills + links to shared skills
-├─ agents/reviewer.md        # independent read-only review subagent
-└─ settings.json             # Claude Code permissions
-.codex/                      # Codex config and execution rules (no Git/gh/network)
+├─ skills/                   # Claude専用のcc-*スキル + 共用スキルへのリンク
+├─ agents/reviewer.md        # 独立した読み取り専用のレビュー用サブエージェント
+└─ settings.json             # Claude Codeの権限
+.codex/                      # Codexの設定と実行規則（Git・gh・ネットワークなし）
 .github/
-├─ workflows/ci.yml          # required Quality and Test checks
-├─ CODEOWNERS                # human owner approves every change
-└─ rulesets/                 # main-protection and main-merge-restriction
-scripts/github-app/github-app.ps1   # App JWT -> installation token helper
+├─ workflows/ci.yml          # 必須のQualityとTestのチェック
+├─ CODEOWNERS                # 人間のオーナーがすべての変更を承認する
+└─ rulesets/                 # main-protectionとmain-merge-restriction
+scripts/github-app/github-app.ps1   # App JWTをインストールトークンへ交換するヘルパー
 ```
 
-- Claude Code designs and coordinates tasks, verifies Codex output, runs dual
-  independent reviews, and performs all agent Git/GitHub writes as the
-  `keiba-ai-agent` GitHub App. Codex implements in `.worktrees/<task-id>/`
-  without Git mutations, `gh`, or network access.
-- `github-app.ps1` signs an RS256 App JWT with a private key kept outside the
-  repository and exchanges it for a one-hour installation token scoped to this
-  repository. It serves the Git credential protocol only for the
-  `x-access-token` push URL and runs only allow-listed `gh` subcommands. The App
-  has no `workflows` permission.
-- `main` is protected server-side: a PR with code-owner approval of the latest
-  push, resolved conversations, strict `Quality` and `Test` checks bound to the
-  GitHub Actions app, linear history, and no force push or deletion, with no
-  bypass. A second ruleset lets only administrators update `main`, through a
-  PR, so the App cannot merge.
-- Shared skills are relative per-skill symbolic links from `.claude/skills/`
-  into `.agents/skills/`; `src/tests/integration/test_agent_skills_layout.py`
-  verifies the layout.
+- Claude Codeは、タスクの設計と調整、Codexの出力の検証、二系統の独立したレビューを行い、
+  エージェントによるGit・GitHubへの書き込みをすべて`keiba-ai-agent` GitHub Appとして行う。
+  Codexは、Gitの変更、`gh`、ネットワークアクセスを使わずに`.worktrees/<task-id>/`で実装する。
+- `github-app.ps1`は、リポジトリの外に保管した秘密鍵でRS256のApp JWTに署名し、このリポジトリに
+  限定した1時間有効のインストールトークンと交換する。Gitの資格情報プロトコルには
+  `x-access-token`のpush URLに対してだけ応答し、allow-listにある`gh`のサブコマンドだけを
+  実行する。Appには`workflows`権限がない。
+- `main`はサーバー側で保護される。最新のpushに対するcode ownerの承認と解決済みの会話を備えた
+  PR、GitHub Actionsのappに紐づく厳格な`Quality`と`Test`のチェック、線形履歴、force pushと
+  削除の禁止を必須とし、バイパスはない。二つ目のrulesetにより、管理者だけがPRを通じて
+  `main`を更新できるため、Appはマージできない。
+- 共用スキルは、`.claude/skills/`から`.agents/skills/`への、スキルごとの相対シンボリック
+  リンクとする。`src/tests/integration/test_agent_skills_layout.py`がこの配置を検証する。
 
 ## 現行の機能境界
 

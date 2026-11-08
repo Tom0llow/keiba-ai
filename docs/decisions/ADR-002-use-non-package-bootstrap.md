@@ -1,4 +1,4 @@
-# ADR-002: Use a non-package bootstrap layout
+# ADR-002: パッケージにしないbootstrap構成を使う
 
 - Status: Accepted
 - Date: 2026-09-30
@@ -9,64 +9,60 @@
 
 ## Context
 
-The initial bootstrap included an importable `keiba_ai` package solely to give
-the Python test suite something to import. The directory update removes that
-package and places tests under `src/tests/`. No product behavior depends on the
-package. Keeping the build backend while its required module is absent would
-make environment synchronization fail.
+初期のbootstrapには、Pythonのテストスイートにimportの対象を与えるためだけに、importできる
+`keiba_ai`パッケージが含まれていた。ディレクトリの更新では、そのパッケージを削除し、テストを
+`src/tests/`配下に置く。製品の動作はこのパッケージに依存しない。必要なモジュールがないまま
+ビルドバックエンドを残すと、環境の同期が失敗する。
 
 ## Decision
 
-Until a product requirement establishes Python code, this repository is a
-non-package project. It has no build system and is not installed as a Python
-distribution during `uv sync`. The test suite lives under `src/tests/` and
-checks that the synced environment does not install this project. Product
-module names and packaging will be selected when product behavior is introduced.
+製品の要件がPythonのコードを定めるまで、このリポジトリはパッケージにしないプロジェクトとする。
+ビルドシステムを持たず、`uv sync`の際にPythonの配布物としてインストールしない。テストスイートは
+`src/tests/`配下に置き、同期した環境がこのプロジェクトをインストールしていないことを確認する。
+製品のモジュール名とパッケージ化は、製品の動作を導入するときに選ぶ。
 
 ## Rationale
 
-The repository should describe and validate the code that exists. Removing the
-unused package avoids presenting a placeholder import path as a product contract.
-The environment test preserves a concrete `Test` check without inventing
-product behavior.
+リポジトリは、存在するコードを記述し、検証するべきである。使われていないパッケージを削除すると、
+仮置きのimportパスを製品の契約として示すことを避けられる。環境テストは、製品の動作を作り出す
+ことなく、具体的な`Test`チェックを維持する。
 
 ## Consequences
 
-- `uv sync` installs the locked development dependencies, but no project wheel.
-- The project cannot currently be imported as `keiba_ai` or distributed as a
-  Python package.
-- Python checks target `src/`, and pytest discovers tests in `src/tests/`.
-- Product-code coverage is not reported while there is no product code to
-  measure. A coverage target and threshold must be chosen when it exists.
-- Introducing a product package later requires a deliberate architecture and
-  build-configuration update.
+- `uv sync`は、ロックされた開発用の依存関係をインストールするが、プロジェクトのwheelは
+  インストールしない。
+- 現在、このプロジェクトを`keiba_ai`としてimportすることも、Pythonパッケージとして配布する
+  こともできない。
+- Pythonのチェックは`src/`を対象とし、pytestは`src/tests/`のテストを検出する。
+- 測定する製品コードがない間は、製品コードのカバレッジを報告しない。製品コードができたときに、
+  カバレッジの対象と閾値を選ばなければならない。
+- 後で製品のパッケージを導入するには、意図的なアーキテクチャとビルド設定の更新が必要となる。
 
 ## Alternatives Considered
 
-Retaining the importable package skeleton would preserve the existing build and
-smoke test, but would keep a placeholder package boundary with no product need.
+importできるパッケージの骨格を残せば、既存のビルドとスモークテストを維持できるが、製品上の
+必要がない仮置きのパッケージ境界が残る。
 
 ## Validation
 
-Run `uv sync --locked`, the environment test, Ruff, mypy, the full pytest suite,
-and the guard regression. `Quality` and `Test` must pass in CI. The environment
-test must fail if the project is installed as a distribution again.
+`uv sync --locked`、環境テスト、Ruff、mypy、pytestの全テストスイート、guardの回帰テストを実行する。
+CIでは`Quality`と`Test`が成功しなければならない。プロジェクトが再び配布物としてインストール
+された場合、環境テストは失敗しなければならない。
 
 ## Security / Privacy Impact
 
-No product data or external service boundary changes. The related agent, CI,
-and instruction-file edits are guarded-workflow trust-boundary changes and use
-the repository's authorized manual security-bootstrap process.
+製品データと外部サービスの境界は変わらない。関連するエージェント、CI、指示ファイルの編集は、
+guarded workflowの信頼境界の変更であり、リポジトリで承認された手動のsecurity-bootstrapの手順を
+使う。
 
 ## Migration / Rollback
 
-Remove the build system and package-import test, update the lockfile and
-validation paths, and update current-architecture documentation. Reinstating a
-package requires restoring its source module and build configuration together
-with an appropriate test and documentation.
+ビルドシステムとパッケージのimportテストを削除し、ロックファイルと検証のパスを更新して、
+現行のアーキテクチャの文書を更新する。パッケージを復活させるには、そのソースモジュールと
+ビルド設定を、適切なテストと文書と共に復元する必要がある。
 
 ## Decision History
 
 | Date | Status | Notes |
 | --- | --- | --- |
-| 2026-09-30 | Accepted | Adopted the non-package bootstrap directory structure |
+| 2026-09-30 | Accepted | パッケージにしないbootstrapのディレクトリ構成を採用 |

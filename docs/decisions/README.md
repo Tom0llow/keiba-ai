@@ -1,51 +1,51 @@
-# Architecture Decision Records
+# アーキテクチャ決定記録
 
-This directory contains Architecture Decision Records (ADRs).
+このディレクトリには、アーキテクチャ決定記録（ADR）を置く。
 
-ADRs preserve the reasoning behind decisions that are expensive, risky, or confusing to rediscover later.
+ADRは、後から再発見しようとすると、高いコストがかかる、危険を伴う、または混乱を招くような決定について、その背後にある理由を保存する。
 
-They are intended for both humans and coding agents.
-
----
-
-## 1. When to create an ADR
-
-Create an ADR when a decision has a meaningful long-term effect on the system.
-
-Typical examples:
-
-- adopting or replacing a framework,
-- choosing a database or storage technology,
-- introducing a message broker,
-- changing architecture boundaries,
-- changing dependency direction,
-- introducing a new external service,
-- changing authentication/authorization strategy,
-- introducing a cache,
-- adopting a deployment platform,
-- adding a major dependency that shapes the architecture,
-- changing public API style,
-- changing persistence/data formats,
-- introducing background jobs,
-- splitting a monolith into services,
-- introducing a plugin/event architecture.
-
-Do not create an ADR for trivial implementation details.
-
-Examples that normally do **not** need an ADR:
-
-- renaming a private function,
-- adding a small helper,
-- fixing a bug without architectural impact,
-- adding a test,
-- changing formatting,
-- routine dependency patch updates.
+ADRは、人間とコーディングエージェントの両方を読み手とする。
 
 ---
 
-## 2. File naming
+## 1. ADRを作成する場合
 
-Use sequential numbering:
+決定がシステムに長期的な意味のある影響を与える場合は、ADRを作成する。
+
+典型的な例は次のとおり。
+
+- フレームワークの採用や置き換え、
+- データベースや保存技術の選択、
+- メッセージブローカーの導入、
+- アーキテクチャの境界の変更、
+- 依存の方向の変更、
+- 新しい外部サービスの導入、
+- 認証・認可の方針の変更、
+- キャッシュの導入、
+- デプロイ基盤の採用、
+- アーキテクチャを形作る主要な依存関係の追加、
+- 公開APIの方式の変更、
+- 永続化やデータの形式の変更、
+- バックグラウンドジョブの導入、
+- モノリスのサービスへの分割、
+- プラグインやイベントのアーキテクチャの導入。
+
+些細な実装の詳細については、ADRを作成しない。
+
+通常はADRを**必要としない**例は次のとおり。
+
+- 非公開の関数の名前の変更、
+- 小さなヘルパーの追加、
+- アーキテクチャに影響しないバグの修正、
+- テストの追加、
+- 書式の変更、
+- 依存関係の定例のパッチ更新。
+
+---
+
+## 2. ファイル名
+
+連番を使う。
 
 ```text
 ADR-000-template.md
@@ -54,24 +54,24 @@ ADR-002-use-fastapi.md
 ADR-003-introduce-background-jobs.md
 ```
 
-Use:
+次の形式を使う。
 
 ```text
 ADR-NNN-short-kebab-case-title.md
 ```
 
-Rules:
+規則は次のとおり。
 
-- never reuse an ADR number,
-- never renumber existing ADRs,
-- keep titles short and descriptive,
-- use present-tense decision wording when practical.
+- ADRの番号を再利用しない、
+- 既存のADRの番号を振り直さない、
+- 題名は短く、内容がわかるものにする、
+- 可能な場合は、決定を現在形の表現で書く。
 
 ---
 
-## 3. ADR lifecycle
+## 3. ADRのライフサイクル
 
-Supported statuses:
+使用できるステータスは次のとおり。
 
 ```text
 Proposed
@@ -83,23 +83,23 @@ Rejected
 
 ### Proposed
 
-The decision is under discussion.
+決定を議論している。
 
 ### Accepted
 
-The decision is active and should guide implementation.
+決定が有効であり、実装の指針とするべきである。
 
 ### Deprecated
 
-The decision is no longer recommended, but may still exist in the system.
+決定はもう推奨しないが、システムにはまだ残っていることがある。
 
 ### Superseded
 
-A newer ADR replaces this decision.
+新しいADRがこの決定を置き換える。
 
-When superseding an ADR, reference the new ADR explicitly.
+ADRを置き換えるときは、新しいADRを明示的に参照する。
 
-Example:
+例:
 
 ```text
 Status: Superseded by ADR-012
@@ -107,193 +107,193 @@ Status: Superseded by ADR-012
 
 ### Rejected
 
-The option was considered and explicitly rejected.
+その選択肢を検討し、明示的に却下した。
 
-Rejected ADRs can still be valuable because they prevent the same discussion from repeating.
+却下されたADRも、同じ議論の繰り返しを防ぐため、なお価値を持ち得る。
 
 ---
 
-## 4. ADR structure
+## 4. ADRの構成
 
-Start from:
+次から始める。
 
 ```text
 ADR-000-template.md
 ```
 
-Every ADR should explain:
+すべてのADRで、次を説明するべきである。
 
-1. **Context** — what problem or constraint exists?
-2. **Decision** — what are we choosing?
-3. **Rationale** — why is this option preferred?
-4. **Consequences** — what becomes easier/harder?
-5. **Alternatives Considered** — what else was evaluated?
-6. **Validation / Follow-up** — how will we know the decision works?
+1. **Context** — どのような問題や制約があるか。
+2. **Decision** — 何を選ぶか。
+3. **Rationale** — なぜこの選択肢が好ましいか。
+4. **Consequences** — 何が容易に/困難になるか。
+5. **Alternatives Considered** — ほかに何を評価したか。
+6. **Validation / Follow-up** — 決定がうまく機能していることを、どのように確かめるか。
 
-The document should capture reasoning, not just the final choice.
-
----
-
-## 5. Decision quality
-
-A useful ADR should be understandable without reconstructing the original conversation.
-
-Prefer concrete statements.
-
-Bad:
-
-```text
-We chose PostgreSQL because it is better.
-```
-
-Better:
-
-```text
-We chose PostgreSQL because the application requires transactional updates,
-relational constraints, and predictable support for concurrent writes.
-```
-
-Record important tradeoffs.
-
-Example:
-
-```text
-This increases operational complexity compared with SQLite, but removes the
-single-process write limitations that conflict with the deployment model.
-```
+文書には、最終的な選択だけでなく、その理由を記録するべきである。
 
 ---
 
-## 6. Relationship with other documentation
+## 5. 決定の質
 
-Use:
+有用なADRは、元の会話を再現しなくても理解できるものであるべきである。
+
+具体的な記述を優先する。
+
+悪い例:
+
+```text
+PostgreSQLの方が優れているため、PostgreSQLを選んだ。
+```
+
+より良い例:
+
+```text
+アプリケーションには、トランザクションによる更新、リレーショナルな制約、
+同時書き込みへの予測可能な対応が必要であるため、PostgreSQLを選んだ。
+```
+
+重要なトレードオフを記録する。
+
+例:
+
+```text
+これはSQLiteと比べて運用の複雑さを増すが、デプロイのモデルと矛盾する、
+単一プロセスでの書き込みの制約をなくす。
+```
+
+---
+
+## 6. 他の文書との関係
+
+次を使う。
 
 ```text
 ARCHITECTURE.md
 ```
 
-for the **current architecture**.
+これは**現行のアーキテクチャ**を示すためのものである。
 
-Use:
+次を使う。
 
 ```text
 docs/decisions/
 ```
 
-for **why important architecture decisions were made**.
+これは**重要なアーキテクチャ上の決定がなぜ行われたか**を示すためのものである。
 
-Use:
+次を使う。
 
 ```text
 docs/rules/architecture.md
 ```
 
-for **implementation rules that must be followed**.
+これは**守らなければならない実装の規則**を示すためのものである。
 
-The relationship is:
+関係は次のとおりである。
 
 ```text
 ADR
-  ↓ explains why
+  ↓ 理由を説明する
 ARCHITECTURE.md
-  ↓ describes what exists
-architecture rules
-  ↓ defines how changes must preserve it
+  ↓ 存在するものを記述する
+アーキテクチャの規則
+  ↓ 変更がそれを維持する方法を定める
 ```
 
 ---
 
-## 7. Updating architecture after an ADR
+## 7. ADRの後のアーキテクチャの更新
 
-When an ADR is accepted and changes current architecture:
+ADRが承認され、現行のアーキテクチャを変更する場合は、次を行う。
 
-1. add/update the ADR,
-2. update `ARCHITECTURE.md`,
-3. update `docs/rules/architecture.md` if implementation rules changed,
-4. update tests/CI/configuration if required.
+1. ADRを追加・更新する、
+2. `ARCHITECTURE.md`を更新する、
+3. 実装の規則が変わった場合は、`docs/rules/architecture.md`を更新する、
+4. 必要な場合は、テスト・CI・設定を更新する。
 
-Do not leave accepted ADRs disconnected from the current architecture documentation.
-
----
-
-## 8. Codex / agent rules
-
-Before making a significant architectural change, coding agents should:
-
-1. read `ARCHITECTURE.md`,
-2. read `docs/rules/architecture.md`,
-3. inspect relevant ADRs,
-4. determine whether the change requires a new ADR,
-5. avoid silently contradicting an accepted ADR.
-
-Agents must not rewrite historical ADR reasoning to make current code appear consistent.
-
-If a previous decision changes:
-
-- preserve the old ADR,
-- create a new ADR,
-- mark the old ADR as `Superseded`.
+承認したADRを、現行のアーキテクチャの文書と切り離したままにしない。
 
 ---
 
-## 9. Searching ADRs
+## 8. Codex / エージェントの規則
 
-Before creating a new ADR, search for existing decisions related to:
+重要なアーキテクチャの変更を行う前に、コーディングエージェントは次を行うべきである。
 
-- the affected subsystem,
-- the proposed technology,
-- the relevant architectural boundary,
-- rejected alternatives.
+1. `ARCHITECTURE.md`を読む、
+2. `docs/rules/architecture.md`を読む、
+3. 関連するADRを確認する、
+4. その変更に新しいADRが必要かどうかを判断する、
+5. 承認済みのADRと、黙って矛盾しないようにする。
 
-Avoid creating duplicate ADRs for the same decision.
+エージェントは、現在のコードが整合しているように見せるために、過去のADRの理由を書き換えてはならない。
 
----
+以前の決定が変わる場合は、次を行う。
 
-## 10. Review checklist
-
-Before accepting an ADR, verify:
-
-- Is the problem/context clear?
-- Is the decision explicit?
-- Are the main constraints documented?
-- Are important alternatives listed?
-- Are tradeoffs acknowledged?
-- Are negative consequences documented?
-- Is the scope clear?
-- Does the decision conflict with an existing ADR?
-- Does `ARCHITECTURE.md` need updating?
-- Are follow-up actions concrete?
+- 古いADRを残す、
+- 新しいADRを作成する、
+- 古いADRを`Superseded`とする。
 
 ---
 
-## 11. Recommended workflow
+## 9. ADRの検索
+
+新しいADRを作成する前に、次に関する既存の決定を検索する。
+
+- 影響を受けるサブシステム、
+- 提案する技術、
+- 関連するアーキテクチャの境界、
+- 却下した代替案。
+
+同じ決定について、重複したADRを作成しない。
+
+---
+
+## 10. レビューのチェックリスト
+
+ADRを承認する前に、次を確認する。
+
+- 問題・背景は明確か。
+- 決定は明示されているか。
+- 主な制約は文書化されているか。
+- 重要な代替案が挙げられているか。
+- トレードオフが認識されているか。
+- 負の影響は文書化されているか。
+- 範囲は明確か。
+- 決定が既存のADRと矛盾しているか。
+- `ARCHITECTURE.md`の更新が必要か。
+- 後続の対応は具体的か。
+
+---
+
+## 11. 推奨するworkflow
 
 ```text
-Problem identified
+問題の特定
       ↓
-Search existing ADRs
+既存のADRの検索
       ↓
-Create ADR as Proposed
+ProposedとしてADRを作成
       ↓
-Evaluate alternatives
+代替案の評価
       ↓
-Review decision
+決定のレビュー
       ↓
-Accept / Reject
+承認 / 却下
       ↓
-Update ARCHITECTURE.md and rules
+ARCHITECTURE.mdと規則の更新
       ↓
-Implement
+実装
       ↓
-Validate consequences
+影響の検証
 ```
 
 ---
 
-## 12. Minimal ADR policy
+## 12. ADRの最小限の方針
 
-Do not create ADRs merely to create documentation.
+文書を作るためだけにADRを作成しない。
 
-The goal is not to document every decision.
+目的は、すべての決定を文書化することではない。
 
-The goal is to preserve decisions whose reasoning would otherwise be costly to recover.
+目的は、記録しなければ理由を取り戻すのに高いコストがかかる決定を保存することである。

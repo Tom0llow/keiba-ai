@@ -49,3 +49,5 @@ and method, inventory by layer, all seven management assessments, all nine
 quality assessments, supporting evidence, unknowns, and prioritized issues.
 Record enough query and sampling detail to reproduce each measurement. Mark
 unmeasured items explicitly instead of leaving blank results.
+
+Write the document in Japanese as defined in `docs/rules/documentation.md`.

@@ -1,13 +1,13 @@
 # keiba-ai
 
-Python 3.12 project with local JRA-VAN race-data retrieval, raw-to-Parquet
-preprocessing, processed-data loading, and an AI-driven development foundation.
+ローカルでのJRA-VANレースデータ取得、rawからParquetへの前処理、processedデータの読込、
+AI駆動開発の基盤を備えたPython 3.12のプロジェクトである。
 
-## Current status
+## 現状
 
-The repository contains the Claude Code + Codex development workflow, a local JRA-VAN data
-retrieval boundary through JVLinkToSQLite, versioned Parquet publication, and a
-Parquet-only loader boundary. It remains a non-distributed Python project.
+このリポジトリは、Claude Code + Codexの開発workflow、JVLinkToSQLiteを通じたローカルの
+JRA-VANデータ取得境界、版管理されたParquet公開、Parquet専用のローダー境界を含む。引き続き、
+配布しないPythonプロジェクトである。
 
 ```text
 configs/                        # 既存3 TOMLとHydra実験YAML
@@ -31,8 +31,8 @@ src/
    └─ test_project_environment.py # 既存環境契約の確認
 ```
 
-The project has no build system. `uv sync` installs its locked dependencies
-without installing this repository as a Python distribution.
+プロジェクトにはビルドシステムがない。`uv sync`は、このリポジトリをPythonの配布物として
+インストールせずに、ロックされた依存関係をインストールする。
 
 データ契約はADR-005〜008、特徴量登録はADR-020に従う。
 [ADR-024](docs/decisions/ADR-024-separate-functional-responsibilities.md)が
@@ -44,9 +44,9 @@ ADR-008とADR-021〜023の配置判断を置き換えた責務分離を継承す
 [ADR-026](docs/decisions/ADR-026-rename-configs-and-classify-tests.md)に従うconfigsへの改名とsrc/tests内の分類、
 全テストの分類・旧新対応は[設定・テスト移行記録](docs/refactoring-pr21-configs-tests.md)に記録する。
 
-## Data flow
+## データの流れ
 
-All data paths converge on one storage dependency direction:
+すべてのデータ経路は、保存に関する一つの依存方向にそろう。
 
 ```text
 JV-Link
@@ -58,14 +58,14 @@ JV-Link
   -> training / analysis / prediction
 ```
 
-`race.db` is the mutable raw acquisition store. Model-facing code does not read
-it directly. SQLiteの読取取引は`src/data/loader/read_sqlite.py`、純粋変換は
+`race.db`は、変更可能なrawの取得データの保存先である。モデル向けのコードは、これを直接
+読まない。SQLiteの読取取引は`src/data/loader/read_sqlite.py`、純粋変換は
 `src/data/preprocessor/sqlite_to_arrow.py`、生成と公開は`src/data/storage/`が所有する。
 
-`src/data/loader/read_parquet.py` reads processed Parquet only. The separate
-`read_json.py` reads explicit JSON inputs without feature or model validation.
+`src/data/loader/read_parquet.py`は、processedのParquetだけを読む。別の`read_json.py`は、
+特徴量やモデルの検証を行わずに、明示されたJSON入力を読む。
 
-Storage paths are configured in `configs/data.toml`:
+保存先のパスは`configs/data.toml`で設定する。
 
 ```toml
 [paths]
@@ -74,18 +74,17 @@ processed_dir = "../data/processed"
 jvlink_runtime_dir = "../data/runtime/jvlink"
 ```
 
-## Race data retrieval
+## レースデータの取得
 
-Race data is acquired through a locally installed JVLinkToSQLite executable.
-JV-Link and JVLinkToSQLite must already be installed and configured on Windows.
-The Python code does not call JV-Link COM directly and does not store the
-JRA-VAN service key.
+レースデータは、ローカルにインストールしたJVLinkToSQLiteの実行ファイルを通じて取得する。
+JV-LinkとJVLinkToSQLiteは、Windowsにインストールと設定を済ませておく必要がある。
+PythonのコードはJV-Link COMを直接呼び出さず、JRA-VANのサービスキーも保存しない。
 
-The user-owned `C:\JVLinkToSQLite\setting.xml` is treated as a seed. Retrieval
-behavior is declared in `configs/jvlink.toml`, and Python generates execution XML
-for historical-basic, historical-odds, latest, and realtime modes.
+ユーザーが所有する`C:\JVLinkToSQLite\setting.xml`はseedとして扱う。取得の動作は
+`configs/jvlink.toml`で宣言し、Pythonがhistorical-basic、historical-odds、latest、realtimeの
+各モードの実行用XMLを生成する。
 
-Important profiles include:
+主なprofileは次のとおり。
 
 ```toml
 [historical_odds]
@@ -100,23 +99,19 @@ realtime_data_specs = ["0B41", "0B42"]
 realtime_data_specs = ["0B31", "0B32"]
 ```
 
-`historical-odds` requires `[historical_odds].skip_existing = true` and requests
-only the missing O1/O2 DataSpecs for each complete race key in `NL_RA_RACE`.
-`0B41` is skipped when that race has rows in `ARCHIVE_O1_ODDS_TANFUKUWAKU`;
-`0B42` is skipped when it has rows in `ARCHIVE_O2_ODDS_UMAREN`. Missing or empty
-archive tables are retrieved. Row presence does not prove that every time-series
-observation was acquired, so this workflow intentionally does not support
-refetching already archived race/spec pairs. This option does not change realtime
-retrieval.
+`historical-odds`は`[historical_odds].skip_existing = true`を必須とし、`NL_RA_RACE`の完全な
+レースキーごとに、不足しているO1/O2のDataSpecだけを要求する。そのレースの行が
+`ARCHIVE_O1_ODDS_TANFUKUWAKU`にある場合は`0B41`を、`ARCHIVE_O2_ODDS_UMAREN`にある場合は
+`0B42`を省略する。archive表が存在しない場合や空の場合は取得する。行があっても、時系列の
+すべての観測を取得したことの証明にはならないため、このworkflowは、archive済みの
+レースとspecの組の再取得を意図的にサポートしない。このオプションはrealtimeの取得を変えない。
 
-The checked-in `[historical]` profile enables `setup_update`, so the
-`historical-basic` command retrieves the configured base-data DataSpecs before
-publishing the complete Parquet snapshot. Set the update flags to `false` only
-when the corresponding base-data retrieval is intentionally disabled. A missing
-database still fails before retrieval.
+リポジトリに登録済みの`[historical]` profileは`setup_update`を有効にしているため、
+`historical-basic`コマンドは、完全なParquet snapshotを公開する前に、設定された基本データの
+DataSpecを取得する。更新フラグを`false`にするのは、対応する基本データの取得を意図的に
+無効にする場合だけとする。データベースがない場合は、それでも取得の前に失敗する。
 
-The target race for realtime retrieval can also be configured in
-`configs/jvlink.toml`:
+realtime取得の対象レースは、`configs/jvlink.toml`でも設定できる。
 
 ```toml
 [realtime]
@@ -127,23 +122,22 @@ nichiji = "08"
 race = "11"
 ```
 
-When `[realtime]` is configured, the target race options can be omitted from
-the CLI. Supplying all five CLI options overrides the configured target race.
+`[realtime]`を設定した場合は、CLIで対象レースのオプションを省略できる。CLIで5つのオプションを
+すべて指定すると、設定した対象レースより優先される。
 
-JVLinkToSQLite realtime O1/O2 tables are transient staging tables. They are
-copied immediately into cumulative raw tables:
+JVLinkToSQLiteのrealtimeのO1/O2表は、一時的なstaging表である。これらは直ちに累積のraw表へ
+コピーされる。
 
 ```text
 ARCHIVE_O1_ODDS_TANFUKUWAKU
 ARCHIVE_O2_ODDS_UMAREN
 ```
 
-Repeated identical rows are deduplicated while distinct `HappyoTime`
-observations are retained.
+同一の行の繰り返しは重複除去し、`HappyoTime`が異なる観測は保持する。
 
 ## CLI
 
-Install dependencies and run commands from the repository root:
+依存関係をインストールし、リポジトリのルートからコマンドを実行する。
 
 ```powershell
 uv sync --locked
@@ -154,65 +148,60 @@ uv run python src/main.py --retrieve --mode=latest
 uv run python src/main.py --retrieve --mode=realtime
 ```
 
-Retrieval and complete Parquet publication are separated by workflow:
+取得と完全なParquet公開は、workflowごとに分かれている。
 
-- `--retrieve --mode=historical-basic`: run the enabled base-data updates, then publish one
-  complete Parquet snapshot. This mode does not retrieve historical O1/O2 odds.
-- `--retrieve --mode=historical-odds`: retrieve the oldest unfinished year of historical
-  O1/O2 odds, record per-race progress, and continue year by year. Complete Parquet
-  publication is deferred until every managed year is raw-complete, then performed once.
-  If retrieval or publication fails, the raw database and progress ledger remain available
-  for the next manual run. The command stops when the operator interrupts it or no target
-  years remain.
-  Use `--plan-only` to inspect the next year without writing or starting JVLinkToSQLite.
-  The command starts one continuous process; it does not register Task Scheduler
-  jobs or apply a weekday rule. A successful run with a valid empty realtime table is recorded
-  as `provider_missing/jvopen_no_data` only when the captured JVOpen/JVRTOpen return code is
-  `-1`; it is not retried. If the API code is unavailable, the result remains
-  `failed/empty_response_unverified`. Missing tables, invalid schemas, archive failures, and
-  process failures remain `failed` and stop the run. The official JV-Link API error-code list
-  is published by [JRA-VAN](https://developer.jra-van.jp/t/topic/822).
-  The progress ledger preserves the process exit code separately from the captured
-  DataSpec-specific API name and return code.
-  After all managed years are complete, the CLI prints an English message before the full
-  Parquet rebuild, then prints whether the rebuild completed or failed. The rebuild can take
-  a long time for a large raw database.
-  When an older v1 ledger has a previously classified `provider_missing/jvopen_no_data`
-  row without API columns, the first write migrates it to
-  `provider_missing/legacy_provider_missing`; new automatic `jvopen_no_data` rows always
-  require captured `JVOpen`/`JVRTOpen = -1` evidence.
-  After confirming a JRA-VAN-side gap, confirm that exact failed race without starting
-  JVLinkToSQLite:
+- `--retrieve --mode=historical-basic`: 有効な基本データの更新を実行してから、完全なParquet
+  snapshotを1つ公開する。このモードは過去のO1/O2オッズを取得しない。
+- `--retrieve --mode=historical-odds`: 過去のO1/O2オッズのうち未完了の最も古い年を取得し、
+  レースごとの進捗を記録して、1年ずつ続ける。完全なParquet公開は、管理対象のすべての年で
+  rawがそろうまで延期し、その後に1回だけ行う。
+  取得または公開に失敗しても、rawデータベースと進捗台帳は次回の手動実行で利用できる。
+  このコマンドは、運用者が中断するか、対象の年がなくなると停止する。
+  `--plan-only`を使うと、書き込みやJVLinkToSQLiteの起動をせずに次の年を確認できる。
+  このコマンドは一つの継続したプロセスを開始する。Task Schedulerへのジョブ登録や、
+  曜日の規則の適用は行わない。有効な空のrealtime表で成功した実行は、取得したJVOpen/JVRTOpenの
+  戻り値が`-1`の場合に限り`provider_missing/jvopen_no_data`として記録し、再試行しない。
+  APIのコードが得られない場合、結果は`failed/empty_response_unverified`のままとなる。
+  表の欠落、不正なスキーマ、archiveの失敗、プロセスの失敗は`failed`のままとし、実行を
+  停止する。JV-Link APIの公式なエラーコード一覧は[JRA-VAN](https://developer.jra-van.jp/t/topic/822)が公開している。
+  進捗台帳は、プロセスの終了コードを、取得したDataSpec別のAPI名と戻り値とは別に保持する。
+  管理対象のすべての年が完了すると、CLIは完全なParquetの再構築の前に英語のメッセージを
+  表示し、その後、再構築が完了したか失敗したかを表示する。rawデータベースが大きい場合、
+  再構築には長い時間がかかることがある。
+  旧v1の台帳に、API列のない分類済みの`provider_missing/jvopen_no_data`行がある場合は、最初の
+  書き込みでそれを`provider_missing/legacy_provider_missing`へ移行する。新しく自動で記録する
+  `jvopen_no_data`行には、常に、取得した`JVOpen`/`JVRTOpen = -1`の証拠が必要となる。
+  JRA-VAN側の欠落を確認した後、JVLinkToSQLiteを起動せずに、失敗したその特定のレースを
+  確認する。
 
   ```powershell
   uv run python src/main.py --retrieve --mode=historical-odds `
     --confirm-provider-missing --date 2008-02-03 --jyo 05 --kaiji 01 --nichiji 02 --race 01
   ```
 
-  Both O1/O2 (`0B41`/`0B42`) are confirmed by default. Use `--data-spec 0B41` or
-  `--data-spec 0B42` to confirm only one. The command accepts only failed
-  `empty_response_unverified` entries whose current archive count is still zero.
-- `--retrieve --mode=latest`: update raw data, then publish a refreshed complete Parquet
-  snapshot.
-- `--retrieve --mode=realtime`: retrieve and archive the target race's history/current
-  odds, then publish race-scoped Parquet for that same `RaceKey`.
+  既定ではO1/O2（`0B41`/`0B42`）の両方を確認する。一方だけを確認するには、`--data-spec 0B41`
+  または`--data-spec 0B42`を使う。このコマンドは、失敗した`empty_response_unverified`の項目の
+  うち、現在のarchiveの件数がまだ0のものだけを受け付ける。
+- `--retrieve --mode=latest`: rawデータを更新してから、更新した完全なParquet snapshotを
+  公開する。
+- `--retrieve --mode=realtime`: 対象レースの履歴/現在のオッズを取得してarchiveし、その同じ
+  `RaceKey`についてレース単位のParquetを公開する。
 
-All retrieval modes use the flag-based interface. The separate `preprocess`
-command remains available for publishing processed data from existing raw data.
+すべての取得モードは、フラグ形式のインターフェースを使う。既存のrawデータからprocessedデータを
+公開するための別の`preprocess`コマンドも、引き続き利用できる。
 
-If raw data already exists, a complete processed snapshot can be rebuilt without
-new JRA-VAN retrieval:
+rawデータが既にある場合は、JRA-VANから新たに取得せずに、完全なprocessed snapshotを
+再構築できる。
 
 ```powershell
 uv run python src/main.py preprocess rebuild
 ```
 
-Alternative config files can be supplied with `--data-config` and
-`--jvlink-config` where applicable.
+該当するコマンドでは、`--data-config`と`--jvlink-config`で別の設定ファイルを指定できる。
 
-## Processed Parquet layout
+## processed Parquetの配置
 
-Complete historical/latest datasets are immutable snapshots:
+historical/latestの完全なデータセットは、不変のsnapshotである。
 
 ```text
 data/processed/
@@ -225,11 +214,10 @@ data/processed/
       └─ ...
 ```
 
-`CURRENT` is replaced atomically only after every table in a new snapshot has
-been written and validated. A failed rebuild therefore leaves the previous
-snapshot active.
+`CURRENT`は、新しいsnapshotのすべての表を書き込んで検証した後にだけ、原子的に置き換える。
+そのため、再構築に失敗しても、以前のsnapshotが有効なまま残る。
 
-Prediction-time realtime Parquet is race-scoped:
+予測時のrealtime Parquetは、レース単位である。
 
 ```text
 data/processed/realtime/<race-id>/
@@ -240,52 +228,48 @@ data/processed/realtime/<race-id>/
       └─ ARCHIVE_O2_ODDS_UMAREN.parquet
 ```
 
-Realtime preprocessing filters the cumulative raw archive to the exact race and
-publishes the two O1/O2 files as one version before switching the race-local
-`CURRENT` pointer. It does not rebuild all historical Parquet before inference.
+realtimeの前処理は、累積のraw archiveを対象のレースだけに絞り込み、O1/O2の2ファイルを1つの
+版として公開してから、レースごとの`CURRENT`ポインタを切り替える。推論の前に、過去の
+Parquetをすべて再構築することはしない。
 
-Old snapshots and realtime versions are intentionally retained for rollback and
-reproducibility until a separate retention policy is introduced.
+古いsnapshotとrealtimeの版は、別の保持方針を導入するまで、ロールバックと再現性のために
+意図的に保持する。
 
-## Data loader
+## データローダー
 
-`src/data/loader/processed_data_loader.py` is the public loading facade.
-`src/data/loader/read_parquet.py` owns physical Parquet reads.
-`src/data/storage/snapshot_store.py` selects CURRENT versions; readers do not manage versions.
+`src/data/loader/processed_data_loader.py`は、公開の読込facadeである。
+`src/data/loader/read_parquet.py`は、Parquetの物理読込を所有する。
+`src/data/storage/snapshot_store.py`がCURRENTの版を選択し、readerは版を管理しない。
 
-The loader can:
+ローダーは次のことができる。
 
-- list and read complete tables from the active snapshot;
-- iterate large Parquet tables in bounded Arrow record batches;
-- read prediction-time O1/O2 Parquet for a specified `RaceKey`.
+- 有効なsnapshotから完全な表を一覧表示し、読み込む。
+- 大きなParquet表を、上限のあるArrowのrecord batchで反復処理する。
+- 指定した`RaceKey`について、予測時のO1/O2 Parquetを読む。
 
 汎用SQLite物理readerは`src/data/loader/read_sqlite.py`に置き、snapshot生成工程が利用する。
 公開DataLoader APIは引き続きprocessed Parquetだけを読み、raw `race.db`を開かない。
 Realtimeもレース別Parquet版を公開してから`read_parquet.py`で読む。
 
-## Planned racing AI
+## 計画中の競馬AI
 
-The agreed product requirements are in `docs/requirements.md`, and decided
-behavior is in `docs/specification.md`. Design proposals and open questions
-remain in `docs/discussions/`. Explicit, audited numeric inputs support LambdaRank
-training and prediction; raw-to-feature business calculations and betting decisions
-remain separate work.
+合意済みの製品要件は`docs/requirements.md`に、決定済みの動作は`docs/specification.md`にある。
+設計案と未解決の問題は`docs/discussions/`に残っている。明示的で監査済みの数値入力によって、
+LambdaRankの学習と予測ができる。rawから特徴量への業務計算と購入判断は、引き続き別の作業とする。
 
-The detailed LambdaRank MVP implementation proposal is in
-[implementation design](docs/implementation-design.md).
+LambdaRank MVPの詳細な実装案は[実装設計](docs/implementation-design.md)にある。
 
-The current explanatory-variable contracts are listed in the
-[explanatory variable list](docs/feature-list.md).
+現行の説明変数の契約は[説明変数一覧](docs/feature-list.md)に記載している。
 
-## Setup and validation
+## セットアップと検証
 
-Install the locked development environment:
+ロックされた開発環境をインストールする。
 
 ```bash
 uv sync --locked
 ```
 
-Run repository checks:
+リポジトリのチェックを実行する。
 
 ```bash
 uv run ruff format --check .
@@ -299,46 +283,42 @@ uv run pytest
 型検査は`src`全体を対象とし、分類した全テストも含む。環境確認テストは従来の
 `src/tests/test_project_environment.py`に置き、既定実行と`pytest src/tests`の両方で収集する。
 
-The agent-workflow integration tests require PowerShell 7 (`pwsh`). On Windows,
-enable Developer Mode and `git config core.symlinks true` so the shared skill
-links in `.claude/skills/` check out as symbolic links.
+エージェントのworkflowの結合テストには、PowerShell 7（`pwsh`）が必要である。Windowsでは、
+`.claude/skills/`の共用スキルのリンクがシンボリックリンクとしてチェックアウトされるよう、
+開発者モードと`git config core.symlinks true`を有効にする。
 
-## Development workflow
+## 開発workflow
 
-Claude Code and Codex collaborate under ADR-031
-(`docs/rules/agent-collaboration.md`). Run a non-trivial change with `/cc-task`
-in Claude Code:
+Claude CodeとCodexは、ADR-031（`docs/rules/agent-collaboration.md`）に従って協働する。
+軽微でない変更は、Claude Codeで`/cc-task`を使って実行する。
 
-1. Claude Code writes `.handoff/<task-id>/plan.md`; you approve it.
-2. Codex implements it in `.worktrees/<task-id>/`; Claude Code verifies the
-   result and runs a dual independent review (Claude subagent + Codex).
-3. Claude Code pushes and opens a PR as the `keiba-ai-agent` GitHub App and
-   drives CI.
-4. You review, approve, and merge the PR on GitHub. Rulesets on `main` require
-   your approval of the latest push and prevent the App from merging.
+1. Claude Codeが`.handoff/<task-id>/plan.md`を書き、人間が承認する。
+2. Codexが`.worktrees/<task-id>/`で実装し、Claude Codeが結果を検証して、二系統の独立した
+   レビュー（Claudeのサブエージェント + Codex）を行う。
+3. Claude Codeが`keiba-ai-agent` GitHub AppとしてpushしてPRを作成し、CIに対応する。
+4. 人間がGitHub上でPRをレビュー・承認し、マージする。`main`のrulesetは、最新のpushに対する
+   人間の承認を必須とし、Appによるマージを防ぐ。
 
-One-time agent identity setup is described in `docs/rules/git-workflow.md`.
+エージェント識別の一度だけの設定は、`docs/rules/git-workflow.md`に記載している。
 
-Repository instructions are in `AGENTS.md`. Current architectural facts are in
-`ARCHITECTURE.md`.
+リポジトリの指示は`AGENTS.md`に、現行のアーキテクチャの事実は`ARCHITECTURE.md`にある。
 
-## Feature registration and Python API migration
+## 特徴量の登録とPython APIの移行
 
-`configs/features.toml` owns the F01-F21 group IDs, names and declaration order.
-These are stable JSON identifiers, independent of the numeric model allow-list.
-Each `[[features]]` entry contains only `id` and `name`. The catalog must match
-all implemented groups; duplicate IDs/names, malformed entries, unknown names
-and missing implementations are rejected. Changing an ID requires considering
-existing JSON consumers. Importing modules or requesting CLI help never reads it.
+`configs/features.toml`は、F01〜F21の群ID、名前、宣言順を所有する。これらは、モデルの数値
+allow-listとは独立した、安定したJSON識別子である。各`[[features]]`項目は`id`と`name`だけを持つ。
+catalogは実装済みのすべての群と一致しなければならず、ID・名前の重複、不正な形式の項目、
+未知の名前、実装の欠落は拒否する。IDを変更するには、既存のJSONの利用者を考慮する必要がある。
+モジュールのimportやCLIのヘルプの表示では、このファイルを読まない。
 
 ```bash
 uv run python src/main.py model explanatory-variables --input inputs.json --output features.json --features-config configs/features.toml
 ```
 
-`--features-config` defaults to `configs/features.toml`. Other commands and their
-existing arguments, JSON keys and exit codes retain their contracts.
+`--features-config`の既定値は`configs/features.toml`である。その他のコマンドと、その既存の
+引数、JSONキー、終了コードは、契約を維持する。
 
-Python callers load the catalog explicitly once and reuse the same registry:
+Pythonの呼出し側は、catalogを明示的に1回読み込み、同じregistryを再利用する。
 
 ```python
 from make_features.catalog.loader import load_feature_definitions
@@ -357,33 +337,31 @@ write_feature_table(table, "jockey.parquet", registered_names=registry.names)
 restored = read_feature_table("jockey.parquet", registered_names=registry.names)
 ```
 
-`batch_inputs`, `jockey_inputs`, and `column_types` above are caller-provided
-validated inputs and explicit Arrow scalar types. Registration does not approve
-new calculation rules or add columns to model training.
+上の`batch_inputs`、`jockey_inputs`、`column_types`は、呼出し側が渡す検証済みの入力と、明示的な
+Arrowのscalar型である。登録によって、新しい計算規則が承認されたり、モデル学習に列が追加されたり
+することはない。
 
-The `make_features` package no longer re-exports implementations. Import individual
-build APIs from their feature modules, `FeatureTableRow` from
-`make_features.contracts.rows`, input/result types from `make_features.contracts.types`,
-table construction from `make_features.tables.build`, table validation from
-`make_features.validation.table`, and persistence from `make_features.tables.parquet`.
-The original previous-race result, odds ratio and pedigree build APIs keep their
-arguments and metadata and receive no F identifiers. Other individual build APIs
-now require `definition`; batch generation/audit require `registry`. Table and
-datamart APIs require `registered_names=registry.names` for those groups and
-retain fixed validation for the original three when omitted.
+`make_features`パッケージは、実装を再exportしなくなった。個別のbuild APIは各特徴量モジュールから、
+`FeatureTableRow`は`make_features.contracts.rows`から、入力・結果の型は
+`make_features.contracts.types`から、表の構築は`make_features.tables.build`から、表の検証は
+`make_features.validation.table`から、永続化は`make_features.tables.parquet`からimportする。
+元からある前走結果、オッズ比、血統のbuild APIは、引数とmetadataを維持し、F識別子を持たない。
+その他の個別のbuild APIは、現在は`definition`を必須とし、一括の生成・監査は`registry`を必須とする。
+表とdatamartのAPIは、それらの群について`registered_names=registry.names`を必須とし、省略時は
+元の3つについて固定の検証を維持する。
 
-Import `DataRetriever` from `jra_van_retriever.retriever`, `DataPreprocesser` from
-`data.storage.snapshot_builder`, `DataLoader` from `data.loader.processed_data_loader`,
-`DataPaths` from `configuration.data_paths`, and `RaceKey` from `domain.race_key`.
-Raw race-key rows are converted by `jra_van_retriever.parsing.race_key.race_key_from_row`.
-Import pure datamart joins from `make_datamart.builder`, file-based construction and persistence from
-`make_datamart.tables.parquet`, and validation from
-`make_datamart.validation.table`. All five existing public names remain available from `make_datamart`;
-file-based names previously imported from `make_datamart.builder` move to `make_datamart.tables.parquet`. The former
-the earlier combined data modules, `features/common/`, `features/make_features.py` and module `SPEC`
-constants are removed. The current `src/data/` groups the already separated data responsibilities. Acquired data and existing Parquet artifacts remain in
-their original locations and formats. `docs/GUARDED_WORKFLOW_REPAIR.md`
-was removed with the guarded workflow under ADR-031.
+`DataRetriever`は`jra_van_retriever.retriever`から、`DataPreprocesser`は
+`data.storage.snapshot_builder`から、`DataLoader`は`data.loader.processed_data_loader`から、
+`DataPaths`は`configuration.data_paths`から、`RaceKey`は`domain.race_key`からimportする。
+rawのレースキー行は`jra_van_retriever.parsing.race_key.race_key_from_row`で変換する。
+datamartの純粋な結合は`make_datamart.builder`から、ファイルからの構築と永続化は
+`make_datamart.tables.parquet`から、検証は`make_datamart.validation.table`からimportする。
+既存の5つの公開名は、すべて引き続き`make_datamart`から利用できる。以前`make_datamart.builder`から
+importしていたファイル系の名前は、`make_datamart.tables.parquet`へ移る。以前の統合データ
+モジュール、`features/common/`、`features/make_features.py`、およびモジュールの`SPEC`定数は
+削除された。現在の`src/data/`は、既に分離したデータの責務をまとめている。取得済みのデータと
+既存のParquet成果物は、元の場所と形式のまま残る。`docs/GUARDED_WORKFLOW_REPAIR.md`は、
+ADR-031によりguarded workflowと共に削除した。
 
 ## Datamart CLI
 

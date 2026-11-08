@@ -10,25 +10,25 @@ data loading, feature generation, and ranking-model evaluation. Its current
 source boundary is:
 
 ```text
-configs/                        # 既存3 TOMLとHydra実験YAML
+configs/                        # Existing three TOMLs and Hydra experiment YAML
 src/
-├─ main.py                      # CLI組立・登録・起動
-├─ cli/                         # options/json_ioと機能別CLI
-├─ configuration/               # TOML物理読込・共通パス・DataPaths
-├─ data/                        # 共通データ基盤
-│  ├─ loader/                   # JSON・Parquet・SQLite物理読込
-│  ├─ preprocessor/             # SQLite値からArrowへの純粋変換
-│  ├─ saver/                    # JSON・Parquet物理保存
-│  └─ storage/                  # snapshot生成・構造・CURRENT・原子的公開
-├─ jra_van_retriever/            # 取得とロック・台帳・復旧
-├─ make_features/               # 特徴量契約・生成・監査・テーブル
-├─ make_datamart/                # 純粋結合・検証・保存契約
-├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts
-├─ domain/                      # 共有RaceKey
+├─ main.py                      # CLI assembly, registration, and startup
+├─ cli/                         # options/json_io and per-function CLIs
+├─ configuration/               # Physical TOML loading, shared paths, and DataPaths
+├─ data/                        # Shared data foundation
+│  ├─ loader/                   # Physical JSON, Parquet, and SQLite reads
+│  ├─ preprocessor/             # Pure conversion from SQLite values to Arrow
+│  ├─ saver/                    # Physical JSON and Parquet writes
+│  └─ storage/                  # Snapshot creation, layout, CURRENT, and atomic publication
+├─ jra_van_retriever/            # Acquisition, locking, ledger, and recovery
+├─ make_features/               # Feature contracts, generation, audit, and tables
+├─ make_datamart/                # Pure joins, validation, and persistence contracts
+├─ models/                      # dataset, ranking, training, backends, evaluation, and artifacts
+├─ domain/                      # Shared RaceKey
 └─ tests/
-   ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
-   ├─ integration/              # 実ファイル・DB・process・機能接続のテスト
-   └─ test_project_environment.py # 既存環境契約の確認
+   ├─ unit/                     # Isolated tests for pure logic and mocked external boundaries
+   ├─ integration/              # Tests using real files, databases, processes, and connections between functions
+   └─ test_project_environment.py # Existing environment contract check
 ```
 
 `ARCHITECTURE.md` and Accepted ADRs describe implemented contracts. The project

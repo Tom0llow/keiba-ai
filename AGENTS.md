@@ -58,6 +58,7 @@ Before making changes, read the rules relevant to the task:
 - Git, branch, commit, or PR work: `docs/rules/git-workflow.md`
 - Tests or bug fixes: `docs/rules/testing.md`
 - Agent roles, handoffs, and review loops: `docs/rules/agent-collaboration.md`
+- Documents and their language: `docs/rules/documentation.md`
 
 If a deeper directory contains another `AGENTS.md`, follow it within that
 directory.

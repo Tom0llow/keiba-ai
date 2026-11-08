@@ -1,4 +1,4 @@
-# ADR-006: Configure JVLink retrieval profiles and expose a Typer CLI
+# ADR-006: JVLinkの取得profileを設定し、Typer CLIを提供する
 
 - Status: Superseded by ADR-026（ルート設定ファイルの配置のみ。設定所有・取得契約はAccepted）
 - Date: 2026-10-04
@@ -6,94 +6,88 @@
 
 ## Context
 
-JVLinkToSQLite stores both execution configuration and mutable latest-read state
-in XML. Its local `setting.xml` is also user-owned and may be changed through the
-JVLinkToSQLite application. Requiring users to maintain separate historical,
-historical-odds, and latest XML files would duplicate that structure and make
-keiba-ai depend on manual XML edits.
+JVLinkToSQLiteは、実行設定と、変更可能な最新読取状態の両方をXMLに保存する。そのローカルの
+`setting.xml`はユーザーの所有物でもあり、JVLinkToSQLiteのアプリケーションから変更されることが
+ある。historical、historical-odds、latestのXMLファイルを別々に保守するようユーザーに求めると、
+その構造が重複し、keiba-aiがXMLの手動編集に依存することになる。
 
-The retrieval modes need different behavior:
+取得モードごとに、必要な動作が異なる。
 
-- historical base retrieval uses setup data and must not advance the user's seed
-  setting;
-- historical time-series odds use only the selected realtime DataSpecs and a
-  race-specific `JVRaceKey`;
-- latest retrieval must retain the read positions written back by
-  JVLinkToSQLite after a successful run.
+- historicalの基本データの取得はセットアップデータを使い、ユーザーのseed設定を進めては
+  ならない。
+- historicalの時系列オッズは、選択したrealtimeのDataSpecと、レース固有の`JVRaceKey`だけを
+  使う。
+- latestの取得は、成功した実行の後にJVLinkToSQLiteが書き戻した読取位置を保持しなければ
+  ならない。
 
-The repository also needs a stable user-facing command for selecting retrieval
-mode without requiring callers to construct `DataRetriever` in ad-hoc Python.
+リポジトリには、呼出し側に場当たり的なPythonで`DataRetriever`を構築させずに取得モードを選べる、
+ユーザー向けの安定したコマンドも必要である。
 
 ## Decision
 
-Treat the installed JVLinkToSQLite `setting.xml` as a read-only seed from the
-perspective of keiba-ai.
+インストール済みのJVLinkToSQLiteの`setting.xml`は、keiba-aiから見て読み取り専用のseedとして
+扱う。
 
-Declare retrieval policy in `config/jvlink.toml`. The configuration contains:
+取得の方針は`config/jvlink.toml`で宣言する。設定には次を含める。
 
-- the local JVLinkToSQLite executable path;
-- the seed-setting path;
-- semantic profiles for historical, historical odds, and latest retrieval;
-- explicit DataSpec allow-lists and mode-specific dates where applicable.
-  Historical setup profiles may define a separate start datetime for each
-  DataSpec because JRA-VAN data types have different coverage periods.
+- ローカルのJVLinkToSQLiteの実行ファイルのパス。
+- seed設定のパス。
+- historical、historicalのオッズ、latestの取得のための、意味上のprofile。
+- 明示的なDataSpecのallow-listと、該当する場合はモード固有の日付。JRA-VANのデータ種別ごとに
+  収録期間が異なるため、historicalのセットアップprofileでは、DataSpecごとに別の開始日時を
+  定義できる。
 
-`JVLinkSettingBuilder` owns the translation from those semantic profiles to the
-JVLinkToSQLite XML structure. For each normal, setup, and realtime section it
-sets the section enabled state and treats the configured DataSpec list as an
-exclusive allow-list. This prevents DataSpecs enabled in the seed from leaking
-into another retrieval mode.
+`JVLinkSettingBuilder`は、それらの意味上のprofileからJVLinkToSQLiteのXML構造への変換を所有する。
+normal、setup、realtimeの各セクションについて、セクションの有効状態を設定し、設定された
+DataSpecの一覧を排他的なallow-listとして扱う。これにより、seedで有効になっているDataSpecが、
+別の取得モードへ漏れることを防ぐ。
 
-Historical base and historical-odds XML files are generated under a temporary
-directory and executed with `--skipslastmodifiedupdate`. They are discarded when
-the historical workflow finishes and the seed is never mutated.
+historicalの基本データとhistorical-oddsのXMLファイルは、一時ディレクトリに生成し、
+`--skipslastmodifiedupdate`を付けて実行する。これらはhistoricalのworkflowの終了時に破棄し、
+seedは一切変更しない。
 
-Latest retrieval owns a persistent runtime setting under the Git-ignored data
-runtime directory. On the first run it is generated from the seed. Later runs
-use the runtime XML as their source, reapply the latest profile, and let
-JVLinkToSQLite persist updated read positions back into that runtime file.
+latestの取得は、Gitの管理対象外であるデータのruntimeディレクトリ配下に、永続的なruntime設定を所有する。
+初回の実行では、それをseedから生成する。以降の実行では、runtimeのXMLを元にしてlatest profileを
+再適用し、更新した読取位置を、JVLinkToSQLiteにそのruntimeファイルへ書き戻させる。
 
-`config/data.toml` owns the raw database and runtime directory paths.
+`config/data.toml`は、rawデータベースとruntimeディレクトリのパスを所有する。
 
-Expose retrieval through a Typer CLI at `src/main.py`:
+取得は、`src/main.py`のTyper CLIを通じて提供する。
 
 ```text
 uv run python src/main.py --retrieve --mode=historical-basic
 uv run python src/main.py --retrieve --mode=latest
 ```
 
-`DataRetriever` remains the application-level orchestration API underneath the
-CLI. Typer is an explicit runtime dependency and is locked in `uv.lock`.
+`DataRetriever`は、引き続きCLIの下にある、アプリケーション層のオーケストレーションAPIとする。
+Typerは明示的な実行時の依存関係であり、`uv.lock`でロックする。
 
 ## Consequences
 
-- Users configure retrieval policy as TOML instead of editing generated XML.
-- The installed JVLinkToSQLite seed remains compatible with its own GUI and is
-  not used as keiba-ai mutable state.
-- Historical executions are reproducible from the seed plus committed profile.
-- Latest retrieval retains incremental state without committing machine-local
-  runtime files.
-- Adding or removing a DataSpec is an explicit configuration change and missing
-  DataSpecs fail at the setting-generation boundary.
-- Changes to JVLinkToSQLite's XML schema can require changes in
-  `JVLinkSettingBuilder`.
-- The CLI introduces Typer and its transitive dependencies to the locked runtime
-  environment.
+- ユーザーは、生成されたXMLを編集する代わりに、TOMLで取得の方針を設定する。
+- インストール済みのJVLinkToSQLiteのseedは、それ自体のGUIとの互換性を保ち、keiba-aiの
+  変更可能な状態としては使わない。
+- historicalの実行は、seedとコミット済みのprofileから再現できる。
+- latestの取得は、マシン固有のruntimeファイルをコミットせずに、差分取得の状態を保持する。
+- DataSpecの追加や削除は明示的な設定の変更であり、存在しないDataSpecは、設定生成の境界で
+  失敗する。
+- JVLinkToSQLiteのXMLスキーマが変わると、`JVLinkSettingBuilder`の変更が必要になることがある。
+- CLIにより、ロックされた実行環境に、Typerとその推移的な依存関係が加わる。
 
 ## Alternatives considered
 
-### Maintain three user-owned XML files
+### ユーザーが所有する3つのXMLファイルを保守する
 
-Rejected because it duplicates JVLinkToSQLite configuration, requires manual
-synchronization, and mixes policy with generated/mutable state.
+JVLinkToSQLiteの設定が重複し、手動の同期が必要となり、方針と、生成済み/変更可能な状態とが
+混ざるため、採用しない。
 
-### Rewrite the installed `setting.xml` in place
+### インストール済みの`setting.xml`をその場で書き換える
 
-Rejected because historical execution could overwrite the user's configuration
-and latest-read state. It also makes failures or interrupted runs more likely to
-leave the local JVLinkToSQLite installation in an unexpected state.
+historicalの実行が、ユーザーの設定と最新読取状態を上書きし得るため、採用しない。また、失敗や
+中断した実行によって、ローカルのJVLinkToSQLiteのインストールが、予期しない状態で残りやすく
+なる。
 
-### Keep only the Python API
+### Python APIだけを残す
 
-Rejected because routine retrieval should have one documented, repeatable CLI
-entry point rather than requiring inline Python construction.
+日常的な取得には、その場でPythonの構築を求めるのではなく、文書化された、繰り返し使えるCLIの
+入口を一つ用意するべきであるため、採用しない。

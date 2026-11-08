@@ -41,3 +41,5 @@ source-to-output mapping, trial and final validation results, and unresolved
 exceptions. Keep before and after data identifiable, with each transformation's
 reason, impact, and validation traceable. Reconcile confirmed columns, types,
 and derivations with any existing table definition document.
+
+Write the document in Japanese as defined in `docs/rules/documentation.md`.
