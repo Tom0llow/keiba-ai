@@ -54,6 +54,8 @@ Human requirement
    - what changed, mapped to the plan's acceptance criteria,
    - validation that actually ran, and review outcome (fixed / rejected /
      deferred findings),
+   - the selected Codex tier and the model and effort printed in each run's
+     output header (section 8),
    - remaining risks.
    Then stop. Never approve or merge; the human does both on GitHub.
 6. **Human feedback** - if the human requests changes (in chat or as PR
@@ -75,5 +77,7 @@ Stop and ask the human instead of continuing when:
 
 - Codex reports `BLOCKED`, or a fix needs a scope, contract, dependency, or
   security decision the plan did not approve;
+- a Codex run fails with a usage limit or `model_not_found` (report the error
+  and any reset time);
 - a loop limit is reached with unresolved P0-P2 findings or failing CI;
 - the agent identity check fails, or a push or PR operation is rejected.
