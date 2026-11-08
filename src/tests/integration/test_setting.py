@@ -38,7 +38,15 @@ def _write_seed(path: Path) -> None:
       <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>0B11</DataSpec><JVKaisaiDateKey><KaisaiDate>2026-01-01T00:00:00</KaisaiDate></JVKaisaiDateKey></JVDataSpecSetting>
       <JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>0B41</DataSpec><JVRaceKey><KaisaiDate>2026-01-01T00:00:00</KaisaiDate><JyoCD>01</JyoCD><Kaiji>01</Kaiji><Nichiji>01</Nichiji><RaceNum>01</RaceNum></JVRaceKey></JVDataSpecSetting>
       <JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>0B42</DataSpec><JVRaceKey><KaisaiDate>2026-01-01T00:00:00</KaisaiDate><JyoCD>01</JyoCD><Kaiji>01</Kaiji><Nichiji>01</Nichiji><RaceNum>01</RaceNum></JVRaceKey></JVDataSpecSetting>
-    </DataSpecSettings></JVRealTimeDataUpdateSetting>
+"""
+        + "".join(
+            f"      <JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>{spec}</DataSpec>"
+            "<JVRaceKey><KaisaiDate>2026-01-01T00:00:00</KaisaiDate><JyoCD>01</JyoCD>"
+            "<Kaiji>01</Kaiji><Nichiji>01</Nichiji><RaceNum>01</RaceNum></JVRaceKey>"
+            "</JVDataSpecSetting>\n"
+            for spec in ("0B31", "0B32", "0B33", "0B34", "0B35", "0B36")
+        )
+        + """    </DataSpecSettings></JVRealTimeDataUpdateSetting>
   </Details>
 </JVLinkToSQLiteSetting>
 """,
@@ -211,3 +219,83 @@ def test_historical_odds_rejects_refetch_policy() -> None:
         validate_historical_odds_batch(
             replace(config.historical_odds, skip_existing=False), config.historical_odds_batch
         )
+
+
+def test_builder_sets_the_race_key_for_every_race_day_odds_spec(tmp_path: Path) -> None:
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    config = JVLinkConfig.from_toml(Path(__file__).parents[3] / "configs" / "jvlink.toml")
+    assert config.race_day_odds is not None
+
+    destination = tmp_path / "race-day-odds.xml"
+    JVLinkSettingBuilder(seed).build(
+        config.race_day_odds,
+        destination,
+        race_key=RaceKey(date(2026, 11, 15), "05", "05", "04", "11"),
+    )
+
+    root = ET.parse(destination).getroot()
+    settings = {node.findtext("DataSpec"): node for node in root.iter("JVDataSpecSetting")}
+    assert settings["0B41"].findtext("IsEnabled") == "false"
+    assert settings["0B11"].findtext("IsEnabled") == "false"
+    for data_spec in ("0B31", "0B32", "0B33", "0B34", "0B35", "0B36"):
+        setting = settings[data_spec]
+        assert setting.findtext("IsEnabled") == "true"
+        assert setting.findtext("JVRaceKey/KaisaiDate") == "2026-11-15T00:00:00"
+        assert setting.findtext("JVRaceKey/JyoCD") == "05"
+        assert setting.findtext("JVRaceKey/Kaiji") == "05"
+        assert setting.findtext("JVRaceKey/Nichiji") == "04"
+        assert setting.findtext("JVRaceKey/RaceNum") == "11"
+
+
+def test_repository_config_loads_race_day_odds_profile() -> None:
+    config = JVLinkConfig.from_toml(Path(__file__).parents[3] / "configs" / "jvlink.toml")
+
+    assert config.race_day_odds is not None
+    assert config.race_day_odds.realtime_data_specs == frozenset(
+        {"0B31", "0B32", "0B33", "0B34", "0B35", "0B36"}
+    )
+    assert config.race_day_odds.offsets_minutes == (30, 10, 5, 2)
+    assert config.race_day_odds.late_tolerance_seconds == 60
+
+
+def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> None:
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
+    content = source.read_text(encoding="utf-8")
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(content.split("\n[race_day_odds]\n")[0] + "\n", encoding="utf-8")
+
+    config = JVLinkConfig.from_toml(config_path)
+
+    assert config.race_day_odds is None
+    assert config.realtime_current.realtime_data_specs == frozenset({"0B31", "0B32"})
+
+
+@pytest.mark.parametrize(
+    ("old", "new", "message"),
+    [
+        (
+            'realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]',
+            'realtime_data_specs = ["0B31"]',
+            "exactly 0B31 through 0B36",
+        ),
+        ("offsets_minutes = [30, 10, 5, 2]", "offsets_minutes = []", "non-empty array"),
+        ("offsets_minutes = [30, 10, 5, 2]", "offsets_minutes = [5, 5]", "duplicates"),
+        ("offsets_minutes = [30, 10, 5, 2]", 'offsets_minutes = ["5"]', "positive integers"),
+        ("late_tolerance_seconds = 60", "late_tolerance_seconds = 0", "positive integer"),
+        ("late_tolerance_seconds = 60", "", "positive integer"),
+    ],
+)
+def test_config_rejects_invalid_race_day_odds_section(
+    tmp_path: Path, old: str, new: str, message: str
+) -> None:
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
+    head, section = source.read_text(encoding="utf-8").split("\n[race_day_odds]\n")
+    assert old in section
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(
+        head + "\n[race_day_odds]\n" + section.replace(old, new), encoding="utf-8"
+    )
+
+    with pytest.raises(ValueError, match=message):
+        JVLinkConfig.from_toml(config_path)

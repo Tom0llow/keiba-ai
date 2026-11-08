@@ -154,8 +154,8 @@ SnapshotStoreへ依存する。各packageの__init__は下位から上位への�
 
 ## 取得・進捗・復旧
 
-`jra_van_retriever/retriever.py`のJraVanRetrieverはhistorical-basic/historical-odds/latest/realtimeを
-構成する。既存のDataRetriever名も同じクラスを指す。workflowsはモードごとの処理順序を所有する。
+`jra_van_retriever/retriever.py`のJraVanRetrieverはhistorical-basic/historical-odds/latest/realtime/
+race-day-oddsを構成する。既存のDataRetriever名も同じクラスを指す。workflowsはモードごとの処理順序を所有する。
 acquisitionはshellを使わないJVLinkToSQLite subprocess、raw DBのOSロック、O1/O2 archiveとXML生成を所有する。
 credentialsをリポジトリへ読み込まず、ローカルのJV-Link環境を利用する。
 
@@ -186,6 +186,22 @@ realtimeはhistoryの0B41/0B42を取得・archive後にcurrentの0B31/0B32を取
 復旧確定 → 再観測 → bootstrap/reconcile → 要求開始確定 → 実行/archive →
 失敗隔離/成功reset → 要求結果確定 → run確定 → 派生報告の順序を維持する。
 未解決要求は全取得モードでfail-closedとし、復旧なしの書込を拒否する。
+
+ADR-032のrace-day-oddsは、指定日の`NL_RA_RACE`の`HassoTime`から`[race_day_odds]`の各分前に
+0B31〜0B36を1回のJVLinkToSQLite実行で取得し、既存O1/O2 archiveとは別の`ARCHIVE_CAPTURE_*`表へ保存する。
+
+| モジュール | 責務 |
+| --- | --- |
+| workflows/race_day_odds_plan.py | 取得予定の純粋な計画、遅延判定、ADR-013と同じ規則の結果分類。 |
+| workflows/race_day_odds.py | 起動時復旧、予定時刻までの待機、ロック内の1件ずつの取得の組立。時計とsleepは注入可能。 |
+| acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化、取得記録`ARCHIVE_CAPTURE_LOG`、DataSpec別SAVEPOINTでのarchive。 |
+| acquisition/acquisition_lock.py | 取得記録の`running`行がある間、全取得モードを拒否する。race-day-oddsの起動時復旧だけが解除する。 |
+| progress/raw_observation.py | 指定日の`NL_RA_RACE`のキー・区分・発走時刻の読取。 |
+
+3連複・3連単の子表のarchiveは、親表の`headDataKubun`/`HappyoTime`を列として加え、全列`TEXT`とする。
+同じ`HappyoTime`で行集合が異なる取得は`happyo_conflict`として退避する。`running`の確定後の書込み失敗では
+`running`とstagingを残して停止し、次回起動時にstagingを退避・初期化して`interrupted`とする。
+発走時刻の変更には追従しない。
 
 台帳は完全RaceKeyとDataSpecをキーとし、初期archive欠損をpendingとする。
 captured JVOpen/JVRTOpen=-1だけを自動provider_missingとし、証拠なし空応答はfailedで停止する。

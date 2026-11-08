@@ -11,6 +11,8 @@ from pathlib import Path
 from types import TracebackType
 from typing import BinaryIO
 
+from jra_van_retriever.contracts.odds import ARCHIVE_CAPTURE_LOG
+
 
 class AcquisitionBlocked(RuntimeError):
     """Refuse acquisition while another writer or unresolved request exists."""
@@ -39,13 +41,43 @@ def check_unresolved(ledger: Path) -> None:
             )
 
 
+def check_unresolved_capture(raw_db: Path) -> None:
+    """Reject a new writer while a race-day capture remains unconfirmed."""
+    if not raw_db.is_file():
+        return
+    # Open read-write (but only read): a read-only connection cannot roll back a hot
+    # rollback journal left by an interrupted writer and would block every mode.
+    with closing(sqlite3.connect(raw_db.resolve())) as database:
+        exists = database.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (ARCHIVE_CAPTURE_LOG,),
+        ).fetchone()
+        if exists is None:
+            return
+        if database.execute(
+            f'SELECT 1 FROM "{ARCHIVE_CAPTURE_LOG}" WHERE status = ? LIMIT 1',
+            ("running",),
+        ).fetchone():
+            raise AcquisitionBlocked(
+                "unresolved race-day odds capture; recover capture staging first"
+            )
+
+
 class AcquisitionLock:
     """Hold a nonblocking OS lock released automatically on process termination."""
 
-    def __init__(self, raw_db: Path, ledger: Path, *, allow_unresolved: bool = False) -> None:
+    def __init__(
+        self,
+        raw_db: Path,
+        ledger: Path,
+        *,
+        allow_unresolved: bool = False,
+        allow_unresolved_capture: bool = False,
+    ) -> None:
         self.raw_db = raw_db.expanduser().resolve()
         self.ledger = ledger.expanduser().resolve()
         self.allow_unresolved = allow_unresolved
+        self.allow_unresolved_capture = allow_unresolved_capture
         self.path = Path(f"{self.raw_db}.acquisition.lock")
         self._file: BinaryIO | None = None
 
@@ -72,6 +104,13 @@ class AcquisitionLock:
                     self._validate_binding(json.loads(content))
                 except (TypeError, ValueError) as exc:
                     raise AcquisitionBlocked("raw database lock binding is invalid") from exc
+            if not self.allow_unresolved_capture:
+                try:
+                    check_unresolved_capture(self.raw_db)
+                except sqlite3.DatabaseError as exc:
+                    raise AcquisitionBlocked(
+                        "race-day capture log is incomplete or invalid"
+                    ) from exc
             if not self.allow_unresolved:
                 try:
                     check_unresolved(self.ledger)

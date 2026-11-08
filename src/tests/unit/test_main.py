@@ -1,5 +1,6 @@
 """Tests for the Typer data CLI."""
 
+import json
 from datetime import date
 from unittest.mock import Mock, patch
 
@@ -8,7 +9,10 @@ from rich.text import Text
 from typer.testing import CliRunner
 
 from domain.race_key import RaceKey
+from jra_van_retriever.acquisition.odds_archive import CaptureResult
+from jra_van_retriever.retriever import JraVanRetriever
 from jra_van_retriever.workflows.historical_odds import WeeklyBatchResult
+from jra_van_retriever.workflows.race_day_odds import CaptureReport, RaceDayOddsRunResult
 from main import app
 
 runner = CliRunner()
@@ -400,3 +404,95 @@ def test_preprocess_rebuild_can_run_without_retrieval() -> None:
 
     assert result.exit_code == 0
     preprocesser.rebuild.assert_called_once_with()
+
+
+def _race_day_result(failed: int) -> Mock:
+    report = CaptureReport(
+        "abc",
+        RaceKey(date(2026, 11, 15), "05", "05", "04", "11"),
+        5,
+        {"0B31": CaptureResult("archived", "capture_archive_committed")},
+    )
+    summary = {"archived": 1, "no_data": 0, "failed": failed, "skipped_late": 0, "interrupted": 0}
+    retriever = Mock()
+
+    def retrieve(
+        race_date: date, *, reporter: object, recovery_reporter: object
+    ) -> RaceDayOddsRunResult:
+        assert race_date == date(2026, 11, 15)
+        recovery_reporter(0)  # type: ignore[operator]
+        reporter(report)  # type: ignore[operator]
+        return RaceDayOddsRunResult((report,), summary)
+
+    retriever.retrieve_race_day_odds.side_effect = retrieve
+    return retriever
+
+
+@pytest.mark.parametrize(("failed", "exit_code"), [(0, 0), (1, 1)])
+def test_race_day_odds_cli_reports_each_capture_then_summary(failed: int, exit_code: int) -> None:
+    retriever = _race_day_result(failed)
+    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
+
+    assert result.exit_code == exit_code
+    lines = result.stdout.strip().splitlines()
+    assert lines[0] == "race-day-odds capture abc 2026-11-15/05/05/04/11 -5m 0B31=archived"
+    assert json.loads(lines[-1]) == {
+        "archived": 1,
+        "no_data": 0,
+        "failed": failed,
+        "skipped_late": 0,
+        "interrupted": 0,
+    }
+
+
+def test_race_day_odds_cli_exits_130_on_interrupt_with_recovery_count() -> None:
+    def retrieve(race_date: date, *, reporter: object, recovery_reporter: object) -> None:
+        recovery_reporter(6)  # type: ignore[operator]
+        raise KeyboardInterrupt
+
+    retriever = Mock()
+    retriever.retrieve_race_day_odds.side_effect = retrieve
+    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
+
+    assert result.exit_code == 130
+    summary = json.loads(result.stdout.strip().splitlines()[-1])
+    assert (summary["failed"], summary["interrupted"]) == (0, 6)
+
+
+@pytest.mark.parametrize(
+    ("arguments", "message"),
+    [
+        ([], "race-day-odds requires --date"),
+        (["--date=2026-11-15", "--jyo=05"], "accepts --date but not"),
+        (["--date=2026-11-15", "--race=11"], "accepts --date but not"),
+        (["--date=2026-11-15", "--plan-only"], "odds-only options require"),
+    ],
+)
+@pytest.mark.usefixtures("cli_color_mode")
+def test_race_day_odds_cli_rejects_invalid_options(arguments: list[str], message: str) -> None:
+    with patch("cli.jra_van_retriever.DataRetriever.from_toml") as retriever:
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", *arguments])
+
+    assert result.exit_code == 2
+    output = Text.from_ansi(result.output).plain
+    assert message in " ".join(output.replace("│", "").split())
+    retriever.assert_not_called()
+
+
+@pytest.mark.usefixtures("cli_color_mode")
+def test_unknown_mode_lists_race_day_odds() -> None:
+    result = runner.invoke(app, ["--retrieve", "--mode=unknown"])
+
+    assert result.exit_code == 2
+    output = " ".join(Text.from_ansi(result.output).plain.replace("│", "").split())
+    assert "'race-day-odds'" in output
+
+
+def test_race_day_odds_requires_configured_section() -> None:
+    retriever = JraVanRetriever.__new__(JraVanRetriever)
+    retriever._race_day_odds = None
+
+    with pytest.raises(ValueError, match=r"\[race_day_odds\] is required"):
+        retriever.retrieve_race_day_odds(date(2026, 11, 15))

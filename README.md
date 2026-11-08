@@ -81,8 +81,8 @@ JV-LinkとJVLinkToSQLiteは、Windowsにインストールと設定を済ませ�
 PythonのコードはJV-Link COMを直接呼び出さず、JRA-VANのサービスキーも保存しない。
 
 ユーザーが所有する`C:\JVLinkToSQLite\setting.xml`はseedとして扱う。取得の動作は
-`configs/jvlink.toml`で宣言し、Pythonがhistorical-basic、historical-odds、latest、realtimeの
-各モードの実行用XMLを生成する。
+`configs/jvlink.toml`で宣言し、Pythonがhistorical-basic、historical-odds、latest、realtime、
+race-day-oddsの各モードの実行用XMLを生成する。
 
 主なprofileは次のとおり。
 
@@ -135,6 +135,39 @@ ARCHIVE_O2_ODDS_UMAREN
 
 同一の行の繰り返しは重複除去し、`HappyoTime`が異なる観測は保持する。
 
+開催日の発走前オッズは、`[race_day_odds]`で取得時点を設定する（[ADR-032](docs/decisions/ADR-032-capture-race-day-odds-for-all-bet-types.md)）。
+
+```toml
+[race_day_odds]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]
+offsets_minutes = [30, 10, 5, 2]
+late_tolerance_seconds = 60
+```
+
+race-day-oddsの実行中に、`latest`や`preprocess rebuild`による完全なParquet出力を重ねない。raw DBは
+ロールバックジャーナル方式のため、長い読取の間は取得の書込みが`database is locked`で失敗し、
+取得が欠けるか、その日の取得が停止する。当日の`latest`は、race-day-oddsを起動する前に済ませておく。
+
+DataSpecは`0B31`〜`0B36`の6種ちょうどとする。取得した行は既存のO1/O2 archiveとは別の表へ保存し、
+取得ごとの記録を`ARCHIVE_CAPTURE_LOG`へ残す。
+
+```text
+ARCHIVE_CAPTURE_O1_ODDS_TANFUKUWAKU
+ARCHIVE_CAPTURE_O2_ODDS_UMAREN
+ARCHIVE_CAPTURE_O3_ODDS_WIDE
+ARCHIVE_CAPTURE_O4_ODDS_UMATAN
+ARCHIVE_CAPTURE_O5_ODDS_SANREN
+ARCHIVE_CAPTURE_O5_OddsSanrenInfo
+ARCHIVE_CAPTURE_O6_ODDS_SANRENTAN
+ARCHIVE_CAPTURE_O6_OddsSanrentanInfo
+ARCHIVE_CAPTURE_LOG
+```
+
 ## CLI
 
 依存関係をインストールし、リポジトリのルートからコマンドを実行する。
@@ -146,6 +179,7 @@ uv run python src/main.py --retrieve --mode=historical-basic
 uv run python src/main.py --retrieve --mode=historical-odds
 uv run python src/main.py --retrieve --mode=latest
 uv run python src/main.py --retrieve --mode=realtime
+uv run python src/main.py --retrieve --mode=race-day-odds --date 2026-11-15
 ```
 
 取得と完全なParquet公開は、workflowごとに分かれている。
@@ -186,6 +220,14 @@ uv run python src/main.py --retrieve --mode=realtime
   公開する。
 - `--retrieve --mode=realtime`: 対象レースの履歴/現在のオッズを取得してarchiveし、その同じ
   `RaceKey`についてレース単位のParquetを公開する。
+- `--retrieve --mode=race-day-odds --date YYYY-MM-DD`: 指定日の中央01〜10場の全レースについて、
+  `NL_RA_RACE.HassoTime`の`offsets_minutes`の各分前まで待ち、`0B31`〜`0B36`を取得して`ARCHIVE_CAPTURE_*`へ
+  保存する。当日の`NL_RA_RACE`は、事前に`latest`で取得しておく。取得ごとに
+  `race-day-odds capture <capture_id> <race> -<offset>m <spec>=<status> ...`を出力し、最後の行に件数の要約を
+  JSONで出す。失敗があれば終了コード1、Ctrl+Cでは130となる。予定時刻を`late_tolerance_seconds`より過ぎた取得は
+  `skipped_late`とし、発走時刻の変更には追従しない。取得の途中で止まった場合は、取得記録の`running`が残り、
+  他の取得モードはこのコマンドを再起動して復旧するまで拒否される。このコマンドはParquetを公開しないので、
+  `preprocess rebuild`などの完全な再構築で出力する。
 
 すべての取得モードは、フラグ形式のインターフェースを使う。既存のrawデータからprocessedデータを
 公開するための別の`preprocess`コマンドも、引き続き利用できる。
