@@ -24,11 +24,31 @@ Always review the complete diff, not only the latest round's changes.
   earlier review files or Codex's implementation reports.
 - **Codex** (Bash tool, `run_in_background: true`):
 
+  Use the higher of the plan tier and `standard`, then set `CODEX_MODEL` and
+  `CODEX_EFFORT` from its row in section 8 of
+  `docs/rules/agent-collaboration.md` before running.
+
   ```bash
   codex exec -C "$WT" -s read-only -c 'windows.sandbox="unelevated"' \
+    -m "$CODEX_MODEL" \
+    -c "model_reasoning_effort=\"$CODEX_EFFORT\"" \
     -o "$HANDOFF/codex-review-$ROUND.md" \
     "Review the changes in this worktree against origin/main (include uncommitted and intent-to-add files). Read-only. Follow .agents/skills/review-rubric/SKILL.md. The approved plan is $HANDOFF/plan.md; also report unmet acceptance criteria. Prefix finding IDs with CX-." \
     < /dev/null
+  ```
+
+  A Codex review succeeds only when its exit code is 0,
+  `codex-review-$ROUND.md` exists and is non-empty, and no line starting with
+  `ERROR:` turns out, on inspection, to be a Codex-level error (usage limit,
+  `model_not_found`, request, or configuration error) rather than output of a
+  command Codex ran. A usage-limit or `model_not_found` error stops the task
+  and goes to the human; do not fall back to another tier or model. For any
+  other failed run, inspect the output. It may be rerun once in the same review
+  round without using a fix round; delete the stale output file before
+  rerunning:
+
+  ```bash
+  rm -f "$HANDOFF/codex-review-$ROUND.md"
   ```
 
 ## 3. Adjudicate
@@ -42,11 +62,13 @@ For every finding from either reviewer:
    `reject` (with evidence), or `defer` (valid but out of plan scope; list it in
    the PR body under Risks / Notes).
 
-Write `$HANDOFF/review-$ROUND.md`:
+Write `$HANDOFF/review-$ROUND.md`, using the selected tier and the `model:`
+and `reasoning effort:` values printed in the Codex run's output header:
 
 ```text
 Target: <diff command> @ <HEAD SHA or "uncommitted">
 Plan: <plan path>
+Codex: <tier> / <model> / <effort>
 
 ID | Severity | Location | Decision | Summary / evidence
 REV-1 | P1 | src/x.py:10-20 | fix | ...

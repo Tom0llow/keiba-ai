@@ -37,7 +37,7 @@ is `YYYYMMDD-<short-kebab-slug>`:
 | `plan.md` | Claude Code | Approved requirement: goal, design, steps, acceptance criteria, test plan |
 | `codex-plan-review-<n>.md` | Codex | Optional read-only plan critique |
 | `codex-impl-<n>.md` | Codex | Implementation report for round `n` |
-| `verify-<n>.md` | Claude Code | Verification failures fed back to Codex |
+| `verify-<n>.md` | Claude Code | Verification result for round `n`: Codex tier/model/effort used and failures fed back to Codex |
 | `codex-review-<n>.md` | Codex | Read-only review for round `n` |
 | `review-<n>.md` | Claude Code | Adjudicated findings for round `n` |
 | `ci-<n>.md` | Claude Code | CI failure evidence for round `n` |
@@ -82,3 +82,49 @@ report to the human.
 - Only one writer per worktree at a time.
 - Read-only reviewers may run in parallel.
 - Independent tasks use separate worktrees and branches.
+
+## 8. Codex model tiers
+
+Every `codex exec` run passes an explicit model and reasoning effort from this
+table (`-m "$CODEX_MODEL" -c "model_reasoning_effort=\"$CODEX_EFFORT\""`),
+except that rule 3 escalates to the `deep` model with effort `max`. `max` is
+listed as supported for that model in the Codex model catalog, but has not yet
+been confirmed with a run on the account. Skills never hard-code model names;
+update only this table when models change, and confirm a new model with one run
+on the account before switching.
+
+| Tier | `CODEX_MODEL` | `CODEX_EFFORT` | Use for |
+| --- | --- | --- | --- |
+| `light` | `gpt-5.6-luna` | `xhigh` | Read-only search, summary, or extraction; mechanical or small changes with an unambiguous expected result (format, lint, typo, rename, one-line doc or config edit) |
+| `standard` | `gpt-5.6-terra` | `xhigh` | Implementing an approved plan whose design and bug cause are already settled; adding tests; Codex review of `light` and `standard` tasks |
+| `deep` | `gpt-5.6-sol` | `xhigh` | Plan critique; architecture or ADR-level changes; public or persisted contracts (CLI, table schemas, Parquet, model artifacts); trust-boundary files (`.github/`, `.claude/settings.json`, `.codex/`, `scripts/github-app/`); time-ordering and leakage-sensitive feature or data logic; cross-module refactors; bugs or CI failures whose cause is unknown; Codex review of `deep` tasks |
+
+Selection:
+
+1. `cc-design` records `Codex tier: <tier> - <reason>` in `plan.md`, chosen
+   by the riskiest part of the plan. When two tiers fit, choose the higher.
+   The human may change the tier at GATE 1.
+2. Per run:
+   - plan critique: `deep`;
+   - implementation round 1: the plan tier;
+   - fix round: `light` only when every finding is mechanical and the plan
+     tier is not `deep`; `deep` when a finding needs diagnosis of an unknown
+     cause, otherwise the plan tier;
+   - Codex review: the higher of the plan tier and `standard`.
+3. Escalate one tier for the next round (`light` -> `standard` -> `deep`;
+   at `deep`, use the `deep` model with effort `max`) when the previous round
+   failed verification for a non-mechanical reason. This overrides rule 2 for
+   that round. Escalation never adds rounds; section 6 still applies.
+   `BLOCKED` always goes to the human (section 4); if the human sends the task
+   back, the tier may be raised then.
+4. Never use effort `ultra`: it starts subagents automatically, which Codex
+   must not do (section 1).
+5. A run that fails with a usage limit or `model_not_found` is not retried on
+   another tier or model; stop and report the error and any reset time to the
+   human.
+6. Record the selected tier and the model and reasoning effort printed in the
+   run's output header (`model:` and `reasoning effort:`) for each run. Record
+   implementation and review runs in the round's handoff file
+   (`verify-<n>.md`, `review-<n>.md`) and in the READY report. Record a
+   plan-critique run in a `Codex runs:` line directly below the plan heading in
+   `plan.md`.
