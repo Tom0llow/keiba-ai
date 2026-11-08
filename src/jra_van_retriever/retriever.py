@@ -23,6 +23,11 @@ from jra_van_retriever.workflows.historical_odds import (
 )
 from jra_van_retriever.workflows.historical_odds_legacy import LegacyHistoricalOddsRetriever
 from jra_van_retriever.workflows.latest import LatestRetriever
+from jra_van_retriever.workflows.race_day_odds import (
+    CaptureReport,
+    RaceDayOddsRetriever,
+    RaceDayOddsRunResult,
+)
 from jra_van_retriever.workflows.realtime import RealtimeRetriever
 
 T = TypeVar("T")
@@ -110,6 +115,19 @@ class JraVanRetriever:
             archive,
             jvlink.realtime_history,
             jvlink.realtime_current,
+        )
+        self._race_day_odds = (
+            RaceDayOddsRetriever(
+                runner,
+                builder,
+                archive,
+                jvlink.race_day_odds,
+                paths.raw_db,
+                self._ledger_path,
+                paths.jvlink_runtime_dir,
+            )
+            if jvlink.race_day_odds is not None
+            else None
         )
         self._weekly = (
             WeeklyHistoricalOddsRetriever(
@@ -211,6 +229,20 @@ class JraVanRetriever:
             return self._realtime.retrieve(
                 RaceKey(race_date, jyo_code, kaiji, nichiji, race_number)
             )
+
+    def retrieve_race_day_odds(
+        self,
+        race_date: date,
+        *,
+        reporter: Callable[[CaptureReport], None] | None = None,
+        recovery_reporter: Callable[[int], None] | None = None,
+    ) -> RaceDayOddsRunResult:
+        """Capture all configured pre-race odds observations for one date."""
+        if self._race_day_odds is None:
+            raise ValueError("[race_day_odds] is required for race-day-odds")
+        return self._race_day_odds.retrieve(
+            race_date, reporter=reporter, recovery_reporter=recovery_reporter
+        )
 
 
 # Keep the existing documented acquisition API name at its new owning module.

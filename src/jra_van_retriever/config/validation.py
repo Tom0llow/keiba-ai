@@ -6,7 +6,11 @@ from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
 if TYPE_CHECKING:
-    from jra_van_retriever.config.profiles import HistoricalOddsBatch, JVLinkProfile
+    from jra_van_retriever.config.profiles import (
+        HistoricalOddsBatch,
+        JVLinkProfile,
+        RaceDayOddsProfile,
+    )
 
 
 def _require_table(config: dict[str, Any], key: str) -> dict[str, Any]:
@@ -49,6 +53,26 @@ def _require_string_set(section: dict[str, Any], key: str, section_name: str) ->
     if len(items) != len(set(items)):
         raise ValueError(f"[{section_name}].{key} must not contain duplicates")
     return frozenset(items)
+
+
+def _require_positive_int(section: dict[str, Any], key: str, section_name: str) -> int:
+    value = section.get(key)
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"[{section_name}].{key} must be a positive integer")
+    return value
+
+
+def _require_positive_int_tuple(
+    section: dict[str, Any], key: str, section_name: str
+) -> tuple[int, ...]:
+    value = section.get(key)
+    if not isinstance(value, list) or not value:
+        raise ValueError(f"[{section_name}].{key} must be a non-empty array")
+    if any(type(item) is not int or item <= 0 for item in value):
+        raise ValueError(f"[{section_name}].{key} must contain positive integers")
+    if len(value) != len(set(value)):
+        raise ValueError(f"[{section_name}].{key} must not contain duplicates")
+    return tuple(value)
 
 
 def _optional_datetime(section: dict[str, Any], key: str, section_name: str) -> datetime | None:
@@ -98,3 +122,22 @@ def validate_historical_odds_batch(odds: JVLinkProfile, batch: HistoricalOddsBat
         raise ValueError("historical-odds supports only 0B41 and 0B42")
     if odds.race_start_date is None or odds.race_start_date.year != batch.first_year:
         raise ValueError("historical_odds.race_start_date must lie in batch.first_year")
+
+
+def validate_race_day_odds_profile(profile: RaceDayOddsProfile) -> None:
+    """Validate the exclusive realtime profile used by race-day odds capture."""
+    expected_specs = frozenset({"0B31", "0B32", "0B33", "0B34", "0B35", "0B36"})
+    if profile.normal_update or profile.setup_update or not profile.realtime_update:
+        raise ValueError("race-day-odds requires only realtime odds updates")
+    if profile.normal_data_specs or profile.setup_data_specs:
+        raise ValueError("race-day-odds normal/setup data specs must be empty")
+    if profile.realtime_data_specs != expected_specs:
+        raise ValueError("race-day-odds requires exactly 0B31 through 0B36")
+    if not profile.offsets_minutes:
+        raise ValueError("race-day-odds offsets_minutes must not be empty")
+    if any(type(value) is not int or value <= 0 for value in profile.offsets_minutes):
+        raise ValueError("race-day-odds offsets_minutes must contain positive integers")
+    if len(profile.offsets_minutes) != len(set(profile.offsets_minutes)):
+        raise ValueError("race-day-odds offsets_minutes must not contain duplicates")
+    if type(profile.late_tolerance_seconds) is not int or profile.late_tolerance_seconds <= 0:
+        raise ValueError("race-day-odds late_tolerance_seconds must be a positive integer")

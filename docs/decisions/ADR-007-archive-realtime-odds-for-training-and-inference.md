@@ -86,3 +86,10 @@ backfillも解決しないため、採用しない。
 JVLinkToSQLiteは、realtimeのO1/O2を同じ条件付きのレコードスキーマへ対応付けるため、現在の範囲
 では採用しない。archiveの契約を一つに保つと、元のレコードの項目を保持したまま、Training-Serving Skewを
 最小にできる。
+
+## Related decisions
+
+[ADR-032](ADR-032-capture-race-day-odds-for-all-bet-types.md)は、この決定を置換せずに拡張する。
+開催日の発走前複数時点で`0B31`〜`0B36`を取得し、既存の`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`とは
+別の`ARCHIVE_CAPTURE_*`表へ保存する。3連複・3連単の子表のarchiveに限り、時点を識別するために
+親表の`headDataKubun`と`HappyoTime`を列として加える。

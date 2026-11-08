@@ -67,6 +67,27 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 | [SY_PROC_FILES](SY_PROC_FILES.md) | 8,639 | 9 | 341,172 | `FileName` |
 | **合計** | **251,654,382** | **7,979** | **12,721,941,245** | — |
 
+## 計画（未生成）の表
+
+[ADR-032](../decisions/ADR-032-capture-race-day-odds-for-all-bet-types.md)の`race-day-odds`が最初の取得でraw DBに作成する表である。
+2026-11-08時点のraw/CURRENTには存在しない。生成後に実際のschemaと照合する。
+
+| 表 | 内容 |
+| --- | --- |
+| `ARCHIVE_CAPTURE_O1_ODDS_TANFUKUWAKU` | `RT_O1_ODDS_TANFUKUWAKU`と同じ列（`0B31`） |
+| `ARCHIVE_CAPTURE_O2_ODDS_UMAREN` | `RT_O2_ODDS_UMAREN`と同じ列（`0B32`） |
+| `ARCHIVE_CAPTURE_O3_ODDS_WIDE` | `RT_O3_ODDS_WIDE`と同じ列（`0B33`） |
+| `ARCHIVE_CAPTURE_O4_ODDS_UMATAN` | `RT_O4_ODDS_UMATAN`と同じ列（`0B34`） |
+| `ARCHIVE_CAPTURE_O5_ODDS_SANREN` | `RT_O5_ODDS_SANREN`と同じ列（`0B35`の親表） |
+| [ARCHIVE_CAPTURE_O5_OddsSanrenInfo](ARCHIVE_CAPTURE_O5_OddsSanrenInfo.md) | `0B35`の子表＋親の`headDataKubun`/`HappyoTime` |
+| `ARCHIVE_CAPTURE_O6_ODDS_SANRENTAN` | `RT_O6_ODDS_SANRENTAN`と同じ列（`0B36`の親表） |
+| [ARCHIVE_CAPTURE_O6_OddsSanrentanInfo](ARCHIVE_CAPTURE_O6_OddsSanrentanInfo.md) | `0B36`の子表＋親の`headDataKubun`/`HappyoTime` |
+| [ARCHIVE_CAPTURE_LOG](ARCHIVE_CAPTURE_LOG.md) | 取得×DataSpecごとの取得記録 |
+
+`RT_O3_ODDS_WIDE`〜`RT_O6_OddsSanrentanInfo`のstaging表は、2026-11-08の事前確認でraw DBに作成された。
+上の表一覧の39表は2026-10-20時点の照合であり、これらのstaging表を含まない。
+単一表・親表のarchiveの列の意味は、対応する`NL_O1_ODDS_TANFUKUWAKU`〜`NL_O6_ODDS_SANRENTAN`の定義を参照する。
+
 ## 物理スキーマの照合
 
 | 確認項目 | 結果 |

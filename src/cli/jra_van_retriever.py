@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict, dataclass
-from datetime import datetime
+from datetime import date, datetime
 from pathlib import Path
 from typing import Annotated
 
@@ -15,6 +15,7 @@ from data.storage.snapshot_builder import SnapshotBuilder
 from domain.race_key import RaceKey
 from jra_van_retriever.config.profiles import JVLinkConfig
 from jra_van_retriever.retriever import DataRetriever
+from jra_van_retriever.workflows.race_day_odds import CaptureReport
 
 
 @dataclass(frozen=True)
@@ -143,8 +144,23 @@ def main(
         race_key = _resolve_realtime_race(jvlink_config, race)
         retrieve_realtime(race_key, data_config, jvlink_config)
         return
+    if mode == "race-day-odds":
+        if odds_options:
+            raise typer.BadParameter("odds-only options require --mode historical-odds")
+        if race.race_datetime is None:
+            raise typer.BadParameter("race-day-odds requires --date")
+        if any(
+            value is not None
+            for value in (race.jyo_code, race.kaiji, race.nichiji, race.race_number)
+        ):
+            raise typer.BadParameter(
+                "race-day-odds accepts --date but not --jyo, --kaiji, --nichiji, or --race"
+            )
+        retrieve_race_day_odds(race.race_datetime.date(), data_config, jvlink_config)
+        return
     raise typer.BadParameter(
-        "--mode must be 'historical-basic', 'historical-odds', 'latest', or 'realtime'"
+        "--mode must be 'historical-basic', 'historical-odds', 'latest', 'realtime', "
+        "or 'race-day-odds'"
     )
 
 
@@ -304,3 +320,43 @@ def retrieve_realtime(
     tables = SnapshotBuilder.from_toml(data_config).update_race(race_key)
     typer.echo(f"realtime odds archived: {inserted} rows")
     typer.echo(f"realtime Parquet published: {sum(tables.values())} rows")
+
+
+def retrieve_race_day_odds(
+    race_date: date,
+    data_config: Path,
+    jvlink_config: Path,
+) -> None:
+    """Capture all configured pre-race odds observations for one date."""
+    partial_summary = {
+        "archived": 0,
+        "no_data": 0,
+        "failed": 0,
+        "skipped_late": 0,
+        "interrupted": 0,
+    }
+
+    def report(capture: CaptureReport) -> None:
+        statuses = " ".join(
+            f"{spec}={result.status}" for spec, result in sorted(capture.results.items())
+        )
+        for result in capture.results.values():
+            partial_summary[result.status] += 1
+        typer.echo(
+            f"race-day-odds capture {capture.capture_id} {capture.race_key} "
+            f"-{capture.offset_minutes}m {statuses}"
+        )
+
+    def recovered(count: int) -> None:
+        partial_summary["interrupted"] += count
+
+    try:
+        result = _retriever(data_config, jvlink_config).retrieve_race_day_odds(
+            race_date, reporter=report, recovery_reporter=recovered
+        )
+    except KeyboardInterrupt:
+        typer.echo(json.dumps(partial_summary, separators=(",", ":")))
+        raise typer.Exit(code=130) from None
+    typer.echo(json.dumps(result.summary, separators=(",", ":")))
+    if result.failed:
+        raise typer.Exit(code=1)

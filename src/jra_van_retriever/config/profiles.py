@@ -16,9 +16,12 @@ from jra_van_retriever.config.validation import (
     _optional_datetimes,
     _require_bool,
     _require_date,
+    _require_positive_int,
+    _require_positive_int_tuple,
     _require_string,
     _require_string_set,
     _require_table,
+    validate_race_day_odds_profile,
 )
 
 
@@ -36,6 +39,14 @@ class JVLinkProfile:
     race_start_date: date | None = None
     start_datetimes: dict[str, datetime] | None = None
     skip_existing: bool = False
+
+
+@dataclass(frozen=True)
+class RaceDayOddsProfile(JVLinkProfile):
+    """Realtime capture profile with its planned offsets and lateness limit."""
+
+    offsets_minutes: tuple[int, ...] = (30, 10, 5, 2)
+    late_tolerance_seconds: int = 60
 
 
 @dataclass(frozen=True)
@@ -71,6 +82,7 @@ class JVLinkConfig:
     realtime_current: JVLinkProfile
     realtime_race: RaceKey | None = None
     historical_odds_batch: HistoricalOddsBatch | None = None
+    race_day_odds: RaceDayOddsProfile | None = None
 
     @classmethod
     def from_toml(cls, config_path: Path) -> JVLinkConfig:
@@ -93,6 +105,7 @@ class JVLinkConfig:
             realtime_current=_load_profile(config, "realtime_current"),
             realtime_race=_optional_race_key(config, "realtime"),
             historical_odds_batch=_load_batch(config),
+            race_day_odds=_load_race_day_odds(config),
         )
 
 
@@ -136,6 +149,31 @@ def _load_profile(config: dict[str, Any], name: str) -> JVLinkProfile:
             _require_bool(section, "skip_existing", name) if "skip_existing" in section else False
         ),
     )
+
+
+def _load_race_day_odds(config: dict[str, Any]) -> RaceDayOddsProfile | None:
+    if config.get("race_day_odds") is None:
+        return None
+    section = _require_table(config, "race_day_odds")
+    base = _load_profile(config, "race_day_odds")
+    profile = RaceDayOddsProfile(
+        normal_update=base.normal_update,
+        setup_update=base.setup_update,
+        realtime_update=base.realtime_update,
+        normal_data_specs=base.normal_data_specs,
+        setup_data_specs=base.setup_data_specs,
+        realtime_data_specs=base.realtime_data_specs,
+        start_datetime=base.start_datetime,
+        race_start_date=base.race_start_date,
+        start_datetimes=base.start_datetimes,
+        skip_existing=base.skip_existing,
+        offsets_minutes=_require_positive_int_tuple(section, "offsets_minutes", "race_day_odds"),
+        late_tolerance_seconds=_require_positive_int(
+            section, "late_tolerance_seconds", "race_day_odds"
+        ),
+    )
+    validate_race_day_odds_profile(profile)
+    return profile
 
 
 def _optional_race_key(config: dict[str, Any], section_name: str) -> RaceKey | None:

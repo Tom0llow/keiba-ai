@@ -89,3 +89,13 @@ realtime_update = true
 normal_data_specs = []
 setup_data_specs = []
 realtime_data_specs = ["0B31", "0B32"]
+
+[race_day_odds]
+normal_update = false
+setup_update = false
+realtime_update = true
+normal_data_specs = []
+setup_data_specs = []
+realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]
+offsets_minutes = [30, 10, 5, 2]
+late_tolerance_seconds = 60

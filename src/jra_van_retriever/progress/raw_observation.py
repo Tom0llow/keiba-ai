@@ -9,11 +9,12 @@ from collections.abc import Iterator
 from contextlib import closing
 from datetime import date
 from pathlib import Path
+from typing import cast
 
 from domain.race_key import RaceKey
 from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked
 from jra_van_retriever.config.profiles import HistoricalOddsBatch, JVLinkProfile
-from jra_van_retriever.contracts.odds import ARCHIVE_TABLES, KEY_COLUMNS
+from jra_van_retriever.contracts.odds import ARCHIVE_TABLES, KEY_COLUMNS, RaceDayRaceRow
 from jra_van_retriever.parsing.race_key import race_key_from_row
 from jra_van_retriever.progress.state import RawSnapshot
 
@@ -107,3 +108,21 @@ def read_archived_race_keys(
             ).fetchall()
             archived_races[data_spec] = {race_key_from_row(row) for row in rows}
     return archived_races
+
+
+def read_race_day_races(database_path: Path, race_date: date) -> tuple[RaceDayRaceRow, ...]:
+    """Return the selected day's race schedule after closing the raw reader."""
+    if not database_path.is_file():
+        raise FileNotFoundError(f"raw race database does not exist: {database_path}")
+    columns = ", ".join((*KEY_COLUMNS, "headDataKubun", "HassoTime"))
+    with closing(
+        sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True)
+    ) as database:
+        rows = database.execute(
+            f"SELECT {columns} FROM NL_RA_RACE "
+            "WHERE idYear = ? AND idMonthDay = ? "
+            "AND idJyoCD IN ('01','02','03','04','05','06','07','08','09','10') "
+            f"ORDER BY {', '.join(KEY_COLUMNS)}",
+            (f"{race_date:%Y}", f"{race_date:%m%d}"),
+        ).fetchall()
+    return cast(tuple[RaceDayRaceRow, ...], tuple(tuple(row) for row in rows))
