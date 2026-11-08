@@ -17,7 +17,7 @@ it.
 | Language | Documents |
 | --- | --- |
 | English | `AGENTS.md`, `CLAUDE.md`, `docs/rules/`, `.agents/skills/`, `.claude/skills/`, `.claude/agents/` |
-| English | Tool configuration and its comments: `.codex/`, `.claude/settings.json`, `.github/workflows/`, `.pre-commit-config.yaml`, `pyproject.toml`, `configs/` |
+| English | Tool configuration and its comments: `.codex/`, `.claude/settings.json`, `.github/` except `pull_request_template.md`, `.vscode/`, `.gitignore`, `.pre-commit-config.yaml`, `pyproject.toml`, `configs/` |
 | English | Handoff files in `.handoff/<task-id>/` other than `plan.md` and `pr-body.md` |
 | English | Source code comments, docstrings, log and CLI messages, commit messages, and PR titles |
 | Japanese | `README.md` and `ARCHITECTURE.md` |
@@ -49,8 +49,7 @@ Test data and fixtures may contain Japanese values.
 
 ## 4. Writing English documents
 
-Write agent-facing documents only in English. Quote Japanese text only when an
-agent must match it literally.
+Write agent-facing documents only in English.
 
 ## 5. Translating an existing document
 
