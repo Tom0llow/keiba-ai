@@ -5,16 +5,16 @@
 ### Changed files
 
 ```text
-Replace this line with the minimal directory tree containing every changed file.
+この行を、変更したすべてのファイルを含む最小のディレクトリツリーに置き換える。
 ```
 
 ### Commit purpose
 
-- `<short SHA or subject>`: Explain the purpose and motivation.
+- `<short SHA or subject>`: 目的と動機を説明する。
 
 ### File details
 
-- `path/to/file`: Describe the change.
+- `path/to/file`: 変更内容を説明する。
 
 ## Validation
 

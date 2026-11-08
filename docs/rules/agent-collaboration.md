@@ -43,6 +43,9 @@ is `YYYYMMDD-<short-kebab-slug>`:
 | `ci-<n>.md` | Claude Code | CI failure evidence for round `n` |
 | `pr-body.md` | Claude Code | Current PR description |
 
+`plan.md` and `pr-body.md` prose is Japanese with the template headings in
+English; the other handoff files are English (`docs/rules/documentation.md`).
+
 Task code lives in the git-ignored worktree `.worktrees/<task-id>/` on branch
 `agent/<task-id>`. Do not put secrets or credentials in handoff files.
 

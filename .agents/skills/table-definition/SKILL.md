@@ -43,3 +43,5 @@ Produce a table inventory, table and column definitions, the
 `source → raw → processed → datamart` mapping, source evidence, reconciliation
 results, and unresolved decisions. Creating the document alone does not change
 database schemas or production data unless those changes are in the request.
+
+Write the document in Japanese as defined in `docs/rules/documentation.md`.

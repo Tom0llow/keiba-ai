@@ -1,87 +1,87 @@
-# ADR-000: <Decision title>
+# ADR-000: <決定の題名>
 
 - Status: Proposed
 - Date: YYYY-MM-DD
-- Decision Owners: <team / role / names if appropriate>
-- Related Issues/PRs: <optional>
-- Supersedes: <ADR-NNN or N/A>
-- Superseded by: <ADR-NNN or N/A>
+- Decision Owners: <チーム / 役割 / 必要に応じて名前>
+- Related Issues/PRs: <任意>
+- Supersedes: <ADR-NNNまたはN/A>
+- Superseded by: <ADR-NNNまたはN/A>
 
 ---
 
 ## Context
 
-Describe the problem, constraint, or architectural pressure that requires a decision.
+決定を必要とする問題、制約、またはアーキテクチャ上の圧力を記述する。
 
-Include only context necessary to understand the decision.
+決定の理解に必要な背景だけを含める。
 
-Useful context may include:
+有用な背景には、次が含まれ得る。
 
-- current system behavior,
-- scale/performance requirements,
-- deployment constraints,
-- security requirements,
-- operational requirements,
-- team constraints,
-- compatibility requirements,
-- relevant existing ADRs.
+- 現在のシステムの動作、
+- 規模・性能の要件、
+- デプロイの制約、
+- セキュリティの要件、
+- 運用の要件、
+- チームの制約、
+- 互換性の要件、
+- 関連する既存のADR。
 
-Example questions:
+質問の例:
 
-- What problem are we solving?
-- Why does the current approach no longer work?
-- What constraints cannot be changed?
-- What happens if we make no decision?
+- どの問題を解決するのか。
+- なぜ現在の方法ではもううまくいかないのか。
+- どの制約は変えられないのか。
+- 決定しない場合に何が起こるのか。
 
 ---
 
 ## Decision
 
-State the decision clearly and concretely.
+決定を明確かつ具体的に述べる。
 
-Prefer:
+推奨する書き方:
 
 ```text
-We will use PostgreSQL as the primary transactional database.
+主たるトランザクション用データベースとして、PostgreSQLを使う。
 ```
 
-Avoid vague wording such as:
+次のような曖昧な表現は避ける。
 
 ```text
-We should probably consider PostgreSQL.
+PostgreSQLを検討するべきかもしれない。
 ```
 
-Specify scope where necessary.
+必要に応じて範囲を明記する。
 
-Example:
+例:
 
 ```text
-This decision applies to application transactional data.
-Analytics workloads remain outside the scope of this ADR.
+この決定は、アプリケーションのトランザクションデータに適用する。
+分析のワークロードは、このADRの範囲外とする。
 ```
 
 ---
 
 ## Rationale
 
-Explain why this option was chosen.
+この選択肢を選んだ理由を説明する。
 
-Describe the criteria that mattered most.
+最も重視した基準を記述する。
 
-Examples:
+例:
 
-- correctness,
-- maintainability,
-- performance,
-- operational simplicity,
-- ecosystem maturity,
-- security,
-- cost,
-- team familiarity,
-- migration effort,
-- testability.
+- 正しさ、
+- 保守性、
+- 性能、
+- 運用の簡素さ、
+- エコシステムの成熟度、
+- セキュリティ、
+- コスト、
+- チームの習熟度、
+- 移行の労力、
+- テストのしやすさ。
 
-Do not repeat the Decision section. Explain the reasoning.
+Decisionの節を繰り返さず、理由を説明する。
 
 ---
 
@@ -89,197 +89,197 @@ Do not repeat the Decision section. Explain the reasoning.
 
 ### Positive
 
-List meaningful benefits.
+意味のある利点を列挙する。
 
-- <benefit>
-- <benefit>
+- <利点>
+- <利点>
 
 ### Negative
 
-List costs and drawbacks explicitly.
+コストと欠点を明示的に列挙する。
 
-- <cost>
-- <cost>
+- <コスト>
+- <コスト>
 
 ### Neutral / Follow-on effects
 
-List changes that are neither inherently positive nor negative.
+本質的に肯定的でも否定的でもない変化を列挙する。
 
-- <effect>
-- <effect>
+- <影響>
+- <影響>
 
 ---
 
 ## Alternatives Considered
 
-### Option A: <name>
+### Option A: <名称>
 
 Summary:
 
-<brief description>
+<簡単な説明>
 
 Advantages:
 
-- <advantage>
+- <利点>
 
 Disadvantages:
 
-- <disadvantage>
+- <欠点>
 
 Reason not selected:
 
-<reason>
+<理由>
 
-### Option B: <name>
+### Option B: <名称>
 
 Summary:
 
-<brief description>
+<簡単な説明>
 
 Advantages:
 
-- <advantage>
+- <利点>
 
 Disadvantages:
 
-- <disadvantage>
+- <欠点>
 
 Reason not selected:
 
-<reason>
+<理由>
 
 ---
 
 ## Implementation Notes
 
-Describe architectural implementation constraints created by this decision.
+この決定によって生じる、アーキテクチャ上の実装の制約を記述する。
 
-Examples:
+例:
 
-- new package/module boundaries,
-- migration requirements,
-- required adapters/ports,
-- compatibility requirements,
-- rollout order,
-- data migration strategy.
+- 新しいパッケージ・モジュールの境界、
+- 移行の要件、
+- 必要なアダプター・ポート、
+- 互換性の要件、
+- 展開の順序、
+- データの移行戦略。
 
-Avoid turning the ADR into a detailed task list.
+ADRを詳細なタスク一覧にすることは避ける。
 
 ---
 
 ## Validation
 
-Describe how the decision will be validated.
+決定をどのように検証するかを記述する。
 
-Examples:
+例:
 
-- performance benchmark,
-- load test,
-- production metric,
-- integration test,
-- migration rehearsal,
-- security review.
+- 性能のベンチマーク、
+- 負荷テスト、
+- 本番環境の指標、
+- 結合テスト、
+- 移行のリハーサル、
+- セキュリティレビュー。
 
-Specify success criteria when meaningful.
+意味がある場合は、成功の基準を明記する。
 
-Example:
+例:
 
 ```text
-The new persistence layer must sustain 500 requests/second with p95 write
-latency below 100 ms under the expected production workload.
+新しい永続化層は、想定する本番のワークロードの下で、p95の書き込みレイテンシを
+100 ms未満に保ったまま、毎秒500リクエストを維持しなければならない。
 ```
 
 ---
 
 ## Risks
 
-List important risks introduced by this decision.
+この決定によって生じる重要なリスクを列挙する。
 
-For each material risk, include mitigation when possible.
+重大なリスクごとに、可能な場合は緩和策を含める。
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
-| <risk> | <impact> | <mitigation> |
+| <リスク> | <影響> | <緩和策> |
 
 ---
 
 ## Security / Privacy Impact
 
-State whether the decision affects:
+決定が次に影響するかどうかを述べる。
 
-- authentication,
-- authorization,
-- secrets,
-- personal data,
-- encryption,
-- network exposure,
-- data retention,
-- auditability.
+- 認証、
+- 認可、
+- シークレット、
+- 個人データ、
+- 暗号化、
+- ネットワークへの露出、
+- データの保持、
+- 監査可能性。
 
-If there is no meaningful impact:
+意味のある影響がない場合:
 
 ```text
-No material security or privacy impact.
+セキュリティやプライバシーへの重大な影響はない。
 ```
 
 ---
 
 ## Operational Impact
 
-Describe effects on:
+次への影響を記述する。
 
-- deployment,
-- monitoring,
-- logging,
-- backup/recovery,
-- on-call operations,
-- maintenance,
-- infrastructure cost.
+- デプロイ、
+- 監視、
+- ログ、
+- バックアップ・復旧、
+- オンコールの運用、
+- 保守、
+- インフラのコスト。
 
-If none:
+影響がない場合:
 
 ```text
-No material operational impact.
+運用への重大な影響はない。
 ```
 
 ---
 
 ## Migration / Rollback
 
-If existing behavior/data must change, describe:
+既存の動作やデータを変更しなければならない場合は、次を記述する。
 
 ### Migration
 
-<how the system moves to the new architecture>
+<システムを新しいアーキテクチャへ移行する方法>
 
 ### Rollback
 
-<how the decision can be reversed if implementation fails>
+<実装が失敗した場合に、決定を取り消す方法>
 
-If rollback is not practical, state that explicitly.
+ロールバックが現実的でない場合は、そのことを明示する。
 
 ---
 
 ## Documentation Changes
 
-When this ADR becomes Accepted, update as applicable:
+このADRがAcceptedになったら、該当するものを更新する。
 
 - [ ] `ARCHITECTURE.md`
 - [ ] `docs/rules/architecture.md`
 - [ ] `AGENTS.md`
 - [ ] `README.md`
-- [ ] API/user documentation
-- [ ] operational/runbook documentation
+- [ ] APIとユーザー向けの文書
+- [ ] 運用文書・運用手順書
 
 ---
 
 ## Follow-up Actions
 
-- [ ] <action>
-- [ ] <action>
+- [ ] <対応>
+- [ ] <対応>
 
-Avoid using this section as the project's primary task tracker.
-Link to Issues/PRs for substantial implementation work.
+この節を、プロジェクトの主要なタスク管理として使うことは避ける。
+大きな実装作業については、IssueやPRへリンクする。
 
 ---
 
@@ -287,4 +287,4 @@ Link to Issues/PRs for substantial implementation work.
 
 | Date | Status | Notes |
 | --- | --- | --- |
-| YYYY-MM-DD | Proposed | Initial proposal |
+| YYYY-MM-DD | Proposed | 最初の提案 |

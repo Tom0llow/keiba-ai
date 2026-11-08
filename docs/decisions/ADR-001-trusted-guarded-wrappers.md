@@ -1,4 +1,4 @@
-# ADR-001: Install guarded wrappers outside the writable workspace
+# ADR-001: guardedラッパーを書き込み可能なワークスペースの外にインストールする
 
 - Status: Superseded
 - Date: 2026-09-22
@@ -11,180 +11,156 @@
 
 ## Context
 
-Codex normally edits the repository inside a network-disabled workspace sandbox.
-Git metadata and authenticated GitHub operations require narrowly scoped host
-access. An execution-policy rule can match command arguments, but it cannot
-verify the contents of a PowerShell script before allowing that script to run
-outside the sandbox.
+Codexは通常、ネットワークを無効にしたワークスペースのサンドボックス内で、リポジトリを編集する。
+Gitのメタデータと認証付きのGitHub操作には、範囲を狭く限定したホストへのアクセスが必要である。
+実行ポリシーの規則は、コマンドの引数に一致させることはできるが、PowerShellスクリプトを
+サンドボックスの外で実行させる前に、そのスクリプトの内容を検証することはできない。
 
-Execution policy also does not bind a relative script argument to a particular
-working directory. Allowing `.git/codex-guard/...` by relative token would let
-the same argv resolve to a different file from an attacker-controlled current
-directory before any self-check runs.
+実行ポリシーは、相対パスのスクリプト引数を、特定の作業ディレクトリに結び付けることもしない。
+`.git/codex-guard/...`を相対パスのトークンで許可すると、自己検査が実行される前に、攻撃者が
+制御するカレントディレクトリから、同じargvが別のファイルに解決されてしまう。
 
-Allowing a tracked `scripts/agent/*.ps1` file directly would therefore make a
-writable task file a host-execution trust anchor. Git hooks create the same
-problem: a guarded host-side `git commit` or `git push` could execute a hook that
-loads branch-controlled configuration or code.
+そのため、追跡対象の`scripts/agent/*.ps1`ファイルを直接許可すると、書き込み可能なタスクの
+ファイルが、ホストでの実行のトラストアンカーになってしまう。Gitフックにも同じ問題がある。guardされた
+ホスト側の`git commit`や`git push`が、ブランチで制御される設定やコードを読み込むフックを実行し得る。
 
 ## Decision
 
-Tracked wrappers under `scripts/agent/` are reviewable source only. A maintainer
-installs their reviewed `origin/main` blobs inside the protected Codex user home
-with
-`scripts/setup/install-guarded-wrappers.ps1`. `.git/codex-guard/` contains only
-repository invocation metadata. The installer writes a
-repository-and-checkout-keyed Codex user-layer rule containing the exact
-absolute PowerShell executable and installed script paths. It also writes
-`guard-invocation.json` for sandboxed discovery. Codex passes those literal
-absolute values as argv tokens; relative guard paths are forbidden. Direct
-top-level use of the recorded GitHub CLI and Codex CLI executables is forbidden,
-and raw Git/GitHub operations cannot substitute for a guarded wrapper.
-Workspace copies and installation/admin scripts are not host executable by
-Codex.
+`scripts/agent/`配下の追跡対象のラッパーは、レビュー用のソースにすぎない。保守担当者は、
+`scripts/setup/install-guarded-wrappers.ps1`を使って、レビュー済みの`origin/main`のblobを、
+保護されたCodexのユーザーホーム内にインストールする。`.git/codex-guard/`は、リポジトリからの
+呼出しのメタデータだけを含む。インストーラーは、PowerShellの実行ファイルと、インストールした
+スクリプトの正確な絶対パスを含む、リポジトリとチェックアウトをキーとするCodexのユーザー層の規則を
+書き込む。また、サンドボックス内での探索のために、`guard-invocation.json`を書き込む。Codexは、
+それらの絶対値をそのままargvのトークンとして渡し、相対パスのguardは禁止する。記録したGitHub CLIと
+Codex CLIの実行ファイルを最上位で直接使うことは禁止し、生のGit/GitHub操作は、guardedラッパーの
+代わりにならない。ワークスペース内のコピーと、インストール・管理用のスクリプトは、Codexがホストで
+実行できない。
 
-Each installer run creates a new immutable guard directory whose identity
-combines a repository policy ID, the protected `origin/main` source SHA, and a
-new installation ID. Publishing fails if that destination already exists. An
-installation never modifies an earlier immutable guard directory.
+インストーラーは実行のたびに、新しい不変のguardディレクトリを作成する。その識別子は、
+リポジトリのポリシーID、保護された`origin/main`のソースのSHA、新しいインストールIDを組み合わせた
+ものである。出力先が既に存在する場合、公開は失敗する。インストールは、以前の不変のguard
+ディレクトリを決して変更しない。
 
-The installation contains a manifest binding each source blob to the SHA-256 of
-its installed file. It also binds the installation to canonical absolute paths
-for the protected PowerShell host, Git, GitHub CLI, and Codex CLI, plus the Codex
-CLI version accepted by `scripts/guard-tests/codex-cli-version.txt`. Every
-guarded entry point verifies the complete installed set, executable paths, and
-Codex CLI version before continuing. A path or version change requires
-reinstallation. The Codex executable must be the self-contained native
-`codex.exe`; Node launcher shims such as `codex.cmd` and `codex.ps1` are not
-supported. The installer accepts `-CodexExecutablePath` when normal discovery
-does not resolve the native file. Preflight also verifies that installed source
-blob IDs still match current `origin/main` and requires reinstallation after a
-guarded source change.
-The Codex home, user-rule directory, guard store, and installed guard are
-rejected when they fall under either the writable repository or the system
-temporary directory. Security-critical subprocess output is captured under the
-protected `.git` directory rather than the sandbox-writable temporary area.
+インストールには、各ソースblobを、インストールしたファイルのSHA-256に結び付けるmanifestが
+含まれる。また、インストールを、保護されたPowerShellのホスト、Git、GitHub CLI、Codex CLIの
+正規の絶対パスと、`scripts/guard-tests/codex-cli-version.txt`が受け入れるCodex CLIの版に
+結び付ける。guardされたすべての入口は、続行する前に、インストールした一式の全体、実行ファイルのパス、
+Codex CLIの版を検証する。パスや版が変わった場合は、再インストールが必要となる。Codexの
+実行ファイルは、自己完結したネイティブの`codex.exe`でなければならず、`codex.cmd`や`codex.ps1`の
+ようなNodeのランチャーshimはサポートしない。通常の探索でネイティブのファイルが見つからない場合、
+インストーラーは`-CodexExecutablePath`を受け付ける。preflightは、インストールしたソースのblob IDが
+現在の`origin/main`とまだ一致することも検証し、guardの対象のソースが変更された後は、再インストール
+を求める。
+Codexのホーム、ユーザー規則のディレクトリ、guard store、インストールしたguardが、書き込み可能な
+リポジトリとシステムの一時ディレクトリのどちらかの配下にある場合は、拒否する。セキュリティ上
+重要なsubprocessの出力は、サンドボックスから書き込める一時領域ではなく、保護された`.git`
+ディレクトリ配下に取得する。
 
-All Git invocations made by guarded wrappers override `core.hooksPath` with an
-installed empty directory and disable external fsmonitor. Repository validation
-runs separately inside the ordinary sandbox and in CI. Autonomous commits are
-rejected if they change workflow trust-boundary paths, including agent/Codex
-rules, workflows, guarded sources, guard regression tests, setup scripts, or
-Git attribute files.
-The guard enumerates ignored untracked trust-boundary pathspecs separately, so
-repository, info, or global excludes cannot conceal nested agent instructions,
-skills, policies, workflows, or guarded sources from clean-tree and commit
-validation.
+guardedラッパーによるGitの呼出しはすべて、`core.hooksPath`をインストール済みの空のディレクトリで
+上書きし、外部のfsmonitorを無効にする。リポジトリの検証は、通常のサンドボックス内とCIで、別に
+実行する。自律的なコミットは、エージェント/Codexの規則、workflow、guardの対象のソース、
+guardの回帰テスト、セットアップスクリプト、Gitの属性ファイルを含む、workflowの信頼境界の
+パスを変更する場合は拒否する。
+guardは、無視された未追跡の信頼境界のpathspecを別に列挙する。そのため、リポジトリ、info、
+グローバルの除外設定によって、入れ子のエージェントの指示、スキル、ポリシー、workflow、
+guardの対象のソースを、clean-treeとコミットの検証から隠すことはできない。
 
-Guarded GitHub operations clear ambient repository/host selectors, derive the
-GitHub repository from `origin`, and pass that repository explicitly to every
-PR and workflow command. Task state records the repository and owner; PR checks
-also require the same head repository, owner, branch, number, and SHA.
-The single resolved push URL must name that same repository and is passed
-literally to every push or remote deletion. State-changing wrappers use an
-exclusive `.git` lock, and the installer uses that same lock while activating
-new metadata and policy state. CI waiting, PR/CI inspection, readiness, and
-merge are bound to one explicit expected HEAD SHA; they re-read PR, local, and
-remote HEAD after check collection. PR inspection observes the current PR base
-object ID but produces its complete local binary diff from the recorded task
-start SHA through the expected head with external diff and text conversion
-disabled. Check evidence comes from the check-runs and commit-status APIs for
-the expected head. Every observation result includes the observed base and head
-SHAs; PR inspection also includes the diff base. Merge readiness is bound to
-the PR number and HEAD SHA; binding a task to a replacement PR clears readiness
-and merge-attempt evidence. Both merge readiness and the final path
-immediately before merging an unmerged PR revalidate that branch protection has
-the required contexts, strict status checks, and the configured GitHub Actions
-application ID. Trust paths must use canonical physical Windows paths; aliases
-and reparse-point traversal fail closed.
+guardされたGitHub操作は、環境から引き継いだリポジトリ/ホストの指定を消去し、`origin`から
+GitHubのリポジトリを導出して、すべてのPRとworkflowのコマンドに、そのリポジトリを明示的に
+渡す。タスクの状態はリポジトリとオーナーを記録し、PRのチェックでも、同じheadのリポジトリ、
+オーナー、ブランチ、番号、SHAを要求する。
+解決した単一のpush URLは同じリポジトリを指していなければならず、すべてのpushとリモートの削除に、
+そのまま渡す。状態を変更するラッパーは`.git`の排他ロックを使い、インストーラーも、新しい
+メタデータとポリシーの状態を有効にする間は、同じロックを使う。CIの待機、PR/CIの検査、
+マージ準備の判定、マージは、明示的に期待する一つのHEAD SHAに結び付けられ、チェックの収集後に、
+PR、ローカル、リモートのHEADを再度読み込む。PRの検査では、現在のPRのbaseのオブジェクトIDを
+観測するが、完全なローカルのバイナリ差分は、外部diffとテキスト変換を無効にして、記録した
+タスク開始時のSHAから期待するheadまでについて作成する。チェックの証拠は、期待するheadについての
+check-runsとcommit-statusのAPIから得る。すべての観測結果には、観測したbaseとheadのSHAが含まれ、
+PRの検査には差分のbaseも含まれる。マージ準備の判定はPR番号とHEAD SHAに結び付けられ、
+タスクを差し替えのPRに結び付けると、マージ準備の判定とマージ試行の証拠は消去される。マージ
+準備の判定と、未マージのPRをマージする直前の最後の経路の両方で、ブランチ保護が、必須の
+context、厳格なステータスチェック、設定したGitHub ActionsのアプリケーションIDを持つことを
+再検証する。信頼するパスには、正規のWindowsの物理パスを使わなければならず、エイリアスや
+再解析ポイントをたどる場合は、fail-closedとして失敗する。
 
-Task start and commit are write-ahead state transitions. The wrappers record
-their pending identity before the corresponding Git mutation and permit recovery
-only by rerunning the same wrapper with the same arguments. Other
-task-state-dependent guarded operations fail closed until the pending transition
-is verified and cleared.
+タスクの開始とコミットは、write-aheadの状態遷移である。ラッパーは、対応するGitの変更の前に
+保留中の識別情報を記録し、同じ引数で同じラッパーを再実行することによってだけ、復旧を許す。
+タスクの状態に依存する他のguardされた操作は、保留中の遷移が検証されて消去されるまで、
+fail-closedとして失敗する。
 
-If the remote merge succeeds before a later communication or cleanup failure,
-the preserved task state permits a retry only for the same PR and approved SHA.
-The wrapper records the PR, SHA, method, and time immediately before requesting
-the squash merge. Recovery requires that matching attempt record, current
-branch-protection verification, GitHub `MERGED` state with a recorded merge
-timestamp, and agreement among the PR HEAD, task HEAD, merge-ready SHA,
-attempted SHA, and approved SHA. Incomplete cleanup retains task state and fails
-so the same guarded command can resume. Approval cannot be transferred to a
-replacement SHA.
+リモートでのマージが成功した後に、通信や後片付けが失敗した場合、保持したタスクの状態は、同じPRと
+承認済みのSHAについてだけ再試行を許す。ラッパーは、squash mergeを要求する直前に、PR、SHA、方式、
+時刻を記録する。復旧には、一致する試行の記録、現在のブランチ保護の検証、マージの時刻が記録された
+GitHubの`MERGED`状態、そして、PRのHEAD、タスクのHEAD、マージ準備済みのSHA、試行したSHA、
+承認済みのSHAの一致が必要となる。後片付けが完了しない場合は、同じguardされたコマンドで再開
+できるよう、タスクの状態を保持して失敗する。承認を差し替えのSHAへ移すことはできない。
 
 ## Rationale
 
-The installed directory and its execution policy are in the Codex user layer,
-outside the writable repository. The repository's `.git` directory holds only
-discovery metadata and task state. This removes tracked task files and local
-Git hooks from the host-execution chain while preserving a two-interaction
-workflow: requirement input and exact-PR/exact-HEAD merge approval.
+インストールしたディレクトリとその実行ポリシーは、書き込み可能なリポジトリの外にある、Codexの
+ユーザー層に置く。リポジトリの`.git`ディレクトリには、探索用のメタデータとタスクの状態だけを
+置く。これにより、追跡対象のタスクのファイルとローカルのGitフックを、ホストでの実行の連鎖から
+取り除きつつ、要件の入力と、特定のPR・特定のHEADに対するマージの承認という、2回のやり取りの
+workflowを維持できる。
 
-Argument-only allow rules, self-checks performed by a mutable workspace script,
-and `--no-verify` were rejected because they do not prevent code from running
-before verification or do not disable every Git hook.
+引数だけによる許可規則、変更可能なワークスペースのスクリプトが行う自己検査、`--no-verify`は、
+検証の前にコードが実行されることを防げないか、すべてのGitフックを無効にできないため、採用しな
+かった。
 
 ## Consequences
 
 ### Positive
 
-- Branch-controlled scripts, hooks, and CI definitions cannot silently widen
-  autonomous host execution.
-- GitHub inspection is bound to the recorded repository task and PR.
-- CI, review, readiness, and merge evidence cannot be reused for another HEAD.
-- Guard source changes become an explicit manual security-bootstrap event.
+- ブランチで制御されるスクリプト、フック、CIの定義が、自律的なホストでの実行の範囲を、気付かれずに
+  広げることはできない。
+- GitHubの検査は、記録したリポジトリのタスクとPRに結び付けられる。
+- CI、レビュー、マージ準備の判定、マージの証拠を、別のHEADに再利用することはできない。
+- guardのソースの変更は、明示的な手動のsecurity-bootstrapの作業になる。
 
 ### Negative
 
-- Each standard clone requires a one-time manual guard installation after the
-  bootstrap reaches protected `main`, followed by a Codex restart.
-- Guard source changes require reinstallation before another autonomous task.
-- Old immutable guard directories remain until a maintainer removes them.
-- The current installer supports a standard checkout with a `.git` directory,
-  not linked worktrees where `.git` is a file.
-- The checkout and user-layer trust paths must not traverse symbolic links,
-  junctions, or other reparse points.
-- Trust paths cannot reside under the writable repository or system temporary
-  directory.
-- The installer must run under the system PowerShell executable beneath the
-  protected Windows or Program Files directory; portable/user-writable copies
-  are not supported.
-- A Node launcher shim cannot serve as the trusted Codex executable; installation
-  requires the package's native `codex.exe`.
+- 標準的なクローンごとに、bootstrapが保護された`main`に取り込まれた後、guardの手動インストールを
+  一度行い、続けてCodexを再起動する必要がある。
+- guardのソースを変更した場合は、次の自律タスクの前に、再インストールが必要となる。
+- 古い不変のguardディレクトリは、保守担当者が削除するまで残る。
+- 現在のインストーラーは、`.git`ディレクトリを持つ標準的なチェックアウトをサポートし、`.git`が
+  ファイルである、リンクされたworktreeはサポートしない。
+- チェックアウトとユーザー層の信頼するパスは、シンボリックリンク、ジャンクション、その他の
+  再解析ポイントをたどってはならない。
+- 信頼するパスは、書き込み可能なリポジトリやシステムの一時ディレクトリの配下に置けない。
+- インストーラーは、保護されたWindowsまたはProgram Filesのディレクトリの下にある、システムの
+  PowerShellの実行ファイルで実行しなければならない。ポータブル版や、ユーザーが書き込めるコピーは
+  サポートしない。
+- NodeのランチャーshimはCodexの信頼する実行ファイルとして使えず、インストールには、パッケージの
+  ネイティブな`codex.exe`が必要となる。
 
 ## Validation
 
-- Parse all PowerShell sources before installation.
-- Run `scripts/guard-tests/guard-regression.ps1` in local validation with a
-  Codex CLI version explicitly listed in
-  `scripts/guard-tests/codex-cli-version.txt`; missing, shimmed, or unlisted
-  versions fail validation. The `Quality` CI job runs the real regression for
-  every listed version on both PowerShell 7 and Windows PowerShell 5.1.
-- Extract only committed `origin/main` blobs and verify their Git blob IDs.
-- Verify every installed SHA-256 against the manifest on each entry point.
-- Verify installed source blob IDs against current `origin/main` during
-  preflight.
-- Exercise real Codex CLI execution-policy decisions: only
-  repository-and-checkout-bound absolute installed wrappers are allowed,
-  relative and workspace wrappers are forbidden, direct recorded GitHub CLI and
-  Codex CLI access is forbidden, and raw mutations are forbidden.
+- インストールの前に、すべてのPowerShellのソースを構文解析する。
+- ローカルの検証では、`scripts/guard-tests/codex-cli-version.txt`に明示的に記載したCodex CLIの版で、
+  `scripts/guard-tests/guard-regression.ps1`を実行する。版がない、shimである、または記載されて
+  いない場合、検証は失敗する。CIの`Quality`ジョブは、記載したすべての版について、PowerShell 7と
+  Windows PowerShell 5.1の両方で、実際の回帰テストを実行する。
+- コミット済みの`origin/main`のblobだけを取り出し、そのGitのblob IDを検証する。
+- 各入口で、インストールしたすべてのSHA-256を、manifestと照合する。
+- preflightで、インストールしたソースのblob IDを、現在の`origin/main`と照合する。
+- Codex CLIの実際の実行ポリシーの判定を試す。リポジトリとチェックアウトに結び付いた、
+  インストール済みのラッパーの絶対パスだけを許可し、相対パスとワークスペース内のラッパーは禁止し、
+  記録したGitHub CLIとCodex CLIへの直接のアクセスは禁止し、生の変更操作は禁止する。
 
 ## Migration / Rollback
 
-Install or refresh the guard from a clean local `main` that exactly matches
-`origin/main`. The installer publishes a fresh immutable directory, retains any
-previous immutable directories unchanged, and keeps only the prior
-`.git/codex-guard/` metadata at a timestamped `.git/codex-guard.backup-*` path.
-It activates the new user-layer policy and repository metadata only after the
-new directory has passed validation. If either activation fails, it restores
-the prior policy and metadata and removes the newly published directory. If the
-old policy cannot be restored, its rollback copy is retained at the reported
-path for manual recovery.
-Restart Codex after a successful installation. A maintainer may remove obsolete
-immutable directories only after confirming that neither active metadata nor
-policy refers to them.
+guardのインストールや更新は、`origin/main`と完全に一致する、変更のないローカルの`main`から行う。
+インストーラーは新しい不変のディレクトリを公開し、以前の不変のディレクトリは変更せずに保持し、
+以前の`.git/codex-guard/`のメタデータだけを、タイムスタンプ付きの`.git/codex-guard.backup-*`の
+パスに残す。新しいユーザー層のポリシーとリポジトリのメタデータは、新しいディレクトリが検証に
+合格した後にだけ有効にする。どちらかの有効化に失敗した場合は、以前のポリシーとメタデータを
+復元し、新しく公開したディレクトリを削除する。古いポリシーを復元できない場合は、手動で復旧
+できるよう、そのロールバック用のコピーを、報告したパスに残す。
+インストールに成功した後は、Codexを再起動する。保守担当者は、有効なメタデータもポリシーも
+参照していないことを確認した後にだけ、不要になった不変のディレクトリを削除できる。
 
 ## Documentation Changes
 
@@ -198,8 +174,8 @@ policy refers to them.
 
 | Date | Status | Notes |
 | --- | --- | --- |
-| 2026-09-22 | Accepted | Adopted for the AI-driven-development bootstrap |
-| 2026-09-23 | Accepted | Bound execution to protected user-layer absolute paths, repository identity, and checkout identity |
-| 2026-09-24 | Accepted | Added immutable per-run installations, executable/version binding, SHA-bound observation, protection rechecks, and exact-SHA merge recovery |
-| 2026-09-25 | Accepted | Required native Codex execution, cross-host/version guard validation, complete SHA-bound local diffs and check-API observations, PR-bound readiness, and recoverable write-ahead task transitions |
-| 2026-11-08 | Superseded | Replaced by GitHub-enforced rulesets and the GitHub App agent identity (ADR-031) |
+| 2026-09-22 | Accepted | AI駆動開発のbootstrapのために採用 |
+| 2026-09-23 | Accepted | 実行を、保護されたユーザー層の絶対パス、リポジトリの識別、チェックアウトの識別に結び付けた |
+| 2026-09-24 | Accepted | 実行ごとの不変のインストール、実行ファイルと版の結び付け、SHAに結び付いた観測、保護設定の再確認、特定のSHAに限るマージの復旧を追加 |
+| 2026-09-25 | Accepted | ネイティブのCodexでの実行、ホストと版をまたいだguardの検証、SHAに結び付いた完全なローカル差分とチェックAPIによる観測、PRに結び付いたマージ準備の判定、復旧可能なwrite-aheadのタスク遷移を必須にした |
+| 2026-11-08 | Superseded | GitHubで強制するrulesetとGitHub Appのエージェント識別に置き換え（ADR-031） |

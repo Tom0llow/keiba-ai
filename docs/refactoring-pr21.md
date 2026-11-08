@@ -199,178 +199,178 @@ package宣言も記録し、存在しない将来用model設定は含めない�
 
 |ファイル|責務|
 |---|---|
-|`src/cli/__init__.py`|Command-line boundaries grouped by functional responsibility.|
-|`src/cli/jra_van_retriever.py`|Validate retrieval options and execute acquisition commands.|
-|`src/cli/json_io.py`|Translate generic JSON input and output failures at the CLI boundary.|
-|`src/cli/make_datamart.py`|Build a datamart from explicitly ordered intermediate Parquet inputs.|
-|`src/cli/make_features.py`|Execute explanatory-variable generation at the command-line boundary.|
-|`src/cli/models.py`|Execute model input audits, projection and walk-forward evaluation.|
-|`src/cli/options.py`|Define option types shared by data retrieval and preprocessing CLIs.|
-|`src/cli/preprocessor.py`|Execute processed-data publication and report command results.|
-|`src/configuration/__init__.py`|Configuration responsibilities.|
-|`src/configuration/data_paths.py`|Load filesystem paths shared by race-data workflows.|
-|`src/configuration/loader.py`|Read TOML without applying feature-specific configuration contracts.|
-|`src/configuration/path_resolver.py`|Resolve explicitly configured paths beside their configuration file.|
-|`src/data/__init__.py`|Common data I/O, transformation and snapshot lifecycle boundaries.|
-|`src/data/loader/__init__.py`|Data loader responsibilities.|
-|`src/data/loader/processed_data_loader.py`|Public processed-data loading facade.|
-|`src/data/loader/read_json.py`|Read UTF-8 JSON objects without CLI or feature-specific validation.|
-|`src/data/loader/read_parquet.py`|Read Parquet files and bounded batches without storage-version policy.|
-|`src/data/loader/read_sqlite.py`|Read raw SQLite tables through one read-only transaction.|
-|`src/data/preprocessor/__init__.py`|Pure transformations of raw source values.|
-|`src/data/preprocessor/sqlite_to_arrow.py`|Convert SQLite-derived values to the existing all-string Arrow contract.|
-|`src/data/saver/__init__.py`|Data saver responsibilities.|
-|`src/data/saver/write_json.py`|Write JSON-compatible values as standard UTF-8 JSON.|
-|`src/data/saver/write_parquet.py`|Write explicit Arrow tables or batches to Parquet files.|
-|`src/data/storage/__init__.py`|Storage responsibilities.|
-|`src/data/storage/snapshot_builder.py`|Build processed snapshots from one consistent raw SQLite observation.|
-|`src/data/storage/snapshot_publisher.py`|Publish completed processed versions with an atomic CURRENT replacement.|
-|`src/data/storage/snapshot_store.py`|Own processed snapshot layout and CURRENT version resolution.|
-|`src/domain/__init__.py`|Shared domain values independent of data boundaries.|
-|`src/domain/race_key.py`|Shared race identity used across retrieval, preprocessing, and loading.|
-|`src/jra_van_retriever/__init__.py`|Jra van retriever responsibilities.|
-|`src/jra_van_retriever/acquisition/__init__.py`|Acquisition responsibilities.|
-|`src/jra_van_retriever/acquisition/acquisition_lock.py`|Serialize application acquisition and bind one raw database to its ledger.|
-|`src/jra_van_retriever/acquisition/jvlink_runner.py`|Run the local JVLinkToSQLite executable for race-data acquisition.|
-|`src/jra_van_retriever/acquisition/odds_archive.py`|Persist JVLinkToSQLite realtime odds tables without changing their schema.|
-|`src/jra_van_retriever/acquisition/setting_xml.py`|Generate execution XML from typed JVLink profiles.|
-|`src/jra_van_retriever/config/__init__.py`|Config responsibilities.|
-|`src/jra_van_retriever/config/profiles.py`|Convert declarative acquisition profiles into validated settings.|
-|`src/jra_van_retriever/config/validation.py`|Validate JVLink-specific TOML values without reading files.|
-|`src/jra_van_retriever/contracts/__init__.py`|Contracts responsibilities.|
-|`src/jra_van_retriever/contracts/odds.py`|Define the shared raw O1/O2 tables and complete race-key columns.|
-|`src/jra_van_retriever/parsing/__init__.py`|Parsing responsibilities.|
-|`src/jra_van_retriever/parsing/race_key.py`|Convert raw race-key rows at the retrieval boundary.|
-|`src/jra_van_retriever/progress/__init__.py`|Progress responsibilities.|
-|`src/jra_van_retriever/progress/ledger.py`|Persist and validate the authoritative historical odds progress ledger.|
-|`src/jra_van_retriever/progress/output.py`|Regenerate historical-odds JSON and TOML reports from committed progress.|
-|`src/jra_van_retriever/progress/raw_observation.py`|Observe raw acquisition data and close readers before external writes.|
-|`src/jra_van_retriever/progress/state.py`|Define acquisition values and calculate progress without persistence.|
-|`src/jra_van_retriever/retriever.py`|Provide the public orchestration API for JRA-VAN race-data retrieval.|
-|`src/jra_van_retriever/workflows/__init__.py`|Workflows responsibilities.|
-|`src/jra_van_retriever/workflows/historical_basic.py`|Retrieve historical base race data through JVLinkToSQLite.|
-|`src/jra_van_retriever/workflows/historical_odds.py`|Coordinate bounded historical odds batches and their lifecycle owners.|
-|`src/jra_van_retriever/workflows/historical_odds_legacy.py`|Acquire historical odds for the existing combined Python retrieval API.|
-|`src/jra_van_retriever/workflows/historical_odds_plan.py`|Plan year-scoped odds work from raw and committed ledger observations.|
-|`src/jra_van_retriever/workflows/historical_odds_publication.py`|Publish raw-complete historical odds under the common acquisition lock.|
-|`src/jra_van_retriever/workflows/historical_odds_recovery.py`|Preserve interrupted acquisition evidence before resetting staging.|
-|`src/jra_van_retriever/workflows/historical_odds_request.py`|Execute and classify one durable historical odds acquisition request.|
-|`src/jra_van_retriever/workflows/latest.py`|Retrieve the latest race-data changes through JVLinkToSQLite.|
-|`src/jra_van_retriever/workflows/realtime.py`|Retrieve prediction-time odds for one target race through JVLinkToSQLite.|
-|`src/main.py`|Assemble, register and start the keiba-ai command-line interface.|
-|`src/make_datamart/__init__.py`|Datamart construction from feature intermediate tables.|
-|`src/make_datamart/builder.py`|Join validated feature tables into an ordered datamart without I/O.|
-|`src/make_datamart/tables/__init__.py`|Datamart schema contracts and explicit persistence.|
-|`src/make_datamart/tables/parquet.py`|Persist and reload validated datamart Parquet tables.|
-|`src/make_datamart/tables/schema.py`|Declare and decode datamart columns and persisted metadata.|
-|`src/make_datamart/validation/__init__.py`|Datamart schema and row validation.|
-|`src/make_datamart/validation/table.py`|Validate datamart schemas, keys, timestamps and missing values.|
-|`src/make_features/__init__.py`|Feature-specific generation, validation and table contracts.|
-|`src/make_features/basic_conditions_and_weight.py`|Build the basic conditions and weight intermediate feature rows and tables.|
-|`src/make_features/catalog/__init__.py`|Load and bind declarative feature registrations.|
-|`src/make_features/catalog/loader.py`|Read the declarative feature catalog without importing implementations.|
-|`src/make_features/catalog/registry.py`|Bind validated feature definitions to explicitly registered implementations.|
-|`src/make_features/condition_adjusted_ability.py`|Build the condition adjusted ability intermediate feature rows and tables.|
-|`src/make_features/condition_suitability.py`|Build the condition suitability intermediate feature rows and tables.|
-|`src/make_features/contracts/__init__.py`|Declare feature inputs and middle rows.|
-|`src/make_features/contracts/rows.py`|Represent normalized feature middle rows without storage dependencies.|
-|`src/make_features/contracts/types.py`|Explicit feature inputs and structured validation results.|
-|`src/make_features/expected_race_development.py`|Build the expected race development intermediate feature rows and tables.|
-|`src/make_features/explanatory_variables.py`|Build explanatory-variable middle rows through their individual modules.|
-|`src/make_features/generation/__init__.py`|Share audited row generation.|
-|`src/make_features/generation/base.py`|Share feature-row generation and validated Arrow table construction.|
-|`src/make_features/generation/normalization.py`|Normalize audited explicit feature inputs into the common middle-row type.|
-|`src/make_features/hill_and_wood_workouts.py`|Build the hill and wood workouts intermediate feature rows and tables.|
-|`src/make_features/history_volume_and_missingness.py`|Build the history volume and missingness intermediate feature rows and tables.|
-|`src/make_features/jockey_combination.py`|Build the jockey combination intermediate feature rows and tables.|
-|`src/make_features/jockey_performance.py`|Build the jockey performance intermediate feature rows and tables.|
-|`src/make_features/market_characteristics.py`|Build the market characteristics intermediate feature rows and tables.|
-|`src/make_features/odds_ratio.py`|Build the explicit-odds-ratio intermediate feature table.|
-|`src/make_features/opponent_pagerank.py`|Build the opponent pagerank intermediate feature rows and tables.|
-|`src/make_features/past_body_weight.py`|Build the past body weight intermediate feature rows and tables.|
-|`src/make_features/past_lap_and_running_style.py`|Build the past lap and running style intermediate feature rows and tables.|
-|`src/make_features/past_racing_ability.py`|Build the past racing ability intermediate feature rows and tables.|
-|`src/make_features/pedigree.py`|Build the string-valued pedigree intermediate feature table.|
-|`src/make_features/pedigree_suitability.py`|Build the pedigree suitability intermediate feature rows and tables.|
-|`src/make_features/previous_race_result.py`|Build the previous-race-result intermediate feature table.|
-|`src/make_features/recent_performance.py`|Build the recent performance intermediate feature rows and tables.|
-|`src/make_features/recent_stability.py`|Build the recent stability intermediate feature rows and tables.|
-|`src/make_features/rest_and_condition_change.py`|Build the rest and condition change intermediate feature rows and tables.|
-|`src/make_features/running_style_and_position.py`|Build the running style and position intermediate feature rows and tables.|
-|`src/make_features/same_gate_and_trainer_relative.py`|Build the same gate and trainer relative intermediate feature rows and tables.|
-|`src/make_features/serialization/__init__.py`|Convert feature contracts to and from JSON-compatible values.|
-|`src/make_features/serialization/inputs.py`|Convert decoded JSON objects into feature group input contracts.|
-|`src/make_features/serialization/outputs.py`|Convert feature generation results and audits to JSON-ready values.|
-|`src/make_features/tables/__init__.py`|Build and persist registered feature tables.|
-|`src/make_features/tables/build.py`|Construct intermediate tables from normalized feature rows.|
-|`src/make_features/tables/parquet.py`|Persist and reload validated intermediate feature tables.|
-|`src/make_features/tables/schema.py`|Declare and resolve registered intermediate feature schemas.|
-|`src/make_features/trainer_performance.py`|Build the trainer performance intermediate feature rows and tables.|
-|`src/make_features/validation/__init__.py`|Validate feature evidence and tables.|
-|`src/make_features/validation/audit.py`|Audit race shape and coordinate shared feature validation.|
-|`src/make_features/validation/availability.py`|Normalize and validate explicitly supplied feature timestamps.|
-|`src/make_features/validation/groups.py`|Validate feature scalars, missingness, status and source evidence.|
-|`src/make_features/validation/leakage.py`|Reject target-result columns and references to future outcomes.|
-|`src/make_features/validation/table.py`|Validate feature table schemas, keys and availability.|
-|`src/make_features/validation/values.py`|Check scalar values and missingness without changing data.|
-|`src/make_features/within_race_relative.py`|Build the within race relative intermediate feature rows and tables.|
-|`src/models/__init__.py`|Race-ranking model primitives for the LambdaRank MVP.|
-|`src/models/artifacts/__init__.py`|Artifacts responsibilities.|
-|`src/models/artifacts/native_model.py`|Publish, validate, and recover native model artifacts as one complete set.|
-|`src/models/backends/__init__.py`|Backends responsibilities.|
-|`src/models/backends/lightgbm.py`|Connect validated model inputs to the lazily imported LightGBM backend.|
-|`src/models/dataset/__init__.py`|Dataset responsibilities.|
-|`src/models/dataset/availability.py`|Audit feature values at their explicit freeze timestamps.|
-|`src/models/dataset/builder.py`|Construct validated prediction rows and labeled ranking datasets.|
-|`src/models/dataset/dataset.py`|Hold a validated race-contiguous ranking dataset.|
-|`src/models/dataset/rows.py`|Immutable model input rows and numeric value types.|
-|`src/models/dataset/schema.py`|Own the approved model feature schema and semantic metadata.|
-|`src/models/dataset/validation.py`|Validate and normalize model rows, labels and race groups.|
-|`src/models/evaluation/__init__.py`|Evaluation responsibilities.|
-|`src/models/evaluation/metrics.py`|Race-level ranking metrics for the LambdaRank MVP.|
-|`src/models/evaluation/walk_forward.py`|Race-level chronological walk-forward splitting and evaluation.|
-|`src/models/predict_model.py`|Preserve the existing prediction import entry point.|
-|`src/models/ranking/__init__.py`|Ranking responsibilities.|
-|`src/models/ranking/ranker.py`|Score feature rows and assign deterministic race-local ranks.|
-|`src/models/ranking/rules.py`|Define fixed ranking contracts and pure race grouping and ordering rules.|
-|`src/models/serialization/__init__.py`|Convert model contracts to and from JSON-compatible values.|
-|`src/models/serialization/inputs.py`|Convert decoded JSON objects into model feature input contracts.|
-|`src/models/serialization/outputs.py`|Convert model features, audits, and evaluations to JSON-ready values.|
-|`src/models/training/__init__.py`|Training responsibilities.|
-|`src/models/training/train.py`|Training entry point for the LambdaRank MVP.|
-|`src/tests/integration/test_cli_boundaries.py`|integration: Tests for CLI composition, independent imports and shared input contracts.|
-|`src/tests/integration/test_configuration.py`|integration: Tests for shared physical TOML loading and path resolution.|
-|`src/tests/integration/test_data_pipeline.py`|integration: Tests for raw SQLite preprocessing and processed Parquet loading.|
-|`src/tests/integration/test_data_retriever.py`|integration: Tests for the public race-data retrieval facade.|
-|`src/tests/integration/test_datamart.py`|integration: Tests for ordered datamart joins of intermediate feature tables.|
-|`src/tests/integration/test_explanatory_variables.py`|integration: Tests for the explicit F01-F21 explanatory-variable boundary.|
-|`src/tests/integration/test_feature_catalog.py`|integration: Verify declarative registrations reach audit, generation and saved contracts.|
-|`src/tests/integration/test_feature_tables.py`|integration: Tests for feature-specific intermediate tables.|
-|`src/tests/integration/test_historical.py`|integration: Tests for historical race and odds retrieval orchestration.|
-|`src/tests/integration/test_individual_feature_builders.py`|integration: Verify individual builders share middle rows, source audits and table storage.|
-|`src/tests/integration/test_jvlinktosqlite.py`|integration: Tests for the local JVLinkToSQLite subprocess boundary.|
-|`src/tests/integration/test_latest.py`|integration: Tests for latest-data retrieval orchestration.|
-|`src/tests/integration/test_main.py`|integration: Tests for the Typer data CLI.|
-|`src/tests/integration/test_make_features.py`|integration: Tests for feature execution JSON serialization.|
-|`src/tests/integration/test_models.py`|integration: Focused tests for the LambdaRank ranking MVP.|
-|`src/tests/integration/test_odds_archive.py`|integration: Tests for cumulative archiving of transient JVLinkToSQLite odds tables.|
-|`src/tests/test_project_environment.py`|既存環境smoke: Smoke tests for the non-package bootstrap environment.|
-|`src/tests/integration/test_read_json.py`|integration: Tests for the reusable UTF-8 JSON object loader.|
-|`src/tests/integration/test_realtime.py`|integration: Tests for prediction-time realtime odds retrieval.|
-|`src/tests/integration/test_serialization.py`|integration: Tests for reusable feature and model JSON contract conversion.|
-|`src/tests/integration/test_setting.py`|integration: Tests for declarative JVLinkToSQLite setting generation.|
-|`src/tests/integration/test_weekly_progress.py`|integration: Tests for isolated weekly progress bootstrap and reconciliation.|
-|`src/tests/unit/test_cli_boundaries.py`|unit: Tests for CLI composition, independent imports and shared input contracts.|
-|`src/tests/unit/test_configuration.py`|unit: Tests for shared physical TOML loading and path resolution.|
-|`src/tests/unit/test_datamart.py`|unit: Tests for ordered datamart joins of intermediate feature tables.|
-|`src/tests/unit/test_feature_catalog.py`|unit: Verify declarative registrations reach audit, generation and saved contracts.|
-|`src/tests/unit/test_feature_tables.py`|unit: Tests for feature-specific intermediate tables.|
-|`src/tests/unit/test_features.py`|unit: Tests for temporal feature construction and availability auditing.|
-|`src/tests/unit/test_historical.py`|unit: Tests for historical race and odds retrieval orchestration.|
-|`src/tests/unit/test_main.py`|unit: Tests for the Typer data CLI.|
-|`src/tests/unit/test_models.py`|unit: Focused tests for the LambdaRank ranking MVP.|
-|`src/tests/unit/test_serialization.py`|unit: Tests for reusable feature and model JSON contract conversion.|
-|`src/tests/unit/test_walk_forward.py`|unit: Tests for race-level chronological walk-forward evaluation.|
+|`src/cli/__init__.py`|機能別の責務でまとめたコマンドラインの境界。|
+|`src/cli/jra_van_retriever.py`|取得のオプションを検証し、取得のコマンドを実行する。|
+|`src/cli/json_io.py`|汎用のJSON入出力の失敗を、CLIの境界で変換する。|
+|`src/cli/make_datamart.py`|明示的に順序付けた中間Parquetの入力から、datamartを構築する。|
+|`src/cli/make_features.py`|コマンドラインの境界で、説明変数の生成を実行する。|
+|`src/cli/models.py`|モデル入力の監査、投影、walk-forward評価を実行する。|
+|`src/cli/options.py`|データ取得と前処理のCLIで共有するオプションの型を定義する。|
+|`src/cli/preprocessor.py`|processedデータの公開を実行し、コマンドの結果を報告する。|
+|`src/configuration/__init__.py`|設定の責務。|
+|`src/configuration/data_paths.py`|レースデータのworkflowで共有するファイルシステムのパスを読み込む。|
+|`src/configuration/loader.py`|特徴量固有の設定の契約を適用せずに、TOMLを読む。|
+|`src/configuration/path_resolver.py`|明示的に設定したパスを、その設定ファイルの位置を基準に解決する。|
+|`src/data/__init__.py`|共通のデータI/O、変換、snapshotのライフサイクルの境界。|
+|`src/data/loader/__init__.py`|データローダーの責務。|
+|`src/data/loader/processed_data_loader.py`|公開のprocessedデータの読込facade。|
+|`src/data/loader/read_json.py`|CLIや特徴量固有の検証を行わずに、UTF-8のJSONオブジェクトを読む。|
+|`src/data/loader/read_parquet.py`|保存の版の方針を持たずに、Parquetファイルと上限のあるバッチを読む。|
+|`src/data/loader/read_sqlite.py`|一つの読み取り専用トランザクションを通じて、rawのSQLiteの表を読む。|
+|`src/data/preprocessor/__init__.py`|rawの入力元の値の純粋な変換。|
+|`src/data/preprocessor/sqlite_to_arrow.py`|SQLite由来の値を、既存の全列文字列のArrowの契約へ変換する。|
+|`src/data/saver/__init__.py`|データ保存の責務。|
+|`src/data/saver/write_json.py`|JSON互換の値を、標準のUTF-8のJSONとして書き込む。|
+|`src/data/saver/write_parquet.py`|明示的なArrowの表やバッチを、Parquetファイルへ書き込む。|
+|`src/data/storage/__init__.py`|保存の責務。|
+|`src/data/storage/snapshot_builder.py`|一貫した一つのrawのSQLiteの観測から、processedのsnapshotを構築する。|
+|`src/data/storage/snapshot_publisher.py`|完成したprocessedの版を、CURRENTの原子的な置き換えによって公開する。|
+|`src/data/storage/snapshot_store.py`|processedのsnapshotの配置と、CURRENTの版の解決を所有する。|
+|`src/domain/__init__.py`|データの境界から独立した、共有のドメイン値。|
+|`src/domain/race_key.py`|取得、前処理、読込をまたいで使う、共有のレースの識別。|
+|`src/jra_van_retriever/__init__.py`|JRA-VAN取得の責務。|
+|`src/jra_van_retriever/acquisition/__init__.py`|取得の責務。|
+|`src/jra_van_retriever/acquisition/acquisition_lock.py`|アプリケーションの取得を直列化し、一つのrawデータベースをその台帳に結び付ける。|
+|`src/jra_van_retriever/acquisition/jvlink_runner.py`|レースデータの取得のために、ローカルのJVLinkToSQLiteの実行ファイルを実行する。|
+|`src/jra_van_retriever/acquisition/odds_archive.py`|JVLinkToSQLiteのrealtimeのオッズの表を、スキーマを変えずに永続化する。|
+|`src/jra_van_retriever/acquisition/setting_xml.py`|型付きのJVLink profileから、実行用のXMLを生成する。|
+|`src/jra_van_retriever/config/__init__.py`|設定の責務。|
+|`src/jra_van_retriever/config/profiles.py`|宣言的な取得profileを、検証済みの設定へ変換する。|
+|`src/jra_van_retriever/config/validation.py`|ファイルを読まずに、JVLink固有のTOMLの値を検証する。|
+|`src/jra_van_retriever/contracts/__init__.py`|契約の責務。|
+|`src/jra_van_retriever/contracts/odds.py`|共有のrawのO1/O2の表と、完全なレースキーの列を定義する。|
+|`src/jra_van_retriever/parsing/__init__.py`|解析の責務。|
+|`src/jra_van_retriever/parsing/race_key.py`|取得の境界で、rawのレースキーの行を変換する。|
+|`src/jra_van_retriever/progress/__init__.py`|進捗の責務。|
+|`src/jra_van_retriever/progress/ledger.py`|正本となる過去オッズの進捗台帳を永続化し、検証する。|
+|`src/jra_van_retriever/progress/output.py`|確定済みの進捗から、historical-oddsのJSONとTOMLの報告を再生成する。|
+|`src/jra_van_retriever/progress/raw_observation.py`|rawの取得データを観測し、外部の書き込みの前にreaderを閉じる。|
+|`src/jra_van_retriever/progress/state.py`|永続化を伴わずに、取得の値を定義し、進捗を計算する。|
+|`src/jra_van_retriever/retriever.py`|JRA-VANのレースデータ取得のための、公開のオーケストレーションAPIを提供する。|
+|`src/jra_van_retriever/workflows/__init__.py`|workflowの責務。|
+|`src/jra_van_retriever/workflows/historical_basic.py`|JVLinkToSQLiteを通じて、過去の基本レースデータを取得する。|
+|`src/jra_van_retriever/workflows/historical_odds.py`|上限のある過去オッズのバッチと、そのライフサイクルの所有者を調整する。|
+|`src/jra_van_retriever/workflows/historical_odds_legacy.py`|既存の統合されたPythonの取得APIのために、過去オッズを取得する。|
+|`src/jra_van_retriever/workflows/historical_odds_plan.py`|rawと確定済みの台帳の観測から、年単位のオッズの作業を計画する。|
+|`src/jra_van_retriever/workflows/historical_odds_publication.py`|共通の取得ロックの下で、rawがそろった過去オッズを公開する。|
+|`src/jra_van_retriever/workflows/historical_odds_recovery.py`|stagingをリセットする前に、中断した取得の証拠を保存する。|
+|`src/jra_van_retriever/workflows/historical_odds_request.py`|永続的な過去オッズの取得要求を一つ実行し、分類する。|
+|`src/jra_van_retriever/workflows/latest.py`|JVLinkToSQLiteを通じて、最新のレースデータの変更を取得する。|
+|`src/jra_van_retriever/workflows/realtime.py`|JVLinkToSQLiteを通じて、対象の1レースの予測時のオッズを取得する。|
+|`src/main.py`|keiba-aiのコマンドラインインターフェースを組み立て、登録し、起動する。|
+|`src/make_datamart/__init__.py`|特徴量の中間表からのdatamartの構築。|
+|`src/make_datamart/builder.py`|I/Oを行わずに、検証済みの特徴量の表を、順序付きのdatamartへ結合する。|
+|`src/make_datamart/tables/__init__.py`|datamartのスキーマの契約と、明示的な永続化。|
+|`src/make_datamart/tables/parquet.py`|検証済みのdatamartのParquetの表を永続化し、再読込する。|
+|`src/make_datamart/tables/schema.py`|datamartの列と、永続化したmetadataを宣言し、復号する。|
+|`src/make_datamart/validation/__init__.py`|datamartのスキーマと行の検証。|
+|`src/make_datamart/validation/table.py`|datamartのスキーマ、キー、時刻、欠損値を検証する。|
+|`src/make_features/__init__.py`|特徴量固有の生成、検証、表の契約。|
+|`src/make_features/basic_conditions_and_weight.py`|基本条件・斤量の中間特徴量の行と表を構築する。|
+|`src/make_features/catalog/__init__.py`|宣言的な特徴量の登録を読み込み、結び付ける。|
+|`src/make_features/catalog/loader.py`|実装をimportせずに、宣言的な特徴量のcatalogを読む。|
+|`src/make_features/catalog/registry.py`|検証済みの特徴量の定義を、明示的に登録した実装に結び付ける。|
+|`src/make_features/condition_adjusted_ability.py`|条件補正能力の中間特徴量の行と表を構築する。|
+|`src/make_features/condition_suitability.py`|条件別適性の中間特徴量の行と表を構築する。|
+|`src/make_features/contracts/__init__.py`|特徴量の入力と中間行を宣言する。|
+|`src/make_features/contracts/rows.py`|保存への依存を持たずに、正規化した特徴量の中間行を表す。|
+|`src/make_features/contracts/types.py`|明示的な特徴量の入力と、構造化された検証結果。|
+|`src/make_features/expected_race_development.py`|想定展開の中間特徴量の行と表を構築する。|
+|`src/make_features/explanatory_variables.py`|個別のモジュールを通じて、説明変数の中間行を構築する。|
+|`src/make_features/generation/__init__.py`|監査済みの行の生成を共有する。|
+|`src/make_features/generation/base.py`|特徴量の行の生成と、検証済みのArrowの表の構築を共有する。|
+|`src/make_features/generation/normalization.py`|監査済みの明示的な特徴量の入力を、共通の中間行の型へ正規化する。|
+|`src/make_features/hill_and_wood_workouts.py`|坂路・ウッド調教の中間特徴量の行と表を構築する。|
+|`src/make_features/history_volume_and_missingness.py`|履歴量・欠損状態の中間特徴量の行と表を構築する。|
+|`src/make_features/jockey_combination.py`|騎手組合せの中間特徴量の行と表を構築する。|
+|`src/make_features/jockey_performance.py`|騎手成績の中間特徴量の行と表を構築する。|
+|`src/make_features/market_characteristics.py`|市場特徴の中間特徴量の行と表を構築する。|
+|`src/make_features/odds_ratio.py`|明示的なオッズ比の中間特徴量の表を構築する。|
+|`src/make_features/opponent_pagerank.py`|対戦相手補正PageRankの中間特徴量の行と表を構築する。|
+|`src/make_features/past_body_weight.py`|過去馬体重推移の中間特徴量の行と表を構築する。|
+|`src/make_features/past_lap_and_running_style.py`|過去ラップ・走り方の中間特徴量の行と表を構築する。|
+|`src/make_features/past_racing_ability.py`|過去走力の中間特徴量の行と表を構築する。|
+|`src/make_features/pedigree.py`|文字列値の血統の中間特徴量の表を構築する。|
+|`src/make_features/pedigree_suitability.py`|血統適性の中間特徴量の行と表を構築する。|
+|`src/make_features/previous_race_result.py`|前走結果の中間特徴量の表を構築する。|
+|`src/make_features/recent_performance.py`|近走成績の中間特徴量の行と表を構築する。|
+|`src/make_features/recent_stability.py`|近況安定性の中間特徴量の行と表を構築する。|
+|`src/make_features/rest_and_condition_change.py`|休養・条件変更の中間特徴量の行と表を構築する。|
+|`src/make_features/running_style_and_position.py`|脚質・位置取りの中間特徴量の行と表を構築する。|
+|`src/make_features/same_gate_and_trainer_relative.py`|同枠・同厩舎相対の中間特徴量の行と表を構築する。|
+|`src/make_features/serialization/__init__.py`|特徴量の契約を、JSON互換の値との間で相互に変換する。|
+|`src/make_features/serialization/inputs.py`|復号したJSONオブジェクトを、特徴量群の入力の契約へ変換する。|
+|`src/make_features/serialization/outputs.py`|特徴量の生成結果と監査を、JSONにできる値へ変換する。|
+|`src/make_features/tables/__init__.py`|登録した特徴量の表を構築し、永続化する。|
+|`src/make_features/tables/build.py`|正規化した特徴量の行から、中間表を構築する。|
+|`src/make_features/tables/parquet.py`|検証済みの特徴量の中間表を永続化し、再読込する。|
+|`src/make_features/tables/schema.py`|登録した特徴量の中間スキーマを宣言し、解決する。|
+|`src/make_features/trainer_performance.py`|調教師成績の中間特徴量の行と表を構築する。|
+|`src/make_features/validation/__init__.py`|特徴量の証拠と表を検証する。|
+|`src/make_features/validation/audit.py`|レースの形を監査し、共有の特徴量の検証を調整する。|
+|`src/make_features/validation/availability.py`|明示的に渡した特徴量の時刻を、正規化して検証する。|
+|`src/make_features/validation/groups.py`|特徴量のscalar、欠損、状態、出典の証拠を検証する。|
+|`src/make_features/validation/leakage.py`|予測対象の結果の列と、将来の結果への参照を拒否する。|
+|`src/make_features/validation/table.py`|特徴量の表のスキーマ、キー、利用可能性を検証する。|
+|`src/make_features/validation/values.py`|データを変更せずに、scalarの値と欠損を確認する。|
+|`src/make_features/within_race_relative.py`|レース内相対の中間特徴量の行と表を構築する。|
+|`src/models/__init__.py`|LambdaRank MVPのための、レース順位付けモデルの基本要素。|
+|`src/models/artifacts/__init__.py`|成果物の責務。|
+|`src/models/artifacts/native_model.py`|ネイティブのモデルの成果物を、完全な一式として公開、検証、復旧する。|
+|`src/models/backends/__init__.py`|バックエンドの責務。|
+|`src/models/backends/lightgbm.py`|検証済みのモデル入力を、遅延importしたLightGBMのバックエンドへ接続する。|
+|`src/models/dataset/__init__.py`|データセットの責務。|
+|`src/models/dataset/availability.py`|明示的なfreeze時刻における特徴量の値を監査する。|
+|`src/models/dataset/builder.py`|検証済みの予測行と、ラベル付きの順位付けデータセットを構築する。|
+|`src/models/dataset/dataset.py`|検証済みの、レースが連続する順位付けデータセットを保持する。|
+|`src/models/dataset/rows.py`|不変のモデル入力の行と、数値の値の型。|
+|`src/models/dataset/schema.py`|承認済みのモデルの特徴量スキーマと、意味上のmetadataを所有する。|
+|`src/models/dataset/validation.py`|モデルの行、ラベル、レースのグループを検証し、正規化する。|
+|`src/models/evaluation/__init__.py`|評価の責務。|
+|`src/models/evaluation/metrics.py`|LambdaRank MVPのための、レース単位の順位付けの指標。|
+|`src/models/evaluation/walk_forward.py`|レース単位の時系列のwalk-forwardによる分割と評価。|
+|`src/models/predict_model.py`|既存の予測のimportの入口を維持する。|
+|`src/models/ranking/__init__.py`|順位付けの責務。|
+|`src/models/ranking/ranker.py`|特徴量の行にscoreを付け、決定論的なレース内の順位を割り当てる。|
+|`src/models/ranking/rules.py`|固定の順位付けの契約と、純粋なレースのグループ化・順序付けの規則を定義する。|
+|`src/models/serialization/__init__.py`|モデルの契約を、JSON互換の値との間で相互に変換する。|
+|`src/models/serialization/inputs.py`|復号したJSONオブジェクトを、モデルの特徴量入力の契約へ変換する。|
+|`src/models/serialization/outputs.py`|モデルの特徴量、監査、評価を、JSONにできる値へ変換する。|
+|`src/models/training/__init__.py`|学習の責務。|
+|`src/models/training/train.py`|LambdaRank MVPの学習の入口。|
+|`src/tests/integration/test_cli_boundaries.py`|integration: CLIの構成、独立したimport、共有の入力の契約のテスト。|
+|`src/tests/integration/test_configuration.py`|integration: 共有のTOMLの物理読込とパスの解決のテスト。|
+|`src/tests/integration/test_data_pipeline.py`|integration: rawのSQLiteの前処理とprocessedのParquetの読込のテスト。|
+|`src/tests/integration/test_data_retriever.py`|integration: 公開のレースデータ取得facadeのテスト。|
+|`src/tests/integration/test_datamart.py`|integration: 特徴量の中間表の、順序付きのdatamart結合のテスト。|
+|`src/tests/integration/test_explanatory_variables.py`|integration: 明示的なF01〜F21の説明変数の境界のテスト。|
+|`src/tests/integration/test_feature_catalog.py`|integration: 宣言的な登録が、監査、生成、保存の契約まで届くことを検証する。|
+|`src/tests/integration/test_feature_tables.py`|integration: 特徴量固有の中間表のテスト。|
+|`src/tests/integration/test_historical.py`|integration: 過去のレースとオッズの取得のオーケストレーションのテスト。|
+|`src/tests/integration/test_individual_feature_builders.py`|integration: 個別のbuilderが、中間行、出典の監査、表の保存を共有することを検証する。|
+|`src/tests/integration/test_jvlinktosqlite.py`|integration: ローカルのJVLinkToSQLiteのsubprocess境界のテスト。|
+|`src/tests/integration/test_latest.py`|integration: 最新データの取得のオーケストレーションのテスト。|
+|`src/tests/integration/test_main.py`|integration: TyperのデータCLIのテスト。|
+|`src/tests/integration/test_make_features.py`|integration: 特徴量の実行のJSONシリアライズのテスト。|
+|`src/tests/integration/test_models.py`|integration: LambdaRankの順位付けMVPに絞ったテスト。|
+|`src/tests/integration/test_odds_archive.py`|integration: 一時的なJVLinkToSQLiteのオッズの表の、累積のarchiveのテスト。|
+|`src/tests/test_project_environment.py`|既存環境smoke: パッケージにしないbootstrap環境のスモークテスト。|
+|`src/tests/integration/test_read_json.py`|integration: 再利用できるUTF-8のJSONオブジェクトのローダーのテスト。|
+|`src/tests/integration/test_realtime.py`|integration: 予測時のrealtimeのオッズの取得のテスト。|
+|`src/tests/integration/test_serialization.py`|integration: 再利用できる、特徴量とモデルのJSONの契約の変換のテスト。|
+|`src/tests/integration/test_setting.py`|integration: 宣言的なJVLinkToSQLiteの設定の生成のテスト。|
+|`src/tests/integration/test_weekly_progress.py`|integration: 分離した週次の進捗のbootstrapと突合のテスト。|
+|`src/tests/unit/test_cli_boundaries.py`|unit: CLIの構成、独立したimport、共有の入力の契約のテスト。|
+|`src/tests/unit/test_configuration.py`|unit: 共有のTOMLの物理読込とパスの解決のテスト。|
+|`src/tests/unit/test_datamart.py`|unit: 特徴量の中間表の、順序付きのdatamart結合のテスト。|
+|`src/tests/unit/test_feature_catalog.py`|unit: 宣言的な登録が、監査、生成、保存の契約まで届くことを検証する。|
+|`src/tests/unit/test_feature_tables.py`|unit: 特徴量固有の中間表のテスト。|
+|`src/tests/unit/test_features.py`|unit: 時点に基づく特徴量の構築と、利用可能性の監査のテスト。|
+|`src/tests/unit/test_historical.py`|unit: 過去のレースとオッズの取得のオーケストレーションのテスト。|
+|`src/tests/unit/test_main.py`|unit: TyperのデータCLIのテスト。|
+|`src/tests/unit/test_models.py`|unit: LambdaRankの順位付けMVPに絞ったテスト。|
+|`src/tests/unit/test_serialization.py`|unit: 再利用できる、特徴量とモデルのJSONの契約の変換のテスト。|
+|`src/tests/unit/test_walk_forward.py`|unit: レース単位の時系列のwalk-forward評価のテスト。|
 |`configs/data.toml`|共有raw/processed/runtimeパス宣言。|
 |`configs/features.toml`|特徴量ID・名前・登録順の宣言。|
 |`configs/jvlink.toml`|取得profile・DataSpec・期間の宣言。|

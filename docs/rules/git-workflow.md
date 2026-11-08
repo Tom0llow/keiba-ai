@@ -111,6 +111,10 @@ Before publication:
 
 PR body (`.github/pull_request_template.md`):
 
+Write the PR body prose in Japanese under these English headings
+(`docs/rules/documentation.md`). The PR title stays an English Conventional
+Commits subject.
+
 ```text
 ## Summary
 

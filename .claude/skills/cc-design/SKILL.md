@@ -20,6 +20,8 @@ so that a fresh agent with no chat history can implement it correctly.
    (`docs/decisions/README.md`); if so, the ADR is part of the plan.
 4. Write `.handoff/<task-id>/plan.md` with the template below. Every
    acceptance criterion must be checkable by a test or a command.
+   Write the plan prose in Japanese; keep the template headings, field
+   names, and `AC-n` IDs in English (`docs/rules/documentation.md`).
 5. Optional second opinion - when the plan changes architecture, a public or
    persisted contract, or a security boundary, ask Codex for a read-only
    critique and fold in valid points (at most two rounds). Plan critique uses
