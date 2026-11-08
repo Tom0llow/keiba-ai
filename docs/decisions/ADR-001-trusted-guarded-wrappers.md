@@ -1,11 +1,11 @@
 # ADR-001: Install guarded wrappers outside the writable workspace
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-09-22
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: N/A
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-031
 
 ---
 
@@ -202,3 +202,4 @@ policy refers to them.
 | 2026-09-23 | Accepted | Bound execution to protected user-layer absolute paths, repository identity, and checkout identity |
 | 2026-09-24 | Accepted | Added immutable per-run installations, executable/version binding, SHA-bound observation, protection rechecks, and exact-SHA merge recovery |
 | 2026-09-25 | Accepted | Required native Codex execution, cross-host/version guard validation, complete SHA-bound local diffs and check-API observations, PR-bound readiness, and recoverable write-ahead task transitions |
+| 2026-11-08 | Superseded | Replaced by GitHub-enforced rulesets and the GitHub App agent identity (ADR-031) |

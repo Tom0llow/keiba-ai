@@ -3,8 +3,9 @@
 ## 1. Purpose
 
 This file is the durable working contract for AI coding agents in this
-repository. Detailed rules live under `docs/rules/`; reusable procedures belong
-in skills rather than being duplicated here.
+repository. Codex reads it directly; Claude Code imports it from `CLAUDE.md`.
+Detailed rules live under `docs/rules/`; reusable procedures belong in skills
+rather than being duplicated here.
 
 Instructions apply in this order when they conflict:
 
@@ -29,16 +30,17 @@ contract. Current module responsibilities are documented in `ARCHITECTURE.md`.
 │  ├─ features/
 │  ├─ models/
 │  └─ tests/
-├─ config/
+├─ configs/
 ├─ docs/
 │  ├─ decisions/         # architecture decision records
-│  └─ rules/             # coding, architecture, Git, and testing rules
-├─ .codex/               # guarded command policy
-├─ .github/              # CI and repository automation
-├─ scripts/agent/        # reviewed source for guarded wrappers
-├─ scripts/guard-tests/  # trust-boundary regression validation
-├─ scripts/setup/        # manual trust-boundary installation
+│  └─ rules/             # coding, architecture, Git, testing, and agent rules
+├─ .agents/skills/       # Codex skills and shared skills (canonical)
+├─ .claude/              # Claude Code settings, Claude-only skills, subagents
+├─ .codex/               # Codex project configuration and execution rules
+├─ .github/              # CI, CODEOWNERS, and main-branch rulesets
+├─ scripts/github-app/   # GitHub App token helper for the agent identity
 ├─ AGENTS.md
+├─ CLAUDE.md
 ├─ ARCHITECTURE.md
 ├─ pyproject.toml
 └─ uv.lock
@@ -55,6 +57,7 @@ Before making changes, read the rules relevant to the task:
   `docs/rules/architecture.md`
 - Git, branch, commit, or PR work: `docs/rules/git-workflow.md`
 - Tests or bug fixes: `docs/rules/testing.md`
+- Agent roles, handoffs, and review loops: `docs/rules/agent-collaboration.md`
 
 If a deeper directory contains another `AGENTS.md`, follow it within that
 directory.
@@ -91,23 +94,8 @@ uv run mypy src
 uv run pytest
 ```
 
-Validate the guarded workflow source with PowerShell 7 (`pwsh`) or Windows
-PowerShell (`powershell.exe`). The command requires a Codex CLI version listed
-in `scripts/guard-tests/codex-cli-version.txt` and a self-contained native
-`codex.exe`; Node launcher shims such as `codex.cmd` and `codex.ps1` are not
-supported. It evaluates the policy with that CLI and must not skip policy
-evaluation:
-
-```powershell
-$guardInvocation = Get-Content -LiteralPath .git/codex-guard/guard-invocation.json -Raw | ConvertFrom-Json
-pwsh -NoProfile -File scripts/guard-tests/guard-regression.ps1 -CodexExecutablePath $guardInvocation.codexPath
-```
-
-When invocation metadata is not installed, supply an explicitly verified native
-Codex executable for an allow-listed version instead of relying on PATH.
-
-The `Quality` CI job runs that real regression for every allow-listed Codex
-version under both PowerShell 7 and Windows PowerShell 5.1.
+The agent-workflow integration tests require PowerShell 7 (`pwsh`) and the
+shared skill symbolic links (see `docs/rules/testing.md`).
 
 Run focused tests and checks first when a narrower command can provide faster
 feedback. Do not claim that a command passed unless it was run successfully.
@@ -141,7 +129,18 @@ Before a significant or durable architectural change:
 5. update architecture and user documentation when the implemented contract
    changes.
 
-## 7. Git safety and autonomous workflow
+## 7. Agent roles, Git safety, and the trust boundary
+
+Claude Code and Codex collaborate under ADR-031 and
+`docs/rules/agent-collaboration.md`:
+
+- Claude Code designs, coordinates, verifies, reviews, and performs every Git
+  and GitHub write for agent work through the `keiba-ai-agent` GitHub App
+  identity (`cc-task` skill).
+- Codex implements approved plans and findings inside `.worktrees/<task-id>/`
+  (`implement-plan` skill) and performs read-only reviews. Codex never mutates
+  Git state, uses `gh`, or accesses the network.
+- Only the human owner approves and merges PRs, on GitHub.
 
 Before editing, inspect:
 
@@ -150,80 +149,24 @@ git status --short --branch
 ```
 
 Never use destructive cleanup, force-push, rewrite published history, or discard
-pre-existing work. Outside an authorized workflow, do not commit, push, merge,
+pre-existing work. Outside the `cc-task` lifecycle, do not commit, push, merge,
 rebase, create a branch or tag, or open a PR without explicit user instruction.
 
-The first installation of the AI-driven development foundation is a one-time
-human/manual bootstrap. Its guarded wrappers, green baseline CI, and repository
-protection do not yet exist as usable prerequisites, so this initial change may
-be prepared through an explicitly authorized manual or local-only process. This
-exception ends after all of the following are true:
+The trust boundary is enforced on GitHub: the `main` rulesets require an
+up-to-date PR with passing `Quality` and `Test` and code-owner approval of the
+latest push, and they allow only administrators to update `main`. The App has
+no `workflows` permission. Agents must not try to bypass, weaken, or work around
+these rules, and must not read the App private key. Changes to `.github/`,
+`.claude/settings.json`, `.codex/`, and `scripts/github-app/` need explicit
+human review in the PR.
 
-1. the bootstrap is present on `main`;
-2. `Quality` and `Test` exist and pass on `main`;
-3. the configured protection for `main` has been verified;
-4. the reviewed wrappers are installed in the protected Codex user guard store
-   together with their repository-and-checkout-bound user-layer policy and
-   `.git` invocation metadata;
-5. Codex has been restarted so that policy is active; and
-6. the installed guarded workflow preflight succeeds.
+Skills are split by tool (`.agents/skills/README.md`): Codex-only skills live
+in `.agents/skills/`, Claude-only skills in `.claude/skills/`, and shared skills
+live in `.agents/skills/` with per-skill symbolic links from `.claude/skills/`.
+Shared skills stay tool-neutral.
 
-The bootstrap exception is not a general bypass. After activation, every
-non-trivial Codex implementation or bug fix must use the `autonomous-task`
-workflow unless the user explicitly requests local-only work or read-only
-analysis.
-
-Files under `scripts/agent/` are reviewable source and must never be executed as
-host-side trust anchors. Autonomous Git/GitHub operations use only their
-reviewed copies installed in the protected Codex user guard store. Guarded Git
-commands disable all local hooks. Invoke guarded copies only through the exact
-absolute executable and script paths recorded in `guard-invocation.json`;
-relative guard paths are forbidden. The manifest fixes the canonical absolute
-PowerShell, Git, GitHub CLI, and Codex CLI paths and the approved Codex CLI
-version. The Codex path must identify a self-contained native `codex.exe`, not a
-Node launcher shim; installation may receive it through
-`-CodexExecutablePath`. Any path or version change requires guard
-reinstallation. Direct use
-of the recorded GitHub CLI or Codex CLI executable is forbidden by the generated
-policy, and raw Git/GitHub operations must not bypass the wrappers. Ruff, mypy,
-and pytest run separately inside the ordinary sandbox and in CI.
-
-The autonomous workflow rejects changes to its trust boundary, including
-`.agents/`, `.codex/`, `.github/`, `scripts/agent/`, `scripts/guard-tests/`,
-`scripts/github/`, and `scripts/setup/`, plus every `AGENTS.md` or
-`AGENTS.override.md` at any depth.
-Such changes require an explicitly authorized manual security bootstrap and
-guard reinstallation from protected `main`.
-Ignored untracked files do not bypass this boundary: protected directories and
-every nested `AGENTS.md` / `AGENTS.override.md` are checked explicitly even when
-repository, info, or global ignore rules hide them from ordinary status output.
-
-CI waiting, PR/CI inspection, merge readiness, and merge use the same explicit
-expected HEAD SHA. PR inspection observes the current PR base as `baseSha` and
-uses the recorded task `startSha` as `diffBaseSha` for a complete local binary
-diff through the expected head, with external diff and text conversion disabled.
-Check evidence comes from the check-runs and commit-status APIs for that expected
-head. Observation results include `baseSha` and `headSha`; PR inspection also
-includes `diffBaseSha`.
-`merge-ready.ps1` and `merge-task.ps1` immediately before an unmerged PR merge
-revalidate required contexts, strict status checks, and the
-GitHub Actions application ID for `main`. Readiness is bound to both the PR
-number and HEAD SHA; binding the task to a replacement PR clears prior readiness
-and merge-attempt evidence. The workflow stops at `MERGE_READY`.
-A merge requires explicit human approval of the exact reviewed PR number and
-HEAD SHA and must use the installed `merge-task.ps1`. If a merge succeeded
-remotely but a subsequent communication or cleanup step failed, only a rerun for
-the same PR and approved SHA may reconcile the recorded merged PR and finish
-cleanup. Never reinterpret the approval for another SHA. Recovery additionally
-requires the matching pre-merge attempt record and retains task state while
-cleanup remains incomplete.
-
-`start-task.ps1` and `commit-task.ps1` persist write-ahead task state before
-their Git state transitions. If either is interrupted, retry the same wrapper
-with the same arguments; other task-state-dependent guarded wrappers fail closed
-until that retry finishes and clears the pending operation.
-
-See `docs/AUTONOMOUS_DEVELOPMENT.md` and `docs/rules/git-workflow.md`.
+See `docs/rules/git-workflow.md` for branches, commits, PRs, CI, merge policy,
+and the one-time agent identity setup.
 
 ## 8. Definition of Done
 

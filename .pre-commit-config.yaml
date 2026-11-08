@@ -1,14 +1,14 @@
 # .pre-commit-config.yaml
 #
-# Pre-commit hooks for the Python/Codex development baseline.
+# Pre-commit hooks for the Python development baseline.
 #
 # Design:
 # - Reuse the tools and versions installed by `uv sync`.
 # - Avoid creating a second Ruff/mypy/pytest environment inside pre-commit.
 # - Keep normal commits reasonably fast.
 # - Run the broader test suite at pre-push rather than every commit.
-# - These hooks assist human/manual Git. Guarded host-side wrappers deliberately
-#   disable Git hooks and rely on prior sandboxed validation plus CI.
+# - These hooks assist local commits by humans and Claude Code. They do not
+#   replace the required `Quality` and `Test` CI checks.
 #
 # Initial setup:
 #   uv sync

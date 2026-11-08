@@ -1,36 +1,48 @@
 # Repository Skills
 
-This repository provides focused Codex workflows under `.agents/skills/`.
+Skills are split by the tool that runs them. Codex reads `.agents/skills/`;
+Claude Code reads `.claude/skills/`. Roles and handoffs are defined in
+`docs/rules/agent-collaboration.md`.
 
-## User-facing skills
+## Shared skills (canonical here, linked from `.claude/skills/`)
 
 | Skill | Use |
 | --- | --- |
-| `autonomous-task` | Full guarded implementation lifecycle through an exact-HEAD `MERGE_READY` gate |
-| `implement-feature` | Code-and-test phase for new behavior; standalone only for explicit local-only work |
-| `fix-bug` | Diagnosis and code-and-test fix phase; standalone only for explicit local-only work |
-| `code-review` | Read-only defect-first review of diffs/branches/commits/PRs |
-| `merge-approved` | Guarded squash merge after explicit approval of the exact reviewed HEAD |
+| `implement-feature` | Code-and-test discipline for new behavior |
+| `fix-bug` | Diagnosis, regression test, and fix discipline for defects |
+| `review-rubric` | Read-only defect-first review rubric and severities |
 | `data-assessment` | Assess data management against seven DMBOK environmental elements and nine data-quality dimensions |
 | `data-preprocessing` | Preview and apply approved transformations from raw to processed or datamart |
 | `table-definition` | Document existing or planned raw, processed, and datamart tables |
 
-Codex may select a user-facing skill implicitly from its description, or it can
-be invoked explicitly from the Codex IDE/CLI. When `AGENTS.md` requires the
-guarded lifecycle, `autonomous-task` remains the top-level coordinator and uses
-`implement-feature` or `fix-bug` only for the local implementation phase.
+Shared skills must stay tool-neutral: frontmatter has only `name` and
+`description`, and the body names no tool-specific commands. Codex display
+metadata in `agents/openai.yaml` is allowed; Claude Code ignores it.
 
-## Internal workflow skills
+To share a new skill, create `.agents/skills/<name>/` and add the link:
 
-These skills are building blocks used by `autonomous-task`, not general entry
-points for ordinary user requests:
+```powershell
+New-Item -ItemType SymbolicLink -Path .claude\skills\<name> -Target ..\..\.agents\skills\<name>
+```
 
-| Skill | Workflow responsibility |
+On Windows this needs Developer Mode and `git config core.symlinks true`.
+`src/tests/integration/test_agent_skills_layout.py` checks the layout.
+
+## Codex-only skills
+
+| Skill | Use |
 | --- | --- |
-| `create-pr` | Create a PR from an already validated and pushed guarded task branch |
-| `ci-fix` | Analyze and repair task-related CI failures within the bounded retry policy |
-| `review-fix-loop` | Coordinate bounded local review and validated fixes |
-| `pr-review` | Review the complete PR at its current exact HEAD |
-| `merge-ready` | Verify and present the final exact-HEAD readiness gate |
+| `implement-plan` | Implement an approved `.handoff/<task-id>/plan.md` (and findings rounds) in the task worktree |
 
-Keep skills focused. If a workflow becomes materially different, prefer a separate skill rather than turning one skill into a catch-all process.
+## Claude-only skills (`.claude/skills/`)
+
+| Skill | Use |
+| --- | --- |
+| `cc-task` | Full lifecycle coordinator from requirement to a READY, App-authored PR |
+| `cc-design` | Requirement to approved plan |
+| `cc-implement` | Run Codex on the plan or findings in the worktree and verify the result |
+| `cc-review` | Dual independent review (Claude subagent + Codex read-only) and adjudication |
+| `cc-ship` | Commit, App push, App PR, and CI |
+
+Keep skills focused. If a workflow becomes materially different, prefer a
+separate skill rather than turning one skill into a catch-all process.

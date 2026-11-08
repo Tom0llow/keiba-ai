@@ -1,10 +1,10 @@
 # ADR-016: guarded workflow の引数保持と状態更新・終了経路
 
-- Status: Accepted
+- Status: Superseded
 - Date: 2026-10-11
 - Decision Owners: Repository maintainers
 - Supersedes: N/A（ADR-001 の信頼境界を維持し、運用経路を補足）
-- Superseded by: N/A
+- Superseded by: ADR-031
 
 ## Context
 
