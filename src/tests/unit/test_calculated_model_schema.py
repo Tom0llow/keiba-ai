@@ -10,7 +10,11 @@ import pytest
 from typer.testing import CliRunner
 
 from main import app
-from models.dataset.calculated import CalculationContract
+from models.dataset.calculated import (
+    CalculationContract,
+    closed_numeric_columns,
+    resolve_numeric_column,
+)
 from models.dataset.rows import FeatureRow, FeatureValue
 from models.dataset.schema import FeatureSchema, validate_feature_names
 from models.dataset.validation import validate_feature_rows
@@ -118,6 +122,20 @@ def test_old_schema_metadata_remains_unchanged() -> None:
     schema = FeatureSchema.from_names(("ability", "historical_odds"), schema_id="legacy")
     assert "calculation_contract" not in schema.as_metadata()
     assert FeatureSchema.from_metadata(schema.as_metadata()) == schema
+
+
+def test_closed_numeric_columns_enumerate_every_dynamic_family_in_contract_order() -> None:
+    p = parameters()
+    semantic = CalculationContract.create(p, SELECTED_COLUMNS).settings["parameters"]
+    assert isinstance(semantic, dict)
+    columns = closed_numeric_columns(semantic)
+    assert len(columns) == 36
+    assert [column.name for column in columns[-16:-12]] == [
+        f"recent_performance__past_finish_lag{lag}" for lag in range(1, 5)
+    ]
+    assert columns[18].name == "recent_stability__past_elapsed_sec_mean"
+    assert columns[19].name == "within_race_relative__relative_elapsed_sec_rank"
+    assert all(resolve_numeric_column(column.name, semantic) == column for column in columns)
 
 
 def test_prepare_cli_rejects_a_dangling_symlink_before_loading_or_writing() -> None:

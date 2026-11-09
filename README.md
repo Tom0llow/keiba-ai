@@ -498,3 +498,18 @@ JSONの証跡宣言を検証できても、外部の原本・過去受信履歴�
 [設定、manifest例、加工影響、準備・MLflow学習・厳密版予測の手順](docs/experiments/reference-real-input.md)
 と[ADR-030](docs/decisions/ADR-030-connect-pinned-snapshots-with-explicit-reference-assumptions.md)を参照する。
 `configs/reference_input/trial.yaml`は全21群から各1列を選ぶ明示的な初期実験設定で、最適値ではない。
+
+## 全期間の参考特徴量datamartを構築する
+
+`datamart build-reference`は、固定snapshotから対象期間の中央全レースについて全21群を時系列順に
+一度だけ計算し、閉じた数値列の全列・群ごとの利用可能時刻・ラベルを年ごとのParquetへ保存する。
+参考規則と計算式は`model prepare-reference-input`と同じで、読込時に21群を再計算しない。
+
+```powershell
+uv run python src/main.py datamart build-reference --config-name measure --override processed_root=data/processed --override snapshot_id=098ce3f4b5d7480282269218d80cef05 --output output/reference-datamart-2025
+```
+
+`--output`は存在しない新しいパスで、processed rootの外に置く。`configs/reference_datamart/build.yaml`は
+`snapshot_id`（nullなら最初の一度だけCURRENTを解決する）以外を必須値`???`とし、`measure.yaml`は計測用の明示値（対象2025年、履歴2005年から）である。
+形式・検証・計測結果は[参考特徴量datamartの構築と計測](docs/experiments/reference-feature-datamart.md)と
+[ADR-034](docs/decisions/ADR-034-build-full-period-reference-feature-datamart.md)を参照する。

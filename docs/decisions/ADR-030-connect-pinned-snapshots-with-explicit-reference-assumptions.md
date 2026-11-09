@@ -4,6 +4,7 @@
 - Date: 2026-11-01
 - Decision Owners: Repository maintainers
 - Supersedes: ADR-028の現存データを参考実験へ接続しない制限のみ
+- Superseded by: ADR-034（参考datamartの経路での読込時の再計算のみ。prepared JSONの経路は継続）
 
 ## Context
 

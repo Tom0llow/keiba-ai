@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime, time, timedelta
 from typing import cast
@@ -11,12 +11,14 @@ from typing import cast
 from make_features.contracts.observations import (
     CalculationParameters,
     Coverage,
+    HistoricalRace,
     HorseOdds,
     MarketObservation,
     ObservationInput,
     PairOdds,
     PedigreeObservation,
     RaceCard,
+    Workout,
 )
 from make_features.real_market import (
     JST,
@@ -93,10 +95,12 @@ def market_at(
     race_id: str,
     cutoff: datetime,
     mapping: Mapping[str, str],
+    row_hash: Callable[[dict[str, object]], str] | None = None,
 ) -> MarketObservation:
     """Synchronize latest phase-1 horse and unordered-pair quotes at each anchor."""
     manifest = {"race_id": race_id, "freeze_at": cutoff.isoformat()}
-    o1, o2 = latest_o1(o1_rows, manifest), latest_o1(o2_rows, manifest)
+    o1 = latest_o1(o1_rows, manifest, row_hash=row_hash)
+    o2 = latest_o1(o2_rows, manifest, row_hash=row_hash)
     p1, p2 = publication(o1), publication(o2)
     win = {number: value for number, value, _ in win_quotes(o1)}
     if set(win) != set(mapping):
@@ -177,27 +181,30 @@ def market_at(
     )
 
 
-def normalize_reference_input(raw: Mapping[str, object]) -> ReferenceNormalization:
-    """Reproducibly map stored rows; never fetch data or infer actual reception clocks."""
-    if (
-        set(raw)
-        != {
-            "format_version",
-            "snapshot",
-            "rules",
-            "calculation_settings",
-            "races",
-            "tables",
-            "include_labels",
-        }
-        or type(raw["format_version"]) is not int
-        or raw["format_version"] != 1
-        or type(raw["include_labels"]) is not bool
-    ):
-        raise ValueError("invalid versioned reference input")
-    rules = validate_reference_rules(raw["rules"])
-    manifests = validate_races(raw["races"])
-    settings = raw["calculation_settings"]
+def reference_manifests(
+    rows: Sequence[dict[str, object]], *, freeze_offset_seconds: int
+) -> tuple[dict[str, object], ...]:
+    """Return implicit targets from stored schedules, with no claimed schedule clock."""
+    if type(freeze_offset_seconds) is not int or freeze_offset_seconds < 1:
+        raise ValueError("freeze_offset_seconds must be a positive integer")
+    manifests: list[dict[str, object]] = []
+    for identity, candidates in sorted(_groups(rows).items()):
+        scheduled = scheduled_start(_one(candidates))
+        manifests.append(
+            {
+                "race_id": identity,
+                "scheduled_start_at": scheduled.isoformat(),
+                "freeze_at": (scheduled - timedelta(seconds=freeze_offset_seconds)).isoformat(),
+                "schedule_known_at": None,
+            }
+        )
+    return tuple(manifests)
+
+
+def reference_parameters(
+    settings: object, rules: Mapping[str, object]
+) -> tuple[CalculationParameters, datetime]:
+    """Bind explicit settings to a declared history-start boundary, never a measured clock."""
     if not isinstance(settings, dict) or "evidence" in settings:
         raise ValueError("reference calculation_settings must exclude measured evidence")
     history_start_raw = settings.get("history_start")
@@ -220,6 +227,248 @@ def normalize_reference_input(raw: Mapping[str, object]) -> ReferenceNormalizati
     parameters = parse_calculation_parameters(
         {**settings, "evidence": normalized_payload(selection)}, reference=True
     )
+    return parameters, start
+
+
+def normalize_reference_history(
+    ra_rows: Sequence[dict[str, object]],
+    se_rows: Sequence[dict[str, object]],
+    *,
+    rules: Mapping[str, object],
+) -> tuple[list[HistoricalRace], list[dict[str, object]]]:
+    """Normalize every stored race once, holding whole races that are not normal results."""
+    history_ra, history_se = _groups(ra_rows), _groups(se_rows)
+    held: list[dict[str, object]] = []
+    history = []
+    for identity in sorted(history_ra.keys() | history_se.keys()):
+        rows = history_ra.get(identity, [])
+        if identity[8:10] not in cast(list[str], rules["venues"]):
+            raise ValueError("reference history contains a venue outside its declared population")
+        try:
+            race = historical_race(
+                _one(rows), history_se.get(identity, ()), days=cast(int, rules["result_delay_days"])
+            )
+        except ValueError as exc:
+            held.append(
+                {"race_id": identity, "role": "history", "reason": str(exc), "whole_race": True}
+            )
+            continue
+        history.append(race)
+    return history, held
+
+
+def reference_pedigree(
+    horse: str, rows: Sequence[dict[str, object]], *, start: datetime
+) -> PedigreeObservation:
+    """Normalize one horse's stored parent identifiers, keeping an absent master row explicit."""
+    row = (
+        _one(rows)
+        if rows
+        else {"KettoNum": horse, "missing_reason": "not_in_fixed_snapshot_master"}
+    )
+    return PedigreeObservation(
+        horse,
+        identifier(row, "Ketto3Info0HansyokuNum"),
+        identifier(row, "Ketto3Info4HansyokuNum"),
+        evidence(
+            f"pedigree:{horse}",
+            UM_TABLE,
+            row,
+            event=start,
+            usable=start,
+            basis="stored_parent_identifiers_revision_unverified",
+            event_basis="declared_history_start_boundary_not_parent_registration_clock",
+        ),
+    )
+
+
+@dataclass(frozen=True)
+class ReferenceTargetSources:
+    """Supply one target's rows and its as-of shared populations to the target normalizer.
+
+    ``history_for``, ``population_for``, ``pedigrees_for`` and ``sessions_for`` receive the
+    stored scheduled start, the freeze and (for the last three) earlier results, so the
+    per-race path and the chronological datamart can answer them from different indexes.
+    """
+
+    target_ra: Sequence[dict[str, object]]
+    target_se: Sequence[dict[str, object]]
+    o1: Sequence[dict[str, object]]
+    o2: Sequence[dict[str, object]]
+    label_ra: Sequence[dict[str, object]]
+    label_se: Sequence[dict[str, object]]
+    history_for: Callable[[datetime, datetime], tuple[HistoricalRace, ...]]
+    population_for: Callable[[tuple[HistoricalRace, ...], Sequence[str]], tuple[str, ...]]
+    pedigrees_for: Callable[[tuple[str, ...]], tuple[PedigreeObservation, ...]]
+    sessions_for: Callable[[datetime, datetime], tuple[Workout, ...]]
+    row_hash: Callable[[dict[str, object]], str] | None = None
+
+
+def reference_label(
+    mapping: Mapping[str, str],
+    label_ra: Sequence[dict[str, object]],
+    label_se: Sequence[dict[str, object]],
+    *,
+    rules: Mapping[str, object],
+) -> dict[str, object]:
+    """Separate a complete normal result from features; a ValueError holds the race."""
+    label_id, usable, finishes, result_raw = normal_result(
+        _one(label_ra),
+        label_se,
+        days=cast(int, rules["result_delay_days"]),
+    )
+    if set(finishes) != set(mapping.values()):
+        raise ValueError("label permanent horse set differs from frozen O1-mapped card")
+    return {
+        "kind": "reference_result_v1",
+        "race_id": label_id,
+        "raw": result_raw,
+        "raw_sha256": canonical_hash(result_raw),
+        "usable_after": usable.isoformat(),
+        "result_delay_days": rules["result_delay_days"],
+        "received_at": None,
+        "result_published_at": None,
+        "revision_time_verified": False,
+        "horse_mapping": dict(mapping),
+    }
+
+
+def normalize_reference_target(
+    manifest: Mapping[str, object],
+    sources: ReferenceTargetSources,
+    *,
+    rules: Mapping[str, object],
+    parameters: CalculationParameters,
+    start: datetime,
+    snapshot: object,
+    include_labels: bool,
+) -> tuple[ObservationInput, dict[str, object] | None]:
+    """Normalize one implicit or explicit target; a ValueError holds the whole race."""
+    identity = cast(str, manifest["race_id"])
+    if int(identity[:4]) < 2005 or identity[8:10] not in cast(list[str], rules["venues"]):
+        raise ValueError("target race is outside the declared supported population")
+    ra = _one(sources.target_ra)
+    scheduled = scheduled_start(ra)
+    freeze = timestamp(manifest.get("freeze_at"))
+    if timestamp(
+        manifest.get("scheduled_start_at")
+    ) != scheduled or scheduled - freeze != timedelta(seconds=300):
+        raise ValueError("freeze must equal stored scheduled start minus exactly 300 seconds")
+    if manifest.get("schedule_known_at") is not None:
+        raise ValueError("assumed stored schedule must not claim an actual schedule_known_at")
+    o1 = latest_o1(sources.o1, manifest, row_hash=sources.row_hash)
+    quotes = win_quotes(o1)
+    if any(reason in {"cancelled_before_sale", "cancelled_after_sale"} for _, _, reason in quotes):
+        raise ValueError("intermediate O1 indicates a cancelled entrant")
+    entrants = sorted(sources.target_se, key=lambda r: str(r.get("Umaban")))
+    safe_ra = {k: ra.get(k) for k in CARD_RA_COLUMNS}
+    safe_se = [{k: row.get(k) for k in CARD_SE_COLUMNS} for row in entrants]
+    runners = tuple(card_runner(row) for row in safe_se)
+    mapping = {r.horse_number: r.horse_id for r in runners}
+    if (
+        len(mapping) != len(runners)
+        or len(set(mapping.values())) != len(runners)
+        or set(mapping) != {q[0] for q in quotes}
+    ):
+        raise ValueError("stored card permanent IDs must match complete intermediate O1 horse set")
+    raw_card = {"ra": safe_ra, "se": safe_se}
+    card = RaceCard(
+        identity,
+        scheduled,
+        conditions(safe_ra, target=True),
+        runners,
+        tuple(r.horse_id for r in runners),
+        True,
+        evidence(
+            f"card:{identity}",
+            "reference:stored_pre_race_fields",
+            raw_card,
+            event=freeze,
+            usable=freeze,
+            basis="stored_pre_race_fields_revision_unverified",
+            event_basis="declared_freeze_boundary_not_observed_card_event",
+        ),
+    )
+    markets = tuple(
+        market_at(
+            sources.o1,
+            sources.o2,
+            race_id=identity,
+            cutoff=anchor,
+            mapping=mapping,
+            row_hash=sources.row_hash,
+        )
+        for anchor in (freeze - timedelta(seconds=parameters.market_anchor_seconds), freeze)
+    )
+    available_history = sources.history_for(scheduled, freeze)
+    population = sources.population_for(available_history, tuple(mapping.values()))
+    pedigrees = sources.pedigrees_for(population)
+    coverage = tuple(
+        Coverage(
+            kind,
+            start
+            if kind in {"history", "pedigree"}
+            else freeze - timedelta(days=parameters.days_window)
+            if kind == "workouts"
+            else freeze
+            - timedelta(
+                seconds=parameters.market_anchor_seconds + parameters.market_max_age_seconds
+            ),
+            freeze,
+            population if kind in {"history", "pedigree"} else tuple(mapping.values()),
+            True,
+            cast(str, rules["coverage_scope"]),
+            evidence(
+                f"coverage:{identity}:{kind}",
+                "reference:coverage_declaration",
+                {
+                    "snapshot": snapshot,
+                    "kind": kind,
+                    "population": population,
+                    "freeze": freeze.isoformat(),
+                    "scope": rules["coverage_scope"],
+                },
+                event=freeze,
+                usable=freeze,
+                basis=cast(str, rules["coverage_scope"]),
+                event_basis="declared_reference_coverage_boundary",
+            ),
+        )
+        for kind in ("history", "pedigree", "workouts", "market")
+    )
+    sessions = sources.sessions_for(scheduled, freeze)
+    label = (
+        reference_label(mapping, sources.label_ra, sources.label_se, rules=rules)
+        if include_labels
+        else None
+    )
+    return (
+        ObservationInput(freeze, card, available_history, coverage, sessions, pedigrees, markets),
+        label,
+    )
+
+
+def normalize_reference_input(raw: Mapping[str, object]) -> ReferenceNormalization:
+    """Reproducibly map stored rows; never fetch data or infer actual reception clocks."""
+    if (
+        set(raw)
+        != {
+            "format_version",
+            "snapshot",
+            "rules",
+            "calculation_settings",
+            "races",
+            "tables",
+            "include_labels",
+        }
+        or type(raw["format_version"]) is not int
+        or raw["format_version"] != 1
+        or type(raw["include_labels"]) is not bool
+    ):
+        raise ValueError("invalid versioned reference input")
+    rules = validate_reference_rules(raw["rules"])
+    manifests = validate_races(raw["races"])
+    parameters, start = reference_parameters(raw["calculation_settings"], rules)
     tables = raw["tables"]
     names = {
         "history_ra",
@@ -245,23 +494,9 @@ def normalize_reference_input(raw: Mapping[str, object]) -> ReferenceNormalizati
         raise ValueError("reference input requires every explicitly projected table population")
     sources = cast(dict[str, list[dict[str, object]]], tables)
     validate_reference_projections(sources)
-    history_ra, history_se = _groups(sources["history_ra"]), _groups(sources["history_se"])
-    held: list[dict[str, object]] = []
-    history = []
-    for identity in sorted(history_ra.keys() | history_se.keys()):
-        rows = history_ra.get(identity, [])
-        if identity[8:10] not in cast(list[str], rules["venues"]):
-            raise ValueError("reference history contains a venue outside its declared population")
-        try:
-            race = historical_race(
-                _one(rows), history_se.get(identity, ()), days=cast(int, rules["result_delay_days"])
-            )
-        except ValueError as exc:
-            held.append(
-                {"race_id": identity, "role": "history", "reason": str(exc), "whole_race": True}
-            )
-            continue
-        history.append(race)
+    history, held = normalize_reference_history(
+        sources["history_ra"], sources["history_se"], rules=rules
+    )
     workouts = tuple(workout(row, kind=kind) for kind in ("hc", "wc") for row in sources[kind])
     target_ra, target_se = _groups(sources["target_ra"]), _groups(sources["target_se"])
     label_ra, label_se = _groups(sources["label_ra"]), _groups(sources["label_se"])
@@ -269,179 +504,73 @@ def normalize_reference_input(raw: Mapping[str, object]) -> ReferenceNormalizati
     labels = []
     for manifest in sorted(manifests, key=lambda r: str(r["race_id"])):
         identity = cast(str, manifest["race_id"])
-        try:
-            if int(identity[:4]) < 2005 or identity[8:10] not in cast(list[str], rules["venues"]):
-                raise ValueError("target race is outside the declared supported population")
-            ra = _one(target_ra.get(identity, ()))
-            scheduled = scheduled_start(ra)
-            freeze = timestamp(manifest.get("freeze_at"))
-            if timestamp(
-                manifest.get("scheduled_start_at")
-            ) != scheduled or scheduled - freeze != timedelta(seconds=300):
-                raise ValueError(
-                    "freeze must equal stored scheduled start minus exactly 300 seconds"
-                )
-            if manifest.get("schedule_known_at") is not None:
-                raise ValueError(
-                    "assumed stored schedule must not claim an actual schedule_known_at"
-                )
-            o1 = latest_o1(sources["o1"], manifest)
-            quotes = win_quotes(o1)
-            if any(
-                reason in {"cancelled_before_sale", "cancelled_after_sale"}
-                for _, _, reason in quotes
-            ):
-                raise ValueError("intermediate O1 indicates a cancelled entrant")
-            entrants = sorted(target_se.get(identity, ()), key=lambda r: str(r.get("Umaban")))
-            safe_ra = {k: ra.get(k) for k in CARD_RA_COLUMNS}
-            safe_se = [{k: row.get(k) for k in CARD_SE_COLUMNS} for row in entrants]
-            runners = tuple(card_runner(row) for row in safe_se)
-            mapping = {r.horse_number: r.horse_id for r in runners}
-            if (
-                len(mapping) != len(runners)
-                or len(set(mapping.values())) != len(runners)
-                or set(mapping) != {q[0] for q in quotes}
-            ):
-                raise ValueError(
-                    "stored card permanent IDs must match complete intermediate O1 horse set"
-                )
-            raw_card = {"ra": safe_ra, "se": safe_se}
-            card = RaceCard(
-                identity,
-                scheduled,
-                conditions(safe_ra, target=True),
-                runners,
-                tuple(r.horse_id for r in runners),
-                True,
-                evidence(
-                    f"card:{identity}",
-                    "reference:stored_pre_race_fields",
-                    raw_card,
-                    event=freeze,
-                    usable=freeze,
-                    basis="stored_pre_race_fields_revision_unverified",
-                    event_basis="declared_freeze_boundary_not_observed_card_event",
-                ),
-            )
-            markets = tuple(
-                market_at(
-                    sources["o1"], sources["o2"], race_id=identity, cutoff=anchor, mapping=mapping
-                )
-                for anchor in (freeze - timedelta(seconds=parameters.market_anchor_seconds), freeze)
-            )
-            available_history = tuple(
+
+        def history_for(
+            scheduled: datetime, freeze: datetime, identity: str = identity
+        ) -> tuple[HistoricalRace, ...]:
+            return tuple(
                 r
                 for r in history
                 if start.date() <= r.started_at.date() < scheduled.date()
                 and r.evidence.available_at <= freeze
                 and r.race_id != identity
             )
-            population = tuple(
-                sorted(
-                    set(mapping.values())
-                    | {r.horse_id for race in available_history for r in race.runners}
-                )
+
+        def population_for(
+            available: tuple[HistoricalRace, ...], card: Sequence[str]
+        ) -> tuple[str, ...]:
+            return tuple(
+                sorted(set(card) | {r.horse_id for race in available for r in race.runners})
             )
+
+        def pedigrees_for(population: tuple[str, ...]) -> tuple[PedigreeObservation, ...]:
             pedigree_rows: dict[str, list[dict[str, object]]] = {}
             for row in sources["um"]:
                 horse = identifier(row, "KettoNum")
                 if horse is not None and horse in population:
                     pedigree_rows.setdefault(horse, []).append(row)
-            pedigrees = []
-            for horse in population:
-                rows = pedigree_rows.get(horse, [])
-                row = (
-                    _one(rows)
-                    if rows
-                    else {"KettoNum": horse, "missing_reason": "not_in_fixed_snapshot_master"}
-                )
-                pedigrees.append(
-                    PedigreeObservation(
-                        horse,
-                        identifier(row, "Ketto3Info0HansyokuNum"),
-                        identifier(row, "Ketto3Info4HansyokuNum"),
-                        evidence(
-                            f"pedigree:{horse}",
-                            UM_TABLE,
-                            row,
-                            event=start,
-                            usable=start,
-                            basis="stored_parent_identifiers_revision_unverified",
-                            event_basis="declared_history_start_boundary_not_parent_registration_clock",
-                        ),
-                    )
-                )
-            coverage = tuple(
-                Coverage(
-                    kind,
-                    start
-                    if kind in {"history", "pedigree"}
-                    else freeze - timedelta(days=parameters.days_window)
-                    if kind == "workouts"
-                    else freeze
-                    - timedelta(
-                        seconds=parameters.market_anchor_seconds + parameters.market_max_age_seconds
-                    ),
-                    freeze,
-                    population if kind in {"history", "pedigree"} else tuple(mapping.values()),
-                    True,
-                    cast(str, rules["coverage_scope"]),
-                    evidence(
-                        f"coverage:{identity}:{kind}",
-                        "reference:coverage_declaration",
-                        {
-                            "snapshot": raw["snapshot"],
-                            "kind": kind,
-                            "population": population,
-                            "freeze": freeze.isoformat(),
-                            "scope": rules["coverage_scope"],
-                        },
-                        event=freeze,
-                        usable=freeze,
-                        basis=cast(str, rules["coverage_scope"]),
-                        event_basis="declared_reference_coverage_boundary",
-                    ),
-                )
-                for kind in ("history", "pedigree", "workouts", "market")
+            return tuple(
+                reference_pedigree(horse, pedigree_rows.get(horse, []), start=start)
+                for horse in population
             )
-            sessions = tuple(
+
+        def sessions_for(scheduled: datetime, freeze: datetime) -> tuple[Workout, ...]:
+            return tuple(
                 w
                 for w in workouts
                 if freeze - timedelta(days=parameters.days_window) <= w.evidence.event_at
                 and w.evidence.event_at.date() < scheduled.date()
                 and w.evidence.available_at <= freeze
             )
-            label = None
-            if raw["include_labels"]:
-                label_id, usable, finishes, result_raw = normal_result(
-                    _one(label_ra.get(identity, ())),
-                    label_se.get(identity, ()),
-                    days=cast(int, rules["result_delay_days"]),
-                )
-                if set(finishes) != set(mapping.values()):
-                    raise ValueError("label permanent horse set differs from frozen O1-mapped card")
-                label = {
-                    "kind": "reference_result_v1",
-                    "race_id": label_id,
-                    "raw": result_raw,
-                    "raw_sha256": canonical_hash(result_raw),
-                    "usable_after": usable.isoformat(),
-                    "result_delay_days": rules["result_delay_days"],
-                    "received_at": None,
-                    "result_published_at": None,
-                    "revision_time_verified": False,
-                    "horse_mapping": dict(mapping),
-                }
+
+        target_sources = ReferenceTargetSources(
+            target_ra.get(identity, ()),
+            target_se.get(identity, ()),
+            sources["o1"],
+            sources["o2"],
+            label_ra.get(identity, ()),
+            label_se.get(identity, ()),
+            history_for,
+            population_for,
+            pedigrees_for,
+            sessions_for,
+        )
+        try:
+            observation, label = normalize_reference_target(
+                manifest,
+                target_sources,
+                rules=rules,
+                parameters=parameters,
+                start=start,
+                snapshot=raw["snapshot"],
+                include_labels=raw["include_labels"],
+            )
         except ValueError as exc:
             held.append(
                 {"race_id": identity, "role": "target", "reason": str(exc), "whole_race": True}
             )
             continue
-        observations.append(
-            ObservationInput(
-                freeze, card, available_history, coverage, sessions, tuple(pedigrees), markets
-            )
-        )
+        observations.append(observation)
         if label is not None:
             labels.append(label)
     if not observations:

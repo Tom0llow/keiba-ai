@@ -156,6 +156,40 @@ _METRIC_UNITS = {
 }
 
 
+def closed_numeric_columns(parameters: Mapping[str, object]) -> tuple[NumericColumn, ...]:
+    """Return every approved numeric output in its deterministic contract order."""
+    metric = str(parameters["metric"])
+    lag_count = parameters["lag_count"]
+    if metric not in _METRIC_UNITS or type(lag_count) is not int or lag_count < 1:
+        raise ValueError("closed numeric columns require a supported metric and positive lag_count")
+    dynamic = (
+        NumericColumn(
+            "recent_stability",
+            f"past_{metric}_mean",
+            "prior metric complete-window mean",
+            _METRIC_UNITS[metric],
+        ),
+        NumericColumn(
+            "within_race_relative",
+            f"relative_{metric}_rank",
+            "frozen field competition rank of prior metric",
+            "rank",
+        ),
+    )
+    lags = tuple(
+        NumericColumn(group, f"{prefix}_lag{lag}", f"{meaning}, lag {lag}", unit)
+        for (group, prefix), (meaning, unit) in _LAGS.items()
+        for lag in range(1, lag_count + 1)
+    )
+    columns = (*_COLUMNS, *dynamic, *lags)
+    if len({column.name for column in columns}) != len(columns):
+        raise ValueError("closed numeric column names must be unique")
+    for column in columns:
+        if resolve_numeric_column(column.name, parameters) != column:
+            raise ValueError(f"closed numeric column cannot be resolved: {column.name!r}")
+    return columns
+
+
 def resolve_numeric_column(name: str, parameters: Mapping[str, object]) -> NumericColumn:
     """Resolve exact names or strictly bounded, explicitly enumerated lag families."""
     for column in _COLUMNS:

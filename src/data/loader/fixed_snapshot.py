@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import hashlib
 import re
 from collections.abc import Sequence
 from pathlib import Path
@@ -11,6 +10,7 @@ from typing import cast
 import pyarrow as pa
 import pyarrow.dataset as ds
 
+from data.loader.file_hash import file_sha256
 from data.storage.snapshot_store import SnapshotStore
 
 _KEYS = ("idYear", "idMonthDay", "idJyoCD", "idKaiji", "idNichiji", "idRaceNum")
@@ -42,7 +42,7 @@ class FixedSnapshot:
         """Use Arrow predicate pushdown and column projection, without SQLite access."""
         path = self._table_path(table)
         if table not in self._hashes:
-            self._hashes[table] = _file_hash(path)
+            self._hashes[table] = file_sha256(path)
         predicate = None
         for identity in race_ids:
             if re.fullmatch(r"[0-9]{16}", identity) is None:
@@ -82,10 +82,21 @@ class FixedSnapshot:
             dataset.to_table(columns=selected, filter=predicate).to_pylist(),
         )
 
+    def pinned_manifest(self) -> dict[str, object]:
+        """Return the identities hashed so far without rereading the files."""
+        return {
+            "snapshot_id": self.path.name,
+            "snapshot_path": str(self.path),
+            "tables": {
+                table: {"file": f"{table}.parquet", "sha256": digest}
+                for table, digest in sorted(self._hashes.items())
+            },
+        }
+
     def manifest(self) -> dict[str, object]:
         """Recheck physical hashes before publishing the input's snapshot evidence."""
         for table, digest in self._hashes.items():
-            if _file_hash(self._table_path(table)) != digest:
+            if file_sha256(self._table_path(table)) != digest:
                 raise ValueError(f"snapshot table changed while reading: {table}")
         return {
             "snapshot_id": self.path.name,
@@ -127,6 +138,27 @@ class FixedSnapshot:
                 predicate = predicate & ds.field("idJyoCD").isin(venues)
         return self._read_filtered(table, columns, predicate)
 
+    def pin(self, tables: Sequence[str]) -> None:
+        """Hash each named table once, before any row is read from it."""
+        for table in tables:
+            if table not in self._hashes:
+                self._hashes[table] = file_sha256(self._table_path(table))
+
+    def read_all(self, table: str, *, columns: Sequence[str]) -> list[dict[str, object]]:
+        """Read every row of a small table, projected to explicit nullable-string columns."""
+        return self._read_filtered(table, columns, None)
+
+    def period_reader(
+        self, table: str, *, columns: Sequence[str], venues: Sequence[str]
+    ) -> PeriodReader:
+        """Return a reader that parses one large table's footer once for many periods."""
+        path = self._table_path(table)
+        if table not in self._hashes:
+            self._hashes[table] = file_sha256(path)
+        dataset = ds.dataset(path, format="parquet")
+        _check_columns(table, dataset.schema, columns)
+        return PeriodReader(dataset, tuple(columns), tuple(venues))
+
     def read_identifiers(
         self, table: str, *, columns: Sequence[str], column: str, identities: Sequence[str]
     ) -> list[dict[str, object]]:
@@ -134,16 +166,13 @@ class FixedSnapshot:
         return self._read_filtered(table, columns, ds.field(column).isin(identities))
 
     def _read_filtered(
-        self, table: str, columns: Sequence[str], predicate: ds.Expression
+        self, table: str, columns: Sequence[str], predicate: ds.Expression | None
     ) -> list[dict[str, object]]:
         path = self._table_path(table)
         if table not in self._hashes:
-            self._hashes[table] = _file_hash(path)
+            self._hashes[table] = file_sha256(path)
         dataset = ds.dataset(path, format="parquet")
-        if set(columns) - set(dataset.schema.names):
-            raise ValueError(f"{table}: required projected source columns are missing")
-        if any(not pa.types.is_string(dataset.schema.field(name).type) for name in columns):
-            raise ValueError("reference sources must preserve nullable strings")
+        _check_columns(table, dataset.schema, columns)
         return cast(
             list[dict[str, object]],
             dataset.to_table(columns=list(columns), filter=predicate).to_pylist(),
@@ -158,6 +187,39 @@ class FixedSnapshot:
         return path
 
 
-def _file_hash(path: Path) -> str:
-    with path.open("rb") as stream:
-        return hashlib.file_digest(stream, "sha256").hexdigest()
+class PeriodReader:
+    """Read race-key date periods from one parsed dataset, in physical row order."""
+
+    def __init__(
+        self, dataset: ds.Dataset, columns: tuple[str, ...], venues: tuple[str, ...]
+    ) -> None:
+        self._dataset = dataset
+        self._columns = columns
+        self._venues = venues
+
+    def read(self, start: str, end: str) -> list[dict[str, object]]:
+        """Return the rows whose race-key date lies in an ordered YYYYMMDD period."""
+        if (
+            re.fullmatch(r"[0-9]{8}", start) is None
+            or re.fullmatch(r"[0-9]{8}", end) is None
+            or start > end
+        ):
+            raise ValueError("an ordered explicit YYYYMMDD period is required")
+        after = (ds.field("idYear") > start[:4]) | (
+            (ds.field("idYear") == start[:4]) & (ds.field("idMonthDay") >= start[4:])
+        )
+        before = (ds.field("idYear") < end[:4]) | (
+            (ds.field("idYear") == end[:4]) & (ds.field("idMonthDay") <= end[4:])
+        )
+        predicate = after & before & ds.field("idJyoCD").isin(self._venues)
+        return cast(
+            list[dict[str, object]],
+            self._dataset.to_table(columns=list(self._columns), filter=predicate).to_pylist(),
+        )
+
+
+def _check_columns(table: str, schema: pa.Schema, columns: Sequence[str]) -> None:
+    if set(columns) - set(schema.names):
+        raise ValueError(f"{table}: required projected source columns are missing")
+    if any(not pa.types.is_string(schema.field(name).type) for name in columns):
+        raise ValueError("reference sources must preserve nullable strings")

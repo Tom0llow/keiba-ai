@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from functools import cached_property
 from zoneinfo import ZoneInfo
 
@@ -23,7 +23,7 @@ from make_features.contracts.observations import (
     Workout,
 )
 from make_features.contracts.types import FeatureScalar
-from make_features.generation.statistics import mean, rates, relative
+from make_features.generation.statistics import mean, rates, relative, std
 from make_features.validation.observations import (
     aware,
     reject_reference,
@@ -36,6 +36,65 @@ from make_features.validation.observations import (
 
 JST = ZoneInfo("Asia/Tokyo")
 type Start = tuple[HistoricalRace, HistoricalRunner]
+type WorkoutKey = tuple[str, str, str | None, str | None]
+
+
+def workout_key(workout: Workout) -> WorkoutKey:
+    """Return the kind, facility, course and turn used to compare workout clocks."""
+    return (workout.kind, workout.facility, workout.course, workout.turn)
+
+
+def workout_clock(workout: Workout, distance: int) -> float | None:
+    """Sum the final measured sections covering exactly one distance, or return None."""
+    selected = []
+    measured_distance = 0
+    for section in reversed(workout.sections):
+        measured_distance += section.distance_m
+        selected.append(section)
+        if measured_distance >= distance:
+            break
+    if measured_distance != distance:
+        return None
+    values = [section.seconds for section in selected]
+    return sum(x for x in values if x is not None) if all(x is not None for x in values) else None
+
+
+@dataclass(frozen=True, slots=True)
+class BaselineStatistics:
+    """Summarize condition-matched winner clocks of one as-of reference population."""
+
+    matched_count: int
+    unknown: bool
+    clock_mean: float | None
+    clock_std: float | None
+    velocity_mean: float | None
+    velocity_std: float | None
+    unmeasured_clock: bool
+    zero_clock: bool
+    dependencies: tuple[Evidence, ...]
+
+
+def baseline_statistics(
+    matched: Sequence[HistoricalRace], *, unknown: bool, dependencies: tuple[Evidence, ...]
+) -> BaselineStatistics:
+    """Apply the shared winner-clock formulas to an already ordered matched population."""
+    winners = [next(r for r in prior.runners if r.finish == 1) for prior in matched]
+    clocks = [r.elapsed_sec for r in winners]
+    velocities = [
+        prior.conditions.distance_m / r.elapsed_sec if r.elapsed_sec else None
+        for prior, r in zip(matched, winners, strict=True)
+    ]
+    return BaselineStatistics(
+        len(matched),
+        unknown,
+        mean(clocks),
+        std(clocks),
+        mean(velocities),
+        std(velocities),
+        any(clock is None for clock in clocks),
+        any(clock == 0 for clock in clocks if clock is not None),
+        dependencies,
+    )
 
 
 @dataclass(frozen=True)
@@ -58,6 +117,9 @@ class CalculationContext:
         default_factory=dict, compare=False, repr=False
     )
     pagerank_results: dict[str, CalculatedValues] = field(
+        default_factory=dict, compare=False, repr=False
+    )
+    baseline_summaries: dict[tuple[datetime, Conditions], BaselineStatistics] = field(
         default_factory=dict, compare=False, repr=False
     )
 
@@ -158,6 +220,109 @@ class CalculationContext:
             raise ValueError(f"{kind} coverage is incomplete: {coverage.scope}")
         return coverage
 
+    # Overridable accessors. These defaults reproduce the per-race reference behavior;
+    # chronological datamart contexts answer the same questions from shared indexes.
+
+    def window_starts(self, days: int | None = None) -> tuple[Start, ...]:
+        """Return every eligible prior start inside a JST calendar-day window."""
+        return self.rolling(tuple((race, r) for race in self.races for r in race.runners), days)
+
+    def jockey_window(self, identity: str) -> tuple[Start, ...]:
+        """Return one rider's starts inside the configured rolling window."""
+        return self.rolling(self.by_jockey.get(identity, ()))
+
+    def trainer_window(self, identity: str) -> tuple[Start, ...]:
+        """Return one trainer's starts inside the configured rolling window."""
+        return self.rolling(self.by_trainer.get(identity, ()))
+
+    def parent_window(self, parent: str, identity: str) -> tuple[Start, ...]:
+        """Return rolling-window starts whose normalized parent identity matches."""
+        result = []
+        for start in self.population:
+            pedigree = self.pedigrees.get(start[1].horse_id)
+            if pedigree is not None and getattr(pedigree, parent) == identity:
+                result.append(start)
+        return tuple(result)
+
+    def pedigrees_cover_population(self) -> bool:
+        """Return whether every history and card horse has a normalized pedigree."""
+        return (
+            set(self.by_horse) | set(self.source.card.expected_horse_ids) <= self.pedigrees.keys()
+        )
+
+    def pedigree_evidence(self) -> tuple[Evidence, ...]:
+        """Return the pedigree evidence a pedigree-based group depends on."""
+        return tuple(p.evidence for p in self.pedigrees.values())
+
+    def workout_sessions(self, horse_id: str, kind: str) -> tuple[Workout, ...]:
+        """Return one horse's selected sessions of one kind in source order."""
+        return tuple(w for w in self.workouts if w.horse_id == horse_id and w.kind == kind)
+
+    def workout_key_horse(self, key: WorkoutKey, horse_id: str) -> tuple[Workout, ...]:
+        """Return one horse's selected sessions with one comparison key in source order."""
+        return tuple(w for w in self.workouts if workout_key(w) == key and w.horse_id == horse_id)
+
+    def workout_key_day(self, key: WorkoutKey, day: date) -> tuple[Workout, ...]:
+        """Return selected sessions with one comparison key on one JST date in source order."""
+        return tuple(
+            w
+            for w in self.workouts
+            if workout_key(w) == key and w.evidence.event_at.astimezone(JST).date() == day
+        )
+
+    def population_prior(self, population: Sequence[Start] | None, upper: int) -> float | None:
+        """Return the share of population starts finishing at or above a place."""
+        if not population:
+            return None
+        return sum(s[1].finish <= upper for s in population) / len(population)
+
+    def population_unknown_parent(self, parent: str, horse_id: str) -> bool:
+        """Return whether a window start, other than the horse unless included, lacks a parent."""
+        return any(
+            getattr(self.pedigrees[runner.horse_id], parent) is None
+            for _, runner in self.population
+            if self.parameters.pedigree_include_self or runner.horse_id != horse_id
+        )
+
+    def day_shared[T](self, key: str, compute: Callable[[], T]) -> T:
+        """Compute a value that depends only on the target date's history views."""
+        return compute()
+
+    def workout_clock(self, workout: Workout, distance: int) -> float | None:
+        """Return one session's clock over the final sections of a distance."""
+        return workout_clock(workout, distance)
+
+    def history_missing_reasons(self) -> dict[str, dict[str, str]]:
+        """Return the per-runner missing reasons recorded on selected history."""
+        return {
+            f"{race.race_id}/{runner.horse_id}": dict(runner.missing_reasons)
+            for race in self.races
+            for runner in race.runners
+            if runner.missing_reasons
+        }
+
+    def baseline_statistics(
+        self, started_at: datetime, conditions: Conditions
+    ) -> BaselineStatistics:
+        """Summarize the as-of reference population of one prior start, excluding itself."""
+        key = (started_at, conditions)
+        cached = self.baseline_summaries.get(key)
+        if cached is not None:
+            return cached
+        if started_at not in self.baseline_races:
+            self.baseline_races[started_at] = historical_as_of(
+                self.source, self.parameters, started_at, started_at
+            )
+        baseline = self.baseline_races[started_at]
+        matches = [self.condition_matches(r.conditions, conditions) for r in baseline]
+        summary = baseline_statistics(
+            [r for r, match in zip(baseline, matches, strict=True) if match is True],
+            unknown=any(match is None for match in matches),
+            dependencies=tuple(r.evidence for r in baseline),
+        )
+        self.baseline_summaries[key] = summary
+        return summary
+
     def performance(
         self, starts: Sequence[Start] | None, *, conditioned: bool = False
     ) -> dict[str, FeatureScalar]:
@@ -186,11 +351,7 @@ class CalculationContext:
         n = len(starts)
         alpha = self.parameters.smoothing_alpha
         for name, upper in (("win_rate", 1), ("top3_rate", 3)):
-            prior = (
-                sum(s[1].finish <= upper for s in population) / len(population)
-                if population
-                else None
-            )
+            prior = self.population_prior(population, upper)
             result[f"prior_{name}"] = prior
             result[f"smoothed_{name}"] = (
                 (sum(s[1].finish <= upper for s in starts) + alpha * prior) / (n + alpha)

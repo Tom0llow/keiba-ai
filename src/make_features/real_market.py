@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Callable, Mapping, Sequence
 from datetime import datetime, timedelta
 from typing import cast
 from zoneinfo import ZoneInfo
@@ -150,8 +150,14 @@ def publication(row: Mapping[str, object]) -> datetime:
         raise ValueError("intermediate O1 requires a valid HappyoTime") from exc
 
 
-def latest_o1(rows: Sequence[dict[str, object]], race: Mapping[str, object]) -> dict[str, object]:
+def latest_o1(
+    rows: Sequence[dict[str, object]],
+    race: Mapping[str, object],
+    *,
+    row_hash: Callable[[dict[str, object]], str] | None = None,
+) -> dict[str, object]:
     """Choose latest intermediate publication at or before the explicit freeze."""
+    digest = canonical_hash if row_hash is None else row_hash
     key = race_key(race["race_id"])
     freeze = timestamp(race.get("freeze_at"))
     candidates: dict[datetime, dict[str, dict[str, object]]] = {}
@@ -160,7 +166,7 @@ def latest_o1(rows: Sequence[dict[str, object]], race: Mapping[str, object]) -> 
             continue
         at = publication(row)
         if at <= freeze:
-            candidates.setdefault(at, {})[canonical_hash(row)] = row
+            candidates.setdefault(at, {})[digest(row)] = row
     if not candidates:
         raise ValueError(f"{race['race_id']}: no intermediate O1 publication at or before freeze")
     if any(len(versions) != 1 for versions in candidates.values()):

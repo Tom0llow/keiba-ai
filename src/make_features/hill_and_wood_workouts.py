@@ -8,12 +8,12 @@ from datetime import timedelta
 
 import pyarrow as pa
 
-from make_features.contracts.observations import CalculatedValues, Workout
+from make_features.contracts.observations import CalculatedValues
 from make_features.contracts.rows import FeatureTableRow
 from make_features.contracts.types import FeatureDefinition, FeatureScalar, FeatureValuesInput
 from make_features.generation.base import RegisteredFeatureBuilder
 from make_features.generation.normalization import normalize_audited_feature_inputs
-from make_features.generation.observations import JST, CalculationContext
+from make_features.generation.observations import JST, CalculationContext, workout_key
 from make_features.generation.statistics import mean
 from make_features.tables.schema import IntermediateFeatureTable
 
@@ -49,29 +49,6 @@ def _normalize_hill_and_wood_workouts(
     return normalize_audited_feature_inputs(records)
 
 
-def _workout_clock(workout: Workout, distance: int) -> float | None:
-    selected = []
-    measured_distance = 0
-    for section in reversed(workout.sections):
-        measured_distance += section.distance_m
-        selected.append(section)
-        if measured_distance >= distance:
-            break
-    if measured_distance != distance:
-        return None
-    values = [section.seconds for section in selected]
-    return sum(x for x in values if x is not None) if all(x is not None for x in values) else None
-
-
-def _workout_key(workout: Workout) -> tuple[str, str, str | None, str | None]:
-    return (
-        workout.kind,
-        workout.facility,
-        workout.course,
-        workout.turn,
-    )
-
-
 def calculate_hill_and_wood_workouts(
     context: CalculationContext, horse_id: str
 ) -> CalculatedValues:
@@ -86,10 +63,8 @@ def calculate_hill_and_wood_workouts(
         sessions = sorted(
             [
                 w
-                for w in context.workouts
-                if w.horse_id == horse_id
-                and w.kind == kind
-                and left <= w.evidence.event_at <= context.cutoff
+                for w in context.workout_sessions(horse_id, kind)
+                if left <= w.evidence.event_at <= context.cutoff
             ],
             key=lambda w: w.evidence.event_at,
             reverse=True,
@@ -97,7 +72,7 @@ def calculate_hill_and_wood_workouts(
         latest = sessions[0] if sessions else None
         if len(sessions) > 1 and sessions[0].evidence.event_at == sessions[1].evidence.event_at:
             raise ValueError("workout order is ambiguous at the same event timestamp")
-        clocks = [_workout_clock(w, p.workout_distance_m) for w in sessions]
+        clocks = [context.workout_clock(w, p.workout_distance_m) for w in sessions]
         row: dict[str, FeatureScalar] = {
             "workout_count": len(sessions),
             "clock_mean_sec": mean(clocks),
@@ -129,22 +104,17 @@ def calculate_hill_and_wood_workouts(
                 and sections[-1].seconds is not None
             ):
                 row["finish_accel_sec"] = sections[-2].seconds - sections[-1].seconds
-            same_key = [w for w in context.workouts if _workout_key(w) == _workout_key(latest)]
+            key = workout_key(latest)
+            latest_day = latest.evidence.event_at.astimezone(JST).date()
             reference = [
                 w
-                for w in same_key
-                if w.horse_id == horse_id and left <= w.evidence.event_at < latest.evidence.event_at
+                for w in context.workout_key_horse(key, horse_id)
+                if left <= w.evidence.event_at < latest.evidence.event_at
             ]
-            peers = [
-                w
-                for w in same_key
-                if w.horse_id != horse_id
-                and w.evidence.event_at.astimezone(JST).date()
-                == latest.evidence.event_at.astimezone(JST).date()
-            ]
-            clock = _workout_clock(latest, p.workout_distance_m)
+            peers = [w for w in context.workout_key_day(key, latest_day) if w.horse_id != horse_id]
+            clock = context.workout_clock(latest, p.workout_distance_m)
             for prefix, group in (("self", reference), ("same_day", peers)):
-                average = mean([_workout_clock(w, p.workout_distance_m) for w in group])
+                average = mean([context.workout_clock(w, p.workout_distance_m) for w in group])
                 row[f"{prefix}_reference_count"] = len(group)
                 name = "self_clock_diff_sec" if prefix == "self" else "same_day_course_diff_sec"
                 row[name] = (

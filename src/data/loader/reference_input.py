@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Mapping, Sequence
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import cast
 
 from data.loader.fixed_snapshot import FixedSnapshot
@@ -65,3 +65,45 @@ def read_reference_tables(
         "NL_UM_UMA", columns=columns["um"], column="KettoNum", identities=horses
     )
     return tables
+
+
+def read_reference_year(
+    snapshot: FixedSnapshot,
+    *,
+    first: date,
+    last: date,
+    venues: Sequence[str],
+    ra_columns: Sequence[str],
+    se_columns: Sequence[str],
+) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+    """Read every race and runner of one bounded period with one period predicate each."""
+    if first > last or first.year != last.year:
+        raise ValueError("a reference year read requires an ordered period within one year")
+    start, end = first.strftime("%Y%m%d"), last.strftime("%Y%m%d")
+    return (
+        snapshot.read_period("NL_RA_RACE", columns=ra_columns, start=start, end=end, venues=venues),
+        snapshot.read_period(
+            "NL_SE_RACE_UMA", columns=se_columns, start=start, end=end, venues=venues
+        ),
+    )
+
+
+def read_reference_workouts(
+    snapshot: FixedSnapshot,
+    *,
+    first: date,
+    last: date,
+    columns: Mapping[str, Sequence[str]],
+) -> list[tuple[str, dict[str, object]]]:
+    """Read hill then wood sessions of one session-date period in physical row order."""
+    return [
+        (kind, row)
+        for kind, table in (("hc", "NL_HC_HANRO"), ("wc", "NL_WC_WOOD"))
+        for row in snapshot.read_period(
+            table,
+            columns=columns[kind],
+            date_column="ChokyoDate",
+            start=first.strftime("%Y%m%d"),
+            end=last.strftime("%Y%m%d"),
+        )
+    ]
