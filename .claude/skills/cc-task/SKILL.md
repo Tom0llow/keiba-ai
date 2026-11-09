@@ -32,7 +32,12 @@ Human requirement
    HANDOFF="$ROOT/.handoff/$TASK_ID"
    WT="$ROOT/.worktrees/$TASK_ID"
    BRANCH="agent/$TASK_ID"
+   APP_GH="pwsh -NoProfile -File $ROOT/scripts/github-app/github-app.ps1 gh"
+   REPO="Tom0llow/keiba-ai"
    ```
+
+   Every agent `gh` call, including issue commands, uses `$APP_GH ... --repo "$REPO"`
+   so it runs as the App identity, never with the human's `gh` credentials.
 
 3. Confirm the agent identity is configured: `git remote get-url --push origin`
    starts with `https://x-access-token@github.com/` and
@@ -56,13 +61,20 @@ Human requirement
      deferred findings),
    - the selected Codex tier and the model and effort printed in each run's
      output header (section 8),
-   - remaining risks.
+   - remaining risks,
+   - Issue candidates for follow-up work and deferred findings (title, body,
+     labels) per section 9 of `docs/rules/agent-collaboration.md`; file them
+     with `$APP_GH issue create --repo "$REPO" ...` only after the human
+     confirms, then add only `Refs #n` (never `Closes #n`) to
+     `$HANDOFF/pr-body.md`, update the PR with
+     `$APP_GH pr edit <n> --repo "$REPO" --body-file "$HANDOFF/pr-body.md"`,
+     and tell the human which issues were filed and that the PR body changed.
    Then stop. Never approve or merge; the human does both on GitHub.
 6. **Human feedback** - if the human requests changes (in chat or as PR
-   review comments read with `gh pr view <n> --comments`), treat them as
+   review comments read with `$APP_GH pr view <n> --repo "$REPO" --comments`), treat them as
    findings: `cc-implement` -> `cc-review` -> `cc-ship` (push a new commit).
 7. **Cleanup** - only after the human says the PR is merged and
-   `gh pr view <n> --json state` reports `MERGED`:
+   `$APP_GH pr view <n> --repo "$REPO" --json state` reports `MERGED`:
 
    ```bash
    git worktree remove "$WT"

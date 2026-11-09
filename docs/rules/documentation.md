@@ -23,6 +23,7 @@ it.
 | Japanese | `README.md` and `ARCHITECTURE.md` |
 | Japanese | Everything under `docs/` except `docs/rules/`: ADRs, table definitions, data assessments, preprocessing records, requirements, specifications, discussions, experiments, and design and refactoring records |
 | Japanese | PR bodies (`.github/pull_request_template.md` and `.handoff/<task-id>/pr-body.md`) and `.handoff/<task-id>/plan.md` |
+| Japanese | GitHub Issue bodies and comments; Issue titles are short Japanese or English names |
 
 Test data and fixtures may contain Japanese values.
 

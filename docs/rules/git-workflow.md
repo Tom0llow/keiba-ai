@@ -21,6 +21,17 @@ The trust boundary is enforced by GitHub, not by local wrappers (ADR-031):
 Local Claude Code permissions and Codex execution rules are defense in depth;
 they do not replace the server-side rules.
 
+The App also has Issues read and write permission (ADR-033). GitHub enforces
+only that permission: an installation token can create, edit, comment on,
+close, reopen, lock, and pin issues, and, like any repository writer, edit or
+delete anyone's issue comments (per GitHub's documentation). GitHub may also
+refuse issue deletion and transfer for this token (not verified). The rule in
+`docs/rules/agent-collaboration.md` section 9 forbids agents from closing,
+reopening, deleting, transferring, locking, or pinning issues, and the helper
+allow-list, which permits only `gh issue create`, `view`, `list`, `comment`,
+and `edit`, blocks those subcommands as defense in depth, not as a server-side
+rule.
+
 ## 2. Branch naming
 
 Agent task branches:
@@ -88,8 +99,8 @@ refactors, formatting, dependency upgrades, or generated content.
 - Agent pushes use the `x-access-token` push URL, which the GitHub App
   credential helper serves (see section 13).
 - Agent `gh` calls go through `scripts/github-app/github-app.ps1 gh ...`, which
-  allows only PR creation, inspection, comments, edits, branch updates, and
-  CI inspection.
+  allows only PR creation, inspection, comments, edits, branch updates, CI
+  inspection, and issue creation, inspection, comments, and edits (ADR-033).
 - Outside `cc-task`, push and PR actions require explicit user intent.
 - Agents never approve reviews, merge PRs, change rulesets, or edit repository
   settings.
@@ -187,7 +198,12 @@ installation on this repository already exist):
      "!pwsh -NoProfile -File <absolute repo path>/scripts/github-app/github-app.ps1 credential"
    ```
 
-3. Verify: `pwsh -NoProfile -File scripts/github-app/github-app.ps1 check`.
+3. In the App settings on GitHub (once per App, not per machine), set the
+   repository permission "Issues" to "Read and write" and approve the updated
+   permissions on the installation (ADR-033). Do not grant "Workflows".
+4. Verify: `pwsh -NoProfile -File scripts/github-app/github-app.ps1 check`.
+   It issues a token and fails unless the token reports `contents`,
+   `pull_requests`, and `issues` as `write` and has no `workflows` permission.
 
 Pushing as yourself requires an explicit URL, for example
 `git push https://github.com/Tom0llow/keiba-ai.git <branch>`; this is needed

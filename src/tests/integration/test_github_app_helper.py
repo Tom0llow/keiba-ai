@@ -42,10 +42,20 @@ class RecordedRequest:
     body: dict[str, Any]
 
 
+GRANTED_PERMISSIONS = {
+    "contents": "write",
+    "pull_requests": "write",
+    "issues": "write",
+    "metadata": "read",
+}
+
+
 @dataclass
 class FakeGitHubApi:
     base_url: str
     requests: list[RecordedRequest] = field(default_factory=list)
+    # Mutable token response so tests can change the reported permissions.
+    token_response: dict[str, Any] = field(default_factory=dict)
 
 
 def _pwsh() -> str:
@@ -88,6 +98,11 @@ def rsa_key(tmp_path_factory: pytest.TempPathFactory) -> RsaTestKey:
 @pytest.fixture
 def fake_api() -> Iterator[FakeGitHubApi]:
     recorded: list[RecordedRequest] = []
+    token_response: dict[str, Any] = {
+        "token": FAKE_TOKEN,
+        "expires_at": "2026-11-08T01:00:00Z",
+        "permissions": dict(GRANTED_PERMISSIONS),
+    }
 
     class Handler(BaseHTTPRequestHandler):
         def do_POST(self) -> None:
@@ -96,9 +111,7 @@ def fake_api() -> Iterator[FakeGitHubApi]:
             recorded.append(
                 RecordedRequest(path=self.path, headers=dict(self.headers.items()), body=body)
             )
-            payload = json.dumps(
-                {"token": FAKE_TOKEN, "expires_at": "2026-11-08T01:00:00Z"}
-            ).encode()
+            payload = json.dumps(token_response).encode()
             self.send_response(201)
             self.send_header("Content-Type", "application/json")
             self.send_header("Content-Length", str(len(payload)))
@@ -113,7 +126,9 @@ def fake_api() -> Iterator[FakeGitHubApi]:
     thread.start()
     try:
         yield FakeGitHubApi(
-            base_url=f"http://127.0.0.1:{server.server_address[1]}", requests=recorded
+            base_url=f"http://127.0.0.1:{server.server_address[1]}",
+            requests=recorded,
+            token_response=token_response,
         )
     finally:
         server.shutdown()
@@ -242,7 +257,45 @@ def test_gh_passes_token_only_to_the_child_process(
 
 @pytest.mark.parametrize(
     "gh_arguments",
-    [["pr", "merge", "12"], ["pr", "review", "12", "--approve"], ["api", "repos"], ["auth"]],
+    [
+        ["issue", "create", "--title", "t", "--body", "b"],
+        ["issue", "view", "3"],
+        ["issue", "list", "--state", "open"],
+        ["issue", "comment", "3", "--body", "b"],
+        ["issue", "edit", "3", "--add-label", "bug"],
+    ],
+)
+def test_gh_allows_issue_tracking_commands(
+    tmp_path: Path, rsa_key: RsaTestKey, fake_api: FakeGitHubApi, gh_arguments: list[str]
+) -> None:
+    # As above, the fake gh runs a script named after the subcommand ("issue").
+    (tmp_path / "issue").write_text(
+        "import os, sys\nprint(os.environ['GH_TOKEN'])\nprint(' '.join(sys.argv[1:]))\n",
+        encoding="utf-8",
+    )
+    config_path = _write_config(tmp_path, **_base_config(rsa_key, fake_api), ghPath=sys.executable)
+
+    completed = _run_helper(config_path, "gh", *gh_arguments, cwd=tmp_path)
+
+    assert completed.returncode == 0, completed.stderr
+    assert completed.stdout.splitlines() == [FAKE_TOKEN, " ".join(gh_arguments[1:])]
+    assert len(fake_api.requests) == 1
+
+
+@pytest.mark.parametrize(
+    "gh_arguments",
+    [
+        ["pr", "merge", "12"],
+        ["pr", "review", "12", "--approve"],
+        ["api", "repos"],
+        ["auth"],
+        ["issue", "close", "3"],
+        ["issue", "reopen", "3"],
+        ["issue", "delete", "3", "--yes"],
+        ["issue", "transfer", "3", "other/repo"],
+        ["issue", "lock", "3"],
+        ["issue", "pin", "3"],
+    ],
 )
 def test_gh_rejects_commands_outside_the_agent_allow_list(
     tmp_path: Path, rsa_key: RsaTestKey, fake_api: FakeGitHubApi, gh_arguments: list[str]
@@ -290,3 +343,49 @@ def test_check_reports_success_without_printing_the_token(
     assert completed.returncode == 0, completed.stderr
     assert completed.stdout.startswith(f"ok: installation {INSTALLATION_ID} repository keiba-ai")
     assert FAKE_TOKEN not in completed.stdout
+
+
+@pytest.mark.parametrize(
+    ("permissions", "message"),
+    [
+        (None, "did not report permissions"),
+        ({"contents": "write", "pull_requests": "write"}, "issues must be write"),
+        ({**GRANTED_PERMISSIONS, "issues": "read"}, "issues must be write"),
+        ({**GRANTED_PERMISSIONS, "contents": "read"}, "contents must be write"),
+        ({**GRANTED_PERMISSIONS, "pull_requests": "read"}, "pull_requests must be write"),
+        ({"contents": "write", "issues": "write"}, "pull_requests must be write"),
+        ({**GRANTED_PERMISSIONS, "workflows": "write"}, "must not have the workflows"),
+    ],
+)
+def test_check_fails_closed_on_missing_or_excess_permissions(
+    tmp_path: Path,
+    rsa_key: RsaTestKey,
+    fake_api: FakeGitHubApi,
+    permissions: dict[str, str] | None,
+    message: str,
+) -> None:
+    if permissions is None:
+        del fake_api.token_response["permissions"]
+    else:
+        fake_api.token_response["permissions"] = permissions
+    config_path = _write_config(tmp_path, **_base_config(rsa_key, fake_api))
+
+    completed = _run_helper(config_path, "check")
+
+    assert completed.returncode == 1
+    assert message in completed.stderr
+    assert completed.stdout == ""
+    assert FAKE_TOKEN not in completed.stderr
+
+
+def test_check_reports_verified_permissions(
+    tmp_path: Path, rsa_key: RsaTestKey, fake_api: FakeGitHubApi
+) -> None:
+    config_path = _write_config(tmp_path, **_base_config(rsa_key, fake_api))
+
+    completed = _run_helper(config_path, "check")
+
+    assert completed.returncode == 0, completed.stderr
+    assert "permissions verified" in completed.stdout
+    assert FAKE_TOKEN not in completed.stdout
+    assert FAKE_TOKEN not in completed.stderr

@@ -59,7 +59,9 @@ scripts/github-app/github-app.ps1   # App JWTをインストールトークン�
 - `github-app.ps1`は、リポジトリの外に保管した秘密鍵でRS256のApp JWTに署名し、このリポジトリに
   限定した1時間有効のインストールトークンと交換する。Gitの資格情報プロトコルには
   `x-access-token`のpush URLに対してだけ応答し、allow-listにある`gh`のサブコマンドだけを
-  実行する。Appには`workflows`権限がない。
+  実行する。Appには`workflows`権限がない。ADR-033により、AppはIssuesの読み書き権限を持ち、
+  helperは`gh issue`の`create`、`view`、`list`、`comment`、`edit`だけを許可する。`check`は、トークンの
+  権限で`contents`・`pull_requests`・`issues`が`write`であり、`workflows`がないことを検証する。
 - `main`はサーバー側で保護される。最新のpushに対するcode ownerの承認と解決済みの会話を備えた
   PR、GitHub Actionsのappに紐づく厳格な`Quality`と`Test`のチェック、線形履歴、force pushと
   削除の禁止を必須とし、バイパスはない。二つ目のrulesetにより、管理者だけがPRを通じて
