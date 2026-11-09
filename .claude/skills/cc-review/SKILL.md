@@ -60,7 +60,8 @@ For every finding from either reviewer:
    raise its severity by one level.
 3. Decide: `fix` (valid P0-P2, or a P3 that is cheap and in scope),
    `reject` (with evidence), or `defer` (valid but out of plan scope; list it in
-   the PR body under Risks / Notes).
+   the PR body under Risks / Notes and propose it as a GitHub Issue candidate,
+   section 9 of `docs/rules/agent-collaboration.md`).
 
 Write `$HANDOFF/review-$ROUND.md`, using the selected tier and the `model:`
 and `reasoning effort:` values printed in the Codex run's output header:

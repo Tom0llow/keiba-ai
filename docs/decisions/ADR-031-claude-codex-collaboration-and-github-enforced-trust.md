@@ -158,3 +158,9 @@ ADR-016時点のコミットからguarded workflowを復元し、guardを再イ�
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-08 | Accepted | Claude CodeとCodexの役割分担、GitHub App、ruleset、スキル分割を採用し、ADR-001とADR-016を置き換え |
+
+## Related decisions
+
+[ADR-033](ADR-033-track-follow-up-work-in-github-issues.md)は、この決定を置換せずに拡張する。
+AppにIssuesのRead and write権限を付与し、helperが許可する`gh`サブコマンドへ`issue`の
+`create`、`view`、`list`、`comment`、`edit`を加える。

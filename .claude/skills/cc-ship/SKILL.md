@@ -40,7 +40,8 @@ git -C "$WT" push -u origin "$BRANCH"
 
 Write `$HANDOFF/pr-body.md` following `.github/pull_request_template.md`
 (changed-file tree, commit purposes, per-file details, validation actually run,
-ADR notes, risks including deferred findings). Write the body prose in Japanese
+ADR notes, risks including deferred findings, and the plan's `Related issues`
+line copied as `Closes #n` / `Refs #n`). Write the body prose in Japanese
 under the template's English headings (`docs/rules/documentation.md`). Then,
 first round only:
 

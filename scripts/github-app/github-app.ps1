@@ -25,7 +25,8 @@ accepted only for loopback test servers), "gitHost" (default github.com), and
 
 .EXAMPLE
 pwsh -NoProfile -File scripts/github-app/github-app.ps1 check
-Verifies that a token can be issued without printing it.
+Verifies that a token can be issued, without printing it, and fails unless the
+token reports contents, pull_requests, and issues as write and no workflows.
 
 .EXAMPLE
 pwsh -NoProfile -File scripts/github-app/github-app.ps1 credential get
@@ -42,10 +43,17 @@ $PSNativeCommandArgumentPassing = 'Standard'
 
 # gh subcommands agents may run with the App identity. Merging, reviewing,
 # repository administration, raw API access, and authentication changes are
-# intentionally absent; the main-branch rulesets enforce the same boundary.
+# intentionally absent. GitHub itself enforces the main-branch rulesets (merge
+# and approval counting) and the App's missing workflows permission; this
+# allow-list is local defense in depth on top of them. Issues can be filed,
+# read, commented on, and edited, but never closed, reopened, deleted,
+# transferred, locked, or pinned (ADR-033). This allow-list blocks all six.
+# GitHub does not stop close, reopen, lock, or pin, which the Issues permission
+# allows; it may also refuse delete and transfer (not verified).
 $AllowedGhCommands = @{
-    'pr'  = @('create', 'view', 'list', 'diff', 'checks', 'comment', 'edit', 'ready', 'status', 'update-branch')
-    'run' = @('list', 'view', 'watch', 'rerun')
+    'pr'    = @('create', 'view', 'list', 'diff', 'checks', 'comment', 'edit', 'ready', 'status', 'update-branch')
+    'run'   = @('list', 'view', 'watch', 'rerun')
+    'issue' = @('create', 'view', 'list', 'comment', 'edit')
 }
 
 function Write-Failure([string]$Message) {
@@ -142,6 +150,30 @@ function Get-InstallationToken([hashtable]$Config) {
     return $response
 }
 
+# Permissions the agent workflow needs (ADR-031, ADR-033) and ones it must not have.
+$RequiredPermissions = @{ contents = 'write'; pull_requests = 'write'; issues = 'write' }
+$ForbiddenPermissions = @('workflows')
+
+function Assert-TokenPermissions($Response) {
+    # Fail closed: the installation token response must report its permissions.
+    $property = $Response.PSObject.Properties['permissions']
+    if (-not $property -or $null -eq $property.Value) {
+        Write-Failure 'installation token response did not report permissions'
+    }
+    $granted = $property.Value
+    foreach ($name in $RequiredPermissions.Keys) {
+        $value = $granted.PSObject.Properties[$name]
+        if (-not $value -or [string]$value.Value -ne $RequiredPermissions[$name]) {
+            Write-Failure "App permission $name must be $($RequiredPermissions[$name])"
+        }
+    }
+    foreach ($name in $ForbiddenPermissions) {
+        if ($granted.PSObject.Properties[$name]) {
+            Write-Failure "App must not have the $name permission"
+        }
+    }
+}
+
 function Read-CredentialRequest {
     $fields = @{}
     while ($null -ne ($line = [Console]::In.ReadLine())) {
@@ -191,9 +223,11 @@ switch ($command) {
     'check' {
         $config = Read-AppConfig
         $response = Get-InstallationToken $config
+        Assert-TokenPermissions $response
         $expires = $response.PSObject.Properties['expires_at']
         [Console]::Out.WriteLine(
             "ok: installation $($config['installationId']) repository $($config['repository']) " +
+            "permissions verified; " +
             "token expires $(if ($expires) { $expires.Value } else { 'unknown' })")
     }
     'credential' {
