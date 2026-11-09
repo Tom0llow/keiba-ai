@@ -235,6 +235,27 @@ tables/schema.pyが列・metadata、validation/table.pyが表固有検証、tabl
 ファイルからの構築APIと保存・読込契約を所有する。packageの5公開名は維持する。
 旧builderのファイルAPIはtables/parquetへ移し、循環importや互換Facadeを残さない。
 
+ADR-034の参考datamartは、特徴量中間表の結合とは別の種類のdatamartである。固定snapshotから対象期間の
+中央全レースについて、ADR-030と同じ参考規則・同じ21群の計算器で特徴量を時系列順に一度だけ計算し、
+年ごとのParquetへ保存する。
+
+| 所有者 | 責務 |
+| --- | --- |
+| make_features/generation/chronological.py | 開始順の1本の履歴配列、JST日付ごとの接頭辞の見方、基準集合の統計、調教の日付索引、対象ごとの共有context、時点の不変条件。I/Oなし。 |
+| make_features/generation/observations.py | `CalculationContext`の取得口（窓・騎手・調教師・親・調教・基準集合・事前率・日付で共有する値）。既定の実装は対象ごとの参考経路と同じ値を返す。 |
+| make_features/reference_snapshot.py | 対象1レースの正規化`normalize_reference_target`、履歴・血統・ラベルの正規化。既存の`normalize_reference_input`と共有する。 |
+| models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。I/Oなし。 |
+| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。21群の再計算はしない。`models`をimportしない。 |
+| data/storage/directory_publisher.py | 出力と同じ親のstagingへ書き、完成後にrenameで公開し、失敗時にstagingを削除する。 |
+| data/loader/fixed_snapshot.py / reference_input.py | 表の事前のhash、年・日付の期間読込、O1/O2のfooterを1年の間使い回す読込口。 |
+
+同じJST日付の対象は同じ履歴の接頭辞を見るため、馬・騎手・調教師の索引、窓付き母集団、基準集合の統計、
+半減期がnullのときのPageRankを共有する。freezeの時刻に依存する調教の窓・EWMA・市場は対象ごとに計算する。
+依存は`available_at`と`event_at`の最大値を与えるevidenceに要約し、漏洩は見方ごとの不変条件で防ぐ。
+計算器の`ValueError`はそのレースを`stage=calculation`、対象ごとのcontextの検証の`ValueError`は
+`stage=target_pre_freeze`で保留し、履歴・調教・evidence登録表の不変条件の違反では構築全体を失敗させる。
+読込APIはhash・契約・列一覧・行の時点・ラベル境界・着順の連続性を検証する。
+
 ## モデル
 
 modelsのpackage公開名、学習値・既定値、score/rankだけを返す推論、保存形式を維持する。
@@ -303,6 +324,10 @@ parse_json_inputs/input_error_payload/exit_input_errorを所有する。CLI固�
 新規datamart buildはrepeatable --input、--output、既定configs/features.tomlの--features-configを受け、
 定義名のみを読み、既存のファイル構築・保存APIへ渡す。失敗はstderr/終了1、成功は行数をstdoutへ出す。
 CLIは出力先がいずれかの入力と同じファイルを指す場合、相対パス表記やリンクが異なっても保存前に拒否する。
+`datamart build-reference`はcli/reference_datamart.pyが、configuration/reference_datamart.pyで合成した
+`configs/reference_datamart/`の設定と固定snapshotを読み、年ごとに読込・計算・書込みを繰り返す。
+`--output`は存在しない新しいパスで、親が存在し、processed rootの外にあることを要求する。進捗はstderr、
+公開後の要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130とし、どちらでもstagingを残さない。
 
 ## 進化時の制約
 

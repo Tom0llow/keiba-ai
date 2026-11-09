@@ -53,9 +53,49 @@ def calculate_opponent_pagerank(context: CalculationContext, horse_id: str) -> C
         return context.pagerank_results[horse_id]
     context.require_coverage("history")
     p = context.parameters
-    starts = context.rolling(
-        tuple((race, r) for race in context.races for r in race.runners), p.graph_days
+    fit = (
+        context.day_shared("opponent_pagerank", lambda: _fit(context))
+        if p.graph_half_life_days is None
+        else _fit(context)
     )
+    distribution, counts, opponents = fit.distribution, fit.counts, fit.opponents
+    for identity in {horse_id, *context.source.card.expected_horse_ids}:
+        context.pagerank_results[identity] = context.result(
+            {
+                "opponent_graph_score": distribution.get(identity),
+                "opponent_graph_known": identity in distribution,
+                "opponent_graph_start_count": counts.get(identity, 0),
+                "unique_opponent_count": len(opponents.get(identity, set())),
+            },
+            reasons={"opponent_graph_score": "unknown_horse"}
+            if identity not in distribution
+            else {},
+            diagnostics={
+                "node_count": fit.node_count,
+                "edge_count": fit.edge_count,
+                "iterations": fit.iterations,
+                "residual": fit.residual,
+                "score_sum": sum(distribution.values()),
+                "graph_cutoff": context.cutoff.isoformat(),
+            },
+        )
+    return context.pagerank_results[horse_id]
+
+
+@dataclass(frozen=True)
+class _Fit:
+    distribution: dict[str, float]
+    counts: dict[str, int]
+    opponents: dict[str, set[str]]
+    node_count: int
+    edge_count: int
+    iterations: int
+    residual: float
+
+
+def _fit(context: CalculationContext) -> _Fit:
+    p = context.parameters
+    starts = context.window_starts(p.graph_days)
     races = {race.race_id: race for race, _ in starts}
     nodes = sorted({r.horse_id for race in races.values() for r in race.runners})
     edges: dict[str, dict[str, float]] = {node: {} for node in nodes}
@@ -110,24 +150,12 @@ def calculate_opponent_pagerank(context: CalculationContext, horse_id: str) -> C
             raise ValueError(
                 f"PageRank did not converge after {iterations} iterations; residual={residual}"
             )
-    for identity in {horse_id, *context.source.card.expected_horse_ids}:
-        context.pagerank_results[identity] = context.result(
-            {
-                "opponent_graph_score": distribution.get(identity),
-                "opponent_graph_known": identity in distribution,
-                "opponent_graph_start_count": counts.get(identity, 0),
-                "unique_opponent_count": len(opponents.get(identity, set())),
-            },
-            reasons={"opponent_graph_score": "unknown_horse"}
-            if identity not in distribution
-            else {},
-            diagnostics={
-                "node_count": n,
-                "edge_count": sum(len(e) for e in edges.values()),
-                "iterations": iterations,
-                "residual": residual,
-                "score_sum": sum(distribution.values()),
-                "graph_cutoff": context.cutoff.isoformat(),
-            },
-        )
-    return context.pagerank_results[horse_id]
+    return _Fit(
+        distribution,
+        counts,
+        opponents,
+        n,
+        sum(len(e) for e in edges.values()),
+        iterations,
+        residual,
+    )

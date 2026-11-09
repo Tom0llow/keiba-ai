@@ -51,10 +51,7 @@ def calculate_pedigree_suitability(context: CalculationContext, horse_id: str) -
     """Aggregate normalized parent-linked offspring starts under explicit self policy."""
     coverage = context.require_coverage("pedigree")
     context.require_coverage("history")
-    if (
-        not set(context.by_horse) | set(context.source.card.expected_horse_ids)
-        <= context.pedigrees.keys()
-    ):
+    if not context.pedigrees_cover_population():
         raise ValueError(
             "pedigree coverage claims complete but normalized horse mappings are absent"
         )
@@ -63,22 +60,17 @@ def calculate_pedigree_suitability(context: CalculationContext, horse_id: str) -
     reasons: dict[str, str] = {}
     for parent in ("sire", "broodmare_sire"):
         identity = getattr(target, parent) if target else None
-        selected: list[Start] = []
-        for race in context.races:
-            for runner in race.runners:
-                pedigree = context.pedigrees.get(runner.horse_id)
-                if (
-                    identity is not None
-                    and pedigree
-                    and getattr(pedigree, parent) == identity
-                    and (context.parameters.pedigree_include_self or runner.horse_id != horse_id)
-                ):
-                    selected.append((race, runner))
-        unknown_parent = identity is None or any(
-            getattr(context.pedigrees[runner.horse_id], parent) is None
-            for _, runner in context.population
-            if context.parameters.pedigree_include_self or runner.horse_id != horse_id
+        # The rolling window of all matching history equals the matching window population.
+        selected: list[Start] = (
+            [
+                start
+                for start in context.parent_window(parent, identity)
+                if context.parameters.pedigree_include_self or start[1].horse_id != horse_id
+            ]
+            if identity is not None
+            else []
         )
+        unknown_parent = identity is None or context.population_unknown_parent(parent, horse_id)
         starts = context.matching_starts(context.rolling(selected)) if not unknown_parent else None
         values.update(
             {
@@ -104,6 +96,6 @@ def calculate_pedigree_suitability(context: CalculationContext, horse_id: str) -
         )
     return context.result(
         values,
-        extra=[coverage.evidence, *(p.evidence for p in context.pedigrees.values())],
+        extra=[coverage.evidence, *context.pedigree_evidence()],
         reasons=reasons,
     )

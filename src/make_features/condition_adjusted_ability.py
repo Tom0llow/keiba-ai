@@ -12,8 +12,8 @@ from make_features.contracts.rows import FeatureTableRow
 from make_features.contracts.types import FeatureDefinition, FeatureScalar, FeatureValuesInput
 from make_features.generation.base import RegisteredFeatureBuilder
 from make_features.generation.normalization import normalize_audited_feature_inputs
-from make_features.generation.observations import CalculationContext, historical_as_of
-from make_features.generation.statistics import mean, std, summaries
+from make_features.generation.observations import CalculationContext
+from make_features.generation.statistics import summaries
 from make_features.tables.schema import IntermediateFeatureTable
 
 
@@ -60,25 +60,10 @@ def adjusted_history(
     counts: list[int] = []
     dependencies: list[Evidence] = []
     for race, runner in context.history(horse_id, count=count):
-        if race.started_at not in context.baseline_races:
-            context.baseline_races[race.started_at] = historical_as_of(
-                context.source, context.parameters, race.started_at, race.started_at
-            )
-        baseline = context.baseline_races[race.started_at]
-        matched = [
-            r for r in baseline if context.condition_matches(r.conditions, race.conditions) is True
-        ]
-        unknown = any(
-            context.condition_matches(r.conditions, race.conditions) is None for r in baseline
-        )
-        winners = [next(r for r in prior.runners if r.finish == 1) for prior in matched]
-        clocks = [r.elapsed_sec for r in winners]
-        velocities = [
-            prior.conditions.distance_m / r.elapsed_sec if r.elapsed_sec else None
-            for prior, r in zip(matched, winners, strict=True)
-        ]
-        clock_mean, clock_std = mean(clocks), std(clocks)
-        velocity_mean, velocity_std = mean(velocities), std(velocities)
+        baseline = context.baseline_statistics(race.started_at, race.conditions)
+        unknown = baseline.unknown
+        clock_mean, clock_std = baseline.clock_mean, baseline.clock_std
+        velocity_mean, velocity_std = baseline.velocity_mean, baseline.velocity_std
         clock = runner.elapsed_sec
         speed = race.conditions.distance_m / clock if clock else None
         times.append(
@@ -91,8 +76,8 @@ def adjusted_history(
             if not unknown and speed is not None and velocity_mean is not None and velocity_std
             else None
         )
-        counts.append(len(matched))
-        dependencies.extend(r.evidence for r in baseline)
+        counts.append(baseline.matched_count)
+        dependencies.extend(baseline.dependencies)
     context.adjusted_histories[cache_key] = times, speeds, counts, tuple(dependencies)
     return context.adjusted_histories[cache_key]
 
@@ -146,19 +131,17 @@ def _latest_adjustment_reason(context: CalculationContext, horse_id: str, *, vel
     race, runner = starts[0]
     if runner.elapsed_sec is None:
         return runner.missing_reasons["elapsed_sec"]
-    baseline = context.baseline_races[race.started_at]
-    matches = [context.condition_matches(r.conditions, race.conditions) for r in baseline]
-    if None in matches:
+    baseline = context.baseline_statistics(race.started_at, race.conditions)
+    if baseline.unknown:
         return "unknown_reference_condition"
-    matched = [r for r, match in zip(baseline, matches, strict=True) if match]
-    if not matched:
+    if not baseline.matched_count:
         return "no_prior_condition_reference"
-    if len(matched) < 2:
+    if baseline.matched_count < 2:
         return "insufficient_reference_count"
-    measurements = []
-    for prior in matched:
-        clock = next(r.elapsed_sec for r in prior.runners if r.finish == 1)
-        if clock is None:
-            return "unmeasured_reference_clock"
-        measurements.append(prior.conditions.distance_m / clock if velocity else clock)
-    return "zero_variance_reference" if std(measurements) == 0 else "undefined_adjustment"
+    if baseline.unmeasured_clock:
+        return "unmeasured_reference_clock"
+    if velocity and baseline.zero_clock:
+        # The per-race path divides each winner distance by its clock here.
+        raise ZeroDivisionError("float division by zero")
+    spread = baseline.velocity_std if velocity else baseline.clock_std
+    return "zero_variance_reference" if spread == 0 else "undefined_adjustment"

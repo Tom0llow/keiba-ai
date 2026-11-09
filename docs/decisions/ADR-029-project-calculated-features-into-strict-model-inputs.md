@@ -4,7 +4,7 @@
 - Date: 2026-10-23
 - Decision Owners: Repository maintainers
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-034（参考datamartの経路でのlabel_sources必須と読込時の再監査のみ。prepared JSONの経路は継続）
 
 ## Context
 

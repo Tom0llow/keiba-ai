@@ -9,6 +9,7 @@ from cli.model_projection import model_prepare_input
 from cli.models import model_audit, model_features, model_predict, model_train, model_walk_forward
 from cli.preprocessor import preprocess_rebuild
 from cli.real_market import model_prepare_real_input
+from cli.reference_datamart import datamart_build_reference
 from cli.reference_input import model_prepare_reference_input
 
 
@@ -24,7 +25,8 @@ app = typer.Typer(no_args_is_help=True)
 preprocess_app = typer.Typer(no_args_is_help=True, help="Publish processed Parquet data.")
 model_app = typer.Typer(no_args_is_help=True, help="Build features and evaluate ranking models.")
 datamart_app = typer.Typer(
-    no_args_is_help=True, help="Build a datamart from feature Parquet tables."
+    no_args_is_help=True,
+    help="Build a datamart from feature Parquet tables or a fixed processed snapshot.",
 )
 app.add_typer(preprocess_app, name="preprocess")
 app.add_typer(model_app, name="model")
@@ -39,6 +41,7 @@ model_app.command("prepare-input")(model_prepare_input)
 model_app.command("prepare-real-input")(model_prepare_real_input)
 model_app.command("prepare-reference-input")(model_prepare_reference_input)
 datamart_app.command("build")(datamart_build)
+datamart_app.command("build-reference")(datamart_build_reference)
 
 if __name__ == "__main__":
     app()

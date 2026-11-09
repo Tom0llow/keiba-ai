@@ -39,6 +39,8 @@ def cli_color_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         ["model", "train"],
         ["model", "predict"],
         ["model", "prepare-input"],
+        ["datamart"],
+        ["datamart", "build-reference"],
     ],
 )
 def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[str]) -> None:
@@ -58,6 +60,14 @@ def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[s
             "cli.jra_van_retriever.JVLinkConfig.from_toml",
             side_effect=AssertionError("unexpected config read"),
         ) as config,
+        patch(
+            "cli.reference_datamart.load_reference_datamart_config",
+            side_effect=AssertionError("unexpected reference datamart config read"),
+        ) as datamart_config,
+        patch(
+            "cli.reference_datamart.FixedSnapshot",
+            side_effect=AssertionError("unexpected fixed snapshot"),
+        ) as fixed_snapshot,
     ):
         result = runner.invoke(app, [*command, "--help"])
 
@@ -66,6 +76,8 @@ def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[s
     retriever.assert_not_called()
     preprocesser.assert_not_called()
     config.assert_not_called()
+    datamart_config.assert_not_called()
+    fixed_snapshot.assert_not_called()
 
 
 def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:

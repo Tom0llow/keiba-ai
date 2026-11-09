@@ -81,7 +81,17 @@ coherent responsibility and have a name that describes that responsibility.
 - Shared `DataPaths` belongs to `configuration/`, `RaceKey` to `domain/`, and raw
   race-key conversion to `jra_van_retriever/parsing/race_key.py`.
 - Datamart `builder.py` implements only pure joins. File-based building/read/write
-  belongs to `tables/parquet.py`, using common physical I/O and feature validation.
+  of joined feature-table datamarts belongs to `tables/parquet.py`, using common
+  physical I/O and feature validation.
+- The ADR-034 reference datamart keeps its file contract (yearly Parquet, held
+  races, manifest, read-time verification) in `make_datamart/tables/reference.py`,
+  which receives its column list explicitly and never imports `models`. Pure build
+  assembly belongs to `models/serialization/reference_datamart.py`; shared
+  chronological history views belong to `make_features/generation/chronological.py`;
+  staging and rename publication belong to `data/storage/directory_publisher.py`.
+  Calculators read windows, indexes and as-of baselines through
+  `CalculationContext` accessors whose defaults keep the per-race reference values;
+  shared contexts must return the same sets in the same order.
 - Dataset types, schema, validation, availability and construction have distinct owners.
   Model artifacts belong to `artifacts/native_model.py`, native LightGBM to `backends/`.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.

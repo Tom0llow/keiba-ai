@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from datetime import datetime
+from functools import cache
 
 from make_features.contracts.types import FeatureGroupInput, FeatureViolation, _violation
 
@@ -101,6 +102,7 @@ _RESULT_FIELD_NAME_MARKERS = (
 )
 
 
+@cache
 def is_result_field(field_name: str) -> bool:
     """Identify result-derived columns while allowing explicitly historical names."""
     normalized = "".join(character for character in field_name.casefold() if character.isalnum())

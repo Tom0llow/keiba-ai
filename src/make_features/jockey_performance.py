@@ -51,7 +51,7 @@ def calculate_jockey_performance(context: CalculationContext, horse_id: str) -> 
     """Count starts ridden by the frozen jockey, using each historical assignment."""
     context.require_coverage("history")
     identity = context.runner(horse_id).jockey_id
-    starts = context.rolling(context.by_jockey.get(identity, ())) if identity else ()
+    starts = context.jockey_window(identity) if identity else ()
     values: dict[str, FeatureScalar] = {}
     for label, group in (
         ("jockey", starts if identity else None),

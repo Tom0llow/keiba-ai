@@ -11,7 +11,15 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from configuration.reference_input import load_reference_input_config
-from make_features.real_market import JST, KEY_COLUMNS, O1_TABLE, RA_TABLE, SE_TABLE
+from make_features.catalog.registry import FeatureRegistry
+from make_features.real_market import (
+    JST,
+    KEY_COLUMNS,
+    O1_TABLE,
+    RA_TABLE,
+    SE_TABLE,
+    canonical_hash,
+)
 from make_features.reference_raw import (
     CARD_RA_COLUMNS,
     CARD_SE_COLUMNS,
@@ -25,6 +33,11 @@ from make_features.reference_raw import (
     UM_TABLE,
     WC_COLUMNS,
     WC_TABLE,
+)
+from models.serialization.reference_datamart import (
+    ReferenceDatamartBuilder,
+    ReferenceYearOutput,
+    workout_window,
 )
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -84,11 +97,13 @@ def race_rows(
     return ra, se
 
 
-def markets(day: date, *, clock: str, total: int) -> tuple[dict[str, object], dict[str, object]]:
+def markets(
+    day: date, *, clock: str, total: int, race_number: str = "09"
+) -> tuple[dict[str, object], dict[str, object]]:
     o1: dict[str, object] = dict.fromkeys(MARKET_O1_COLUMNS)
     o2: dict[str, object] = dict.fromkeys(MARKET_O2_COLUMNS)
     for row in (o1, o2):
-        row.update(key(day))
+        row.update(key(day, race_number))
         row.update(
             headDataKubun="1",
             headMakeDate=day.strftime("%Y%m%d"),
@@ -220,7 +235,222 @@ def parquet_snapshot(root: Path, raw: dict[str, object]) -> Path:
             physical[RA_TABLE].append(ra)
             physical[SE_TABLE].extend(se)
     for name, rows in physical.items():
+        # Target dates of longer fixtures are also earlier history; store each row once.
+        rows = _unique_rows(rows)
         schema = pa.schema([(column, pa.string()) for column in rows[0]])
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), version / f"{name}.parquet")
     (root / "CURRENT").write_text("fixture-v1", encoding="utf-8")
     return version
+
+
+def _unique_rows(rows: list[dict[str, object]]) -> list[dict[str, object]]:
+    seen: set[str] = set()
+    result = []
+    for row in rows:
+        identity = canonical_hash(row)
+        if identity not in seen:
+            seen.add(identity)
+            result.append(row)
+    return result
+
+
+def _in_year(row: dict[str, object], year: int, end: date) -> bool:
+    return row["idYear"] == str(year) and f"{row['idYear']}{row['idMonthDay']}" <= end.strftime(
+        "%Y%m%d"
+    )
+
+
+def datamart_from_raw(
+    raw: dict[str, object],
+    *,
+    registry: FeatureRegistry,
+    target_start: date,
+    target_end: date,
+) -> tuple[ReferenceDatamartBuilder, list[ReferenceYearOutput]]:
+    """Feed a raw fixture to the chronological builder exactly as the CLI reads a snapshot."""
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+    ra_rows = _unique_rows(tables["history_ra"] + tables["label_ra"])
+    se_rows = _unique_rows(tables["history_se"] + tables["label_se"])
+    builder = ReferenceDatamartBuilder(
+        settings=cast(dict[str, object], raw["calculation_settings"]),
+        rules=cast(dict[str, object], raw["rules"]),
+        registry=registry,
+        target_start=target_start,
+        target_end=target_end,
+        snapshot=cast(dict[str, object], raw["snapshot"]),
+        pedigree_rows=tables["um"],
+    )
+    days_window = cast(int, cast(dict[str, object], raw["calculation_settings"])["days_window"])
+    outputs = []
+    for year in builder.years:
+        window = workout_window(
+            year, target_start=target_start, target_end=target_end, days_window=days_window
+        )
+        workouts = (
+            [
+                (kind, row)
+                for kind in ("hc", "wc")
+                for row in tables[kind]
+                if window[0].strftime("%Y%m%d")
+                <= cast(str, row["ChokyoDate"])
+                <= window[1].strftime("%Y%m%d")
+            ]
+            if window is not None
+            else []
+        )
+
+        def markets(
+            day: date,
+        ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+            stamp = (str(day.year), day.strftime("%m%d"))
+            return tuple(  # type: ignore[return-value]
+                [row for row in tables[name] if (row["idYear"], row["idMonthDay"]) == stamp]
+                for name in ("o1", "o2")
+            )
+
+        outputs.append(
+            builder.add_year(
+                year,
+                ra_rows=[row for row in ra_rows if _in_year(row, year, target_end)],
+                se_rows=[row for row in se_rows if _in_year(row, year, target_end)],
+                workout_rows=workouts,
+                markets=markets,
+            )
+        )
+    return builder, outputs
+
+
+RICH_TARGET_DAYS = (date(2026, 12, 20), date(2026, 12, 27), date(2027, 1, 3))
+RICH_HISTORY_DAYS = tuple(date(2026, 11, 1) + timedelta(days=7 * week) for week in range(7))
+RICH_RACES = (("09", "1500", 0), ("10", "1530", 2))
+
+
+def _workout_row(kind: str, horse: str, day: date, clock: str, lap: str) -> dict[str, object]:
+    row: dict[str, object] = dict.fromkeys(HC_COLUMNS if kind == "hc" else WC_COLUMNS)
+    row.update(
+        headDataKubun="1",
+        headMakeDate="20270110",
+        TresenKubun="0",
+        ChokyoDate=day.strftime("%Y%m%d"),
+        ChokyoTime=clock,
+        KettoNum=horse,
+    )
+    if kind == "wc":
+        row.update(Course="0", BabaAround="0")
+    for section in range(1, 5):
+        row[f"LapTime{section}"] = lap
+    return row
+
+
+def rich_raw_input(
+    *,
+    abnormal_history: bool = True,
+    abnormal_target: bool = True,
+    settings: dict[str, object] | None = None,
+) -> dict[str, object]:
+    """Return three target dates with two races each, real history and boundary workouts.
+
+    Race 09 starts at 15:00 and race 10 at 15:30 on every date, so their freeze windows
+    start at different minutes. Results become usable after seven days, so 2026-12-20
+    results enter 2027-01-03 history but not 2026-12-27 history.
+    """
+    raw = raw_input(())
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+    for name in tables:
+        tables[name].clear()
+    calculation = dict(cast(dict[str, object], raw["calculation_settings"]))
+    calculation["history_start"] = "2026-11-01"
+    calculation.update(settings or {})
+    raw["calculation_settings"] = calculation
+    races: list[dict[str, object]] = []
+    for day in RICH_HISTORY_DAYS + RICH_TARGET_DAYS:
+        for number, clock, offset in RICH_RACES:
+            ra, se = race_rows(day, offset=offset, race_number=number)
+            ra["HassoTime"] = clock
+            if number == "10":
+                ra["Kyori"] = "1800"
+            # Rotate finishing order and clocks so prior results differ between races.
+            shift = (day.toordinal() + int(number)) % 4
+            for index, row in enumerate(se):
+                place = (index + shift) % 4 + 1
+                row["KakuteiJyuni"] = f"{place:02d}"
+                row["Time"] = f"1{45 + place - 1:02d}{(day.day + index) % 10}"
+                row["Jyuni4c"] = f"{(index + shift + 1) % 4 + 1:02d}"
+                row["Wakuban"] = f"{index // 2 + 1}"
+            if abnormal_history and day == RICH_HISTORY_DAYS[2] and number == "10":
+                se[0]["IJyoCD"] = "1"
+            if abnormal_target and day == RICH_TARGET_DAYS[1] and number == "10":
+                se[1]["IJyoCD"] = "4"
+            identity = "".join(cast(str, ra[k]) for k in KEY_COLUMNS)
+            if day in RICH_TARGET_DAYS:
+                hour, minute = int(clock[:2]), int(clock[2:])
+                start = datetime.combine(day, datetime.min.time(), JST).replace(
+                    hour=hour, minute=minute
+                )
+                races.append(
+                    {
+                        "race_id": identity,
+                        "scheduled_start_at": start.isoformat(),
+                        "freeze_at": (start - timedelta(seconds=300)).isoformat(),
+                        "schedule_known_at": None,
+                    }
+                )
+                tables["target_ra"].append({k: ra[k] for k in CARD_RA_COLUMNS})
+                tables["target_se"].extend({k: r[k] for k in CARD_SE_COLUMNS} for r in se)
+                tables["label_ra"].append(ra)
+                tables["label_se"].extend(se)
+                before = start - timedelta(minutes=16)
+                for publication, total in ((before, 1000), (start - timedelta(minutes=6), 2000)):
+                    o1, o2 = markets(
+                        day, clock=publication.strftime("%H%M"), total=total, race_number=number
+                    )
+                    tables["o1"].append(o1)
+                    tables["o2"].append(o2)
+            if day < RICH_TARGET_DAYS[-1]:
+                tables["history_ra"].append(ra)
+                tables["history_se"].extend(se)
+    # Jump races have no going, so a going condition key is unknown for them, and the first
+    # one's unmeasured winner clock makes the later one's as-of reference unusable. The
+    # 2026-12-19 race becomes usable exactly at 2026-12-27 00:00 (eight days later).
+    for day, number, track, distance, offset in (
+        (RICH_HISTORY_DAYS[1], "11", "52", "3000", 3),
+        (RICH_HISTORY_DAYS[4], "11", "52", "3000", 3),
+        (date(2026, 12, 19), "11", "11", "1600", 1),
+    ):
+        ra, se = race_rows(day, offset=offset, race_number=number)
+        ra.update(HassoTime="1600", TrackCD=track, Kyori=distance)
+        if day == RICH_HISTORY_DAYS[1]:
+            next(row for row in se if row["KakuteiJyuni"] == "01")["Time"] = "0000"
+        tables["history_ra"].append(ra)
+        tables["history_se"].extend(se)
+    # Sessions are stored out of date order, with one identical duplicate row and one
+    # session on the window's first day between the two freeze windows.
+    for target in RICH_TARGET_DAYS:
+        boundary = target - timedelta(days=cast(int, calculation["days_window"]))
+        for horse_index in range(1, 7):
+            horse = f"202010{horse_index:04d}"
+            for kind in ("hc", "wc"):
+                for days_before, clock in ((2, "0600"), (9, "0610"), (16, "0620")):
+                    lap = f"{118 + (horse_index + days_before) % 5}"
+                    tables[kind].append(
+                        _workout_row(kind, horse, target - timedelta(days=days_before), clock, lap)
+                    )
+        tables["hc"].append(_workout_row("hc", "2020100001", boundary, "1510", "125"))
+        tables["hc"].append(_workout_row("hc", "2020100003", boundary, "1510", "121"))
+        tables["hc"].append(
+            _workout_row("hc", "2020100004", target - timedelta(days=0), "0500", "110")
+        )
+    tables["hc"].reverse()
+    tables["hc"].append(dict(next(row for row in tables["hc"] if row["ChokyoDate"] == "20261225")))
+    for i in range(1, 9):
+        tables["um"].append(
+            {
+                "KettoNum": f"202010{i:04d}",
+                "headMakeDate": "20261031",
+                "Ketto3Info0HansyokuNum": "SIRE" + str(i % 2),
+                "Ketto3Info4HansyokuNum": "DAM" + str(i % 3),
+            }
+        )
+    raw["races"] = races
+    raw["include_labels"] = True
+    return raw

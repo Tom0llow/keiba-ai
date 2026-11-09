@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 
 from make_features.catalog.registry import FeatureRegistry
@@ -13,7 +13,8 @@ from make_features.contracts.observations import (
 )
 from make_features.contracts.types import FeatureBatchInput, FeatureBuildResult, FeatureGroupInput
 from make_features.explanatory_variables import build_explanatory_variables
-from make_features.generation.observations import prepare_context
+from make_features.generation.chronological import ChronologicalInvariantError
+from make_features.generation.observations import CalculationContext, prepare_context
 from make_features.validation.values import is_missing
 
 
@@ -25,6 +26,14 @@ class FeatureCalculationResult:
     manifests: tuple[Mapping[str, CalculatedValues], ...]
     parameters: CalculationParameters
     source_missing_reasons: tuple[Mapping[str, Mapping[str, str]], ...]
+
+
+class FeatureCalculationValueError(ValueError):
+    """Identify a calculator-owned ValueError without masking invariant failures."""
+
+    def __init__(self, feature_name: str, message: str) -> None:
+        super().__init__(message)
+        self.feature_name = feature_name
 
 
 def calculate_features(
@@ -47,6 +56,18 @@ def calculate_reference_features(
     return _calculate(observations, parameters, registry=registry, reference=True)
 
 
+def calculate_reference_context(
+    context: CalculationContext, *, registry: FeatureRegistry
+) -> FeatureCalculationResult:
+    """Calculate one prevalidated chronological target and identify calculator holds."""
+    return _calculate_contexts(
+        (context,),
+        context.parameters,
+        registry=registry,
+        identify_value_errors=True,
+    )
+
+
 def _calculate(
     observations: Sequence[ObservationInput],
     parameters: CalculationParameters,
@@ -56,26 +77,41 @@ def _calculate(
 ) -> FeatureCalculationResult:
     if not observations:
         raise ValueError("calculation requires at least one normalized observation input")
+    # Prepare lazily, one target at a time, as the original per-race loop did.
+    contexts = (prepare_context(source, parameters, reference=reference) for source in observations)
+    return _calculate_contexts(contexts, parameters, registry=registry, identify_value_errors=False)
+
+
+def _calculate_contexts(
+    contexts: Iterable[CalculationContext],
+    parameters: CalculationParameters,
+    *,
+    registry: FeatureRegistry,
+    identify_value_errors: bool,
+) -> FeatureCalculationResult:
     batches: list[FeatureBatchInput] = []
     manifests: list[Mapping[str, CalculatedValues]] = []
     source_missing_reasons: list[Mapping[str, Mapping[str, str]]] = []
-    for source in observations:
-        context = prepare_context(source, parameters, reference=reference)
-        source_missing_reasons.append(
-            {
-                f"{race.race_id}/{runner.horse_id}": dict(runner.missing_reasons)
-                for race in context.races
-                for runner in race.runners
-                if runner.missing_reasons
-            }
-        )
+    for context in contexts:
+        source = context.source
+        source_missing_reasons.append(context.history_missing_reasons())
         for kind in ("history", "workouts", "pedigree", "market"):
             context.require_coverage(kind)
         for runner in source.card.runners:
             groups = {}
             manifest = {}
             for registration in registry.features:
-                calculated = registration.calculate(context, runner.horse_id)
+                try:
+                    calculated = registration.calculate(context, runner.horse_id)
+                except ChronologicalInvariantError:
+                    # Leakage guards must fail the whole build, never become a race hold.
+                    raise
+                except ValueError as exc:
+                    if not identify_value_errors:
+                        raise
+                    raise FeatureCalculationValueError(
+                        registration.definition.name, str(exc)
+                    ) from exc
                 if not calculated.dependencies:
                     raise ValueError("calculated values require source dependencies")
                 feature_id = registration.definition.feature_id
