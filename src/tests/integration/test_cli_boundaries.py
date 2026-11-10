@@ -21,6 +21,7 @@ from cli.json_io import exit_input_error, parse_json_inputs, read_json_object
         "make_datamart",
         "models",
         "reference_datamart",
+        "pl_evaluation",
     ],
 )
 def test_functional_cli_import_does_not_load_sibling_clis_or_start_application(module: str) -> None:
@@ -30,7 +31,7 @@ import sys
 
 name = sys.argv[1]
 importlib.import_module("cli." + name)
-siblings = {"jra_van_retriever", "preprocessor", "make_features", "make_datamart", "models", "reference_datamart"} - {name}
+siblings = {"jra_van_retriever", "preprocessor", "make_features", "make_datamart", "models", "reference_datamart", "pl_evaluation"} - {name}
 assert not {"cli." + sibling for sibling in siblings} & sys.modules.keys()
 assert "main" not in sys.modules
 assert "lightgbm" not in sys.modules

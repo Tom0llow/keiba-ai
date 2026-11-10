@@ -1,0 +1,18 @@
+# Evaluate top-three Plackett-Luce probabilities on yearly folds of one reference datamart.
+# Every value is required; see measure.yaml for the explicit full-period profile.
+datamart_path: ???
+datamart_manifest_sha256: ???
+train_start_year: ???
+test_years: ???
+variants: ???
+lightgbm: ???
+num_boost_round: ???
+early_stopping_rounds: ???
+temperature_bounds: ???
+probability_chunk_races: ???
+bootstrap:
+  resamples: ???
+  seed: ???
+  confidence: ???
+probability_bands: ???
+odds_bands: ???

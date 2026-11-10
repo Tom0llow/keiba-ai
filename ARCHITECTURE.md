@@ -85,7 +85,7 @@ src/
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
-├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments・probability
 ├─ domain/                      # 共有RaceKey
 └─ tests/
    ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
@@ -301,6 +301,21 @@ ADR-029のserialization/projection.pyは計算結果から明示した承認数�
 training.jsonとMLflowへその値と学習結果出典・保証区分を保存し、予測は学習末freezeと結果known時刻の
 両方より後を要求する。旧入力/成果物はラベル時点未保証を明示する。新列もnative形式番号3を維持するが旧コードでは読めない。
 
+ADR-035のtop-3 Plackett–Luce（PL）の評価経路は、参考datamartから年単位の拡大型foldで着順確率を学習・校正し、
+同時点の市場確率と比較する。既存のLambdaRankの学習・予測・保存形式とは独立で、PLモデルは永続化しない。
+
+| 所有者 | 責務 |
+| --- | --- |
+| probability/plackett_luce.py | padded配置、top-3 PLのNLL・勾配・厳密なHessian対角項、勝率・2着以内・3着以内の周辺確率、単勝・馬単・馬連・3連単・3連複の実際の組合せの対数確率。numpyだけ、I/Oなし。 |
+| probability/calibration.py | validのtop-3 PLのレース平均NLLを最小にする単一の温度（黄金分割）。 |
+| evaluation/probability_metrics.py | レース単位の確率指標、市場完全レースの$q_i$、確率帯・オッズ帯の校正表（馬の等重み）、レース単位の対応ありbootstrap。 |
+| dataset/race_arrays.py / serialization/race_arrays.py | numpyの`RaceArrays`の不変条件と部分集合、datamartの`pa.Table`からの列単位の変換。 |
+| evaluation/yearly_folds.py | train〜Y−2・valid Y−1・test Yのfold、次のsplitの最初のfreeze以後に結果が使えるレースの除外と監査。 |
+| backends/lightgbm.py | `fit_native_pl_booster`: callable objectiveとvalidのfeval・early stoppingによる`lightgbm.train`。予約parametersと`gbdt`以外を拒否する。 |
+| experiments/pl_evaluation.py | variant×foldの学習・温度推定・testの確率と指標、市場（連勝式はHarville展開）との比較、report・予測表の組立。I/Oなし。 |
+
+testの着順は採点だけに使い、学習・early stopping・温度推定・確率の生成には使わない。
+
 ## CLI
 
 main.pyはTyperの組立・登録・起動だけを行う。cli/options.pyとcli/json_io.pyは共通option、JSON境界、構造化エラー、
@@ -328,6 +343,10 @@ CLIは出力先がいずれかの入力と同じファイルを指す場合、�
 `configs/reference_datamart/`の設定と固定snapshotを読み、年ごとに読込・計算・書込みを繰り返す。
 `--output`は存在しない新しいパスで、親が存在し、processed rootの外にあることを要求する。進捗はstderr、
 公開後の要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130とし、どちらでもstagingを残さない。
+`model evaluate-pl`はcli/pl_evaluation.pyが、configuration/pl_evaluation.pyで合成した`configs/pl_evaluation/`の
+設定を読み、manifestのSHA-256で固定した参考datamartを`read_reference_datamart`で検証して読み、ADR-035の評価を
+実行する。`report.json`と`predictions.parquet`を`publish_directory`で新しいディレクトリへ公開する。
+helpとimportは設定・datamart・LightGBMを読まない。進捗・要約・終了コードは`datamart build-reference`と同じ規則である。
 
 ## 進化時の制約
 
