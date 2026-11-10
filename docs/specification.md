@@ -102,4 +102,4 @@ PL拡張ではMVPと同じ時点・レースのランキング性能を確認し
 
 ## 5. 設計レビュー中の事項
 
-LambdaRankによるランキングMVPと、top-3 PLをcustom objectiveで学ぶ確率モデルへの拡張方針は選定済みである。入力特徴量、学習対象レースの範囲、ハイパーパラメータ、PLの具体的な微分実装と校正方法、同着・取消等のラベルと評価の扱いは実装前に定める。条件付き2・3着モデル、オッズ推移、Closing Odds Model、Jev、Fractional Kellyと他の数理最適化は拡張または比較候補に残す。正の期待値を判定する安全余裕、複勝・ワイドの払戻範囲、例外が購入判断へ与える影響、リスク尺度、推論時間の数値目標、購入経路は未決定である。実装前に[現行アーキテクチャ](../ARCHITECTURE.md)とAccepted ADRを確認する。
+LambdaRankによるランキングMVPと、top-3 PLをcustom objectiveで学ぶ確率モデルへの拡張方針は選定済みである。PLの微分実装、年単位foldとラベル利用境界、温度による校正、市場との比較の手順は[ADR-035](decisions/ADR-035-evaluate-top3-plackett-luce-probabilities-on-yearly-folds.md)で定めた（参考datamartでの評価経路であり、予測・購入判断には接続していない）。それ以外の入力特徴量、学習対象レースの範囲、ハイパーパラメータ、同着・取消等のラベルと評価の扱いは実装前に定める。条件付き2・3着モデル、オッズ推移、Closing Odds Model、Jev、Fractional Kellyと他の数理最適化は拡張または比較候補に残す。正の期待値を判定する安全余裕、複勝・ワイドの払戻範囲、例外が購入判断へ与える影響、リスク尺度、推論時間の数値目標、購入経路は未決定である。実装前に[現行アーキテクチャ](../ARCHITECTURE.md)とAccepted ADRを確認する。

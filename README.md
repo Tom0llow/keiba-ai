@@ -23,7 +23,7 @@ src/
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
-├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments・probability
 ├─ domain/                      # 共有RaceKey
 └─ tests/
    ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
@@ -513,3 +513,19 @@ uv run python src/main.py datamart build-reference --config-name measure --overr
 `snapshot_id`（nullなら最初の一度だけCURRENTを解決する）以外を必須値`???`とし、`measure.yaml`は計測用の明示値（対象2025年、履歴2005年から）である。
 形式・検証・計測結果は[参考特徴量datamartの構築と計測](docs/experiments/reference-feature-datamart.md)と
 [ADR-034](docs/decisions/ADR-034-build-full-period-reference-feature-datamart.md)を参照する。
+
+## 年単位foldでtop-3 PLの着順確率を評価する
+
+`model evaluate-pl`は、全期間の参考datamartから年単位の拡大型fold（train〜Y−2・valid Y−1・test Y）で
+top-3 Plackett–Luceの着順確率をLightGBMで学習し、validでearly stoppingと温度の校正を行い、testで同時点の
+市場確率と比較する。モデルは保存せず、`report.json`と`predictions.parquet`だけを新しいディレクトリへ公開する。
+
+```powershell
+uv run python src/main.py model evaluate-pl --config-name measure --override processed_root=data/processed --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-evaluation-2016-2025
+```
+
+`configs/pl_evaluation/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が実データ用の明示値
+（train 2006年から、test 2016〜2025年、市場の単勝オッズ列あり・なしの2 variant）を持つ。processed root、datamartの
+パス、`datamart build-reference`が出したmanifestのSHA-256は`--override`で渡す。手順・出力形式・結果は
+[着順確率モデルの評価](docs/experiments/pl-probability-model.md)と
+[ADR-035](docs/decisions/ADR-035-evaluate-top3-plackett-luce-probabilities-on-yearly-folds.md)を参照する。
