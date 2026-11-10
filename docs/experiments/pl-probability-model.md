@@ -16,12 +16,16 @@ $q_i=(1/O_i)/\sum_j(1/O_j)$と比較する。購入判断（#36）、LambdaRank�
 ## 実行
 
 ```powershell
-uv run python src/main.py model evaluate-pl --config-name measure --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-evaluation-2016-2025
+uv run python src/main.py model evaluate-pl --config-name measure --override processed_root=<processed root> --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-evaluation-2016-2025
 ```
 
 - `configs/pl_evaluation/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が実データ用の明示値
   （train_start_year 2006、test_years 2016〜2025、variant 2通り、LightGBMの設定、bootstrap 2000回）を持つ。
-  datamartのパスとSHA-256は`--override`で渡す。SHA-256は`datamart build-reference`の要約の値である。
+  processed root、datamartのパスとSHA-256は`--override`で渡す。SHA-256は`datamart build-reference`の要約の値である。
+- datamart manifestの`snapshot_id`で固定snapshotを開き、`target_period`と参考規則の`venues`に限定して
+  `NL_RA_RACE`の`GradeCD`・`TrackCD`を読む。読込後の表hashがdatamart manifestの出典と一致しない場合、
+  testレースがsnapshotに無い場合、fold年がdatamartの対象期間の外にある場合、`train_start_year`が
+  test年−2より後の場合、全列を除くvariantがある場合は、datamartの全体の読込の前に評価を開始しない。
 - variantは`all_columns`（全36列）と`without_market`（`market_characteristics__market_win_odds`を除く35列）。
   どちらも$q_i$との比較には同じ単勝オッズ列を使う。
 - `--output`は存在しない新しいパスで、親が存在することを要求する。進捗はstderrに
@@ -31,8 +35,10 @@ uv run python src/main.py model evaluate-pl --config-name measure --override dat
 
 ## 手順
 
-1. datamartをmanifestのSHA-256で固定して読み、hash・schema・時点・ラベル境界を検証する
-   （21群は再計算しない）。
+1. datamart manifestの`snapshot_id`で固定snapshotを開き、対象期間・venueの`NL_RA_RACE`を読み、表hashを照合する。
+   設定・fold年・variantを検査した後、test年の`races.parquet`をmanifestのSHA-256で照合して`race_id`列だけを読み、
+   snapshotに無いtestレースを拒否し、datamartに無い平地重賞の件数をtest年ごとに数える。
+   続けてdatamartをmanifestのSHA-256で固定して読み、hash・schema・時点・ラベル境界を検証する（21群は再計算しない）。
 2. test年ごとに、train・valid・testのレースを年（`scheduled_start_at`のJST）で分ける。
    `label_usable_after`がvalid（またはtest）の最初のfreeze以後のtrain（またはvalid）のレースを除く。
 3. trainで学習し、validのレース平均top-3 NLLでearly stoppingする。
@@ -44,12 +50,21 @@ uv run python src/main.py model evaluate-pl --config-name measure --override dat
 
 ```text
 <output>/
-├─ report.json          # 設定、datamartの識別、provenance、foldごと・pooledの指標・比較・校正表
+├─ report.json          # 設定、datamart・部分集合の識別、provenance、foldごと・pooledの指標・比較・校正表
 └─ predictions.parquet  # testの馬ごと: variant、test_year、race_id、horse_id、finish_position、
-                        # score、temperature、p_win・p_top2・p_top3（校正後）、market_win_odds、market_q
+                        # score、temperature、p_win・p_top2・p_top3（校正後）、market_win_odds、market_q、
+                        # in_jra_flat_graded_stakes
 ```
 
 - `report.json`のformatは`pl_probability_evaluation`、format_versionは1である。
+- `report.json`のトップに`race_subsets.jra_flat_graded_stakes_v1`として、GradeCD A/B/CかつTrackCD 10〜24の
+  定義（`definition`）、`NL_RA_RACE`・SHA-256・`snapshot_id`の出典（`source`）、test年ごとの、snapshotにあって
+  datamartに無い（保留された）部分集合のレース数（`not_in_datamart_by_test_year`）を持つ。foldごと・variantごと・
+  pooledには部分集合ごとの件数、指標、市場比較、校正表を持つ。
+- `market_complete_races.calibration`の形は2通りある。全testレースの`variants.<name>.market_complete_races`では
+  モデル（校正後）の`{win, top2, top3}`の表で、市場の表はfoldの`market_calibration`にある。部分集合の
+  `subsets.<name>.market_complete_races`では`{calibrated_model: {win, top2, top3}, market: {win, top2, top3}}`の
+  モデルと市場の組である。
 - foldごとに、件数（train・valid・testのレースと行、除外件数、市場完全・不完全のレース数）、
   ラベル監査値、市場の指標と校正表、variantごとの`best_iteration`・温度推定・特徴量名・指標・比較・
   校正表を持つ。`pooled`は全foldのtestレースをまとめた指標と比較である。
@@ -57,6 +72,7 @@ uv run python src/main.py model evaluate-pl --config-name measure --override dat
   レースを等しい重みとする。比較はモデルと市場のレースごとの差の平均と95%区間、判定
   （`model_better`・`market_better`・`inconclusive`）である。校正表は馬を等しい重みとする。
 - `market_q`は市場完全でないレースではnullである。
+- `predictions.parquet`の`in_jra_flat_graded_stakes`はboolでnullを持たず、部分集合判定はtestの着順を使わない。
 
 ## 実データでの結果
 
@@ -205,7 +221,148 @@ pooledでは、校正前（raw）の判定も両variantのすべての指標で�
 - 市場列を含まないモデルは、すべての券種で市場に大きく及ばない。
 - 評価母集団は、datamartの参考規則で保留されなかった中央競馬10場（場コード01〜10）の全競走であり、
   格付けの有無、平地・障害を区別しない（同着・異常区分・取消などのレースを含まない）。したがって、これは
-  ADR-009 Validation 2が定めるJRA平地重賞についてのValidation 4・5ではない。平地重賞に限定した評価は、
-  参考datamartに格付け・平地／障害を区別する列がないため、別Issue候補である。$q_i$はfreeze時点のオッズで、
+  ADR-009 Validation 2が定めるJRA平地重賞についてのValidation 4・5ではない。平地重賞に限定した追加評価は、
+  次節に部分集合として記録する。$q_i$はfreeze時点のオッズで、
   確定オッズではない。
 - ハイパーパラメータは`measure.yaml`の初期値で、調整していない。結果は1回の実行である。
+
+### 平地重賞の部分集合（Amendment 1）
+
+2026-11-10、Amendment 1の最終コードで、`jra_flat_graded_stakes_v1`を追加した再実行を行った。
+この部分集合は`GradeCD`がA・B・C、かつ`TrackCD`が10〜24のレースである。出典は`NL_RA_RACE`、
+SHA-256は`efc80bba4ddc62bb2db9e84f9b984915079b5b5ea35fc13a5ab31dff9826a3ee`、snapshotは
+`098ce3f4b5d7480282269218d80cef05`である。学習は従来どおり各foldの全レースで行い、この部分集合は
+testの採点・集計にだけ使った。両variantの予測表には、部分集合に該当する馬の行が32,642行
+（variantごとに16,321行）含まれる。
+
+評価した部分集合は、datamartに入ったtestレースのうち平地重賞であるものだけである。test 2016〜2025の
+`NL_RA_RACE`の平地重賞1,289レースのうち186レース（約14%、年14〜29レース、`report.json`の
+`race_subsets.jra_flat_graded_stakes_v1.not_in_datamart_by_test_year`）は、datamartの参考規則による保留
+（同着・異常区分・取消など）でdatamartに入っておらず、この評価に含まれない。したがって、この結果は
+ADR-009 Validation 2の平地重賞の全体ではなく、保留されなかった平地重賞についての評価である。
+
+実行時間はwall 1,173.9秒（読込50.5秒）、CPU時間8,287.8秒、ピーク作業セット2.01GB、
+ピークcommit 3.65GBだった。Amendment 1の前に公開した結果（上の節）と比べ、reportから部分集合（`subsets`・`race_subsets`）、
+コードの識別情報（provenance）、設定（`config`、違いは追加した`processed_root`だけ）、追加した
+`market_complete_races.calibration`を除いた残り（foldごとの件数・ラベル監査・市場の指標と校正表、variantごとの
+`best_iteration`・温度・全レースと市場完全レースの指標と比較・確率帯とオッズ帯の校正表、pooled）は完全に一致した。
+`predictions.parquet`も、追加した`in_jra_flat_graded_stakes`列を除いて完全に一致した。
+
+#### foldごとの件数
+
+| test | 部分集合のレース | 市場完全 | 不完全 |
+| --- | ---: | ---: | ---: |
+| 2016 | 109 | 109 | 0 |
+| 2017 | 106 | 106 | 0 |
+| 2018 | 116 | 116 | 0 |
+| 2019 | 109 | 109 | 0 |
+| 2020 | 114 | 114 | 0 |
+| 2021 | 110 | 110 | 0 |
+| 2022 | 114 | 114 | 0 |
+| 2023 | 113 | 113 | 0 |
+| 2024 | 111 | 111 | 0 |
+| 2025 | 101 | 101 | 0 |
+
+以下の差は「校正後のモデル − 市場」で、括弧はレース単位の対応ありbootstrap（2,000回）の95%区間である。
+`M`は`model_better`、`Mk`は`market_better`、`-`は`inconclusive`を表す。
+
+#### `all_columns`のfoldごとの市場比較（校正後）
+
+| test | win | brier | exacta | quinella | trifecta | trio |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2016 | +0.0083 [-0.0303, +0.0492] - | +0.0044 [-0.0105, +0.0202] - | +0.0483 [-0.0106, +0.1071] - | +0.0510 [-0.0092, +0.1104] - | +0.0388 [-0.0410, +0.1119] - | +0.0233 [-0.0515, +0.0897] - |
+| 2017 | +0.0153 [-0.0218, +0.0517] - | +0.0032 [-0.0093, +0.0166] - | -0.0379 [-0.0890, +0.0133] - | -0.0419 [-0.0930, +0.0108] - | -0.0700 [-0.1397, +0.0002] - | -0.0781 [-0.1455, -0.0097] M |
+| 2018 | +0.0175 [-0.0166, +0.0504] - | +0.0030 [-0.0100, +0.0161] - | +0.0112 [-0.0424, +0.0630] - | +0.0090 [-0.0449, +0.0594] - | -0.0359 [-0.1019, +0.0275] - | -0.0450 [-0.1098, +0.0165] - |
+| 2019 | +0.0368 [-0.0044, +0.0776] - | +0.0126 [-0.0013, +0.0266] - | +0.0118 [-0.0543, +0.0686] - | -0.0000 [-0.0636, +0.0543] - | -0.0269 [-0.1152, +0.0508] - | -0.0530 [-0.1384, +0.0208] - |
+| 2020 | +0.0112 [-0.0315, +0.0526] - | +0.0017 [-0.0143, +0.0171] - | -0.0357 [-0.0967, +0.0255] - | -0.0440 [-0.1053, +0.0163] - | -0.1212 [-0.1952, -0.0478] M | -0.1382 [-0.2100, -0.0651] M |
+| 2021 | +0.0058 [-0.0356, +0.0462] - | -0.0060 [-0.0196, +0.0072] - | -0.0108 [-0.0723, +0.0501] - | -0.0070 [-0.0682, +0.0550] - | -0.0602 [-0.1418, +0.0192] - | -0.0643 [-0.1460, +0.0138] - |
+| 2022 | -0.0178 [-0.0582, +0.0211] - | -0.0072 [-0.0190, +0.0050] - | -0.0525 [-0.1173, +0.0088] - | -0.0506 [-0.1167, +0.0108] - | -0.0899 [-0.1809, -0.0057] M | -0.0959 [-0.1862, -0.0149] M |
+| 2023 | +0.0503 [+0.0158, +0.0836] Mk | +0.0099 [-0.0023, +0.0234] - | +0.0110 [-0.0375, +0.0571] - | +0.0023 [-0.0442, +0.0477] - | -0.0332 [-0.1038, +0.0362] - | -0.0463 [-0.1161, +0.0250] - |
+| 2024 | +0.0350 [-0.0061, +0.0757] - | +0.0084 [-0.0052, +0.0221] - | -0.0108 [-0.0725, +0.0512] - | -0.0176 [-0.0803, +0.0435] - | -0.0517 [-0.1378, +0.0316] - | -0.0688 [-0.1513, +0.0116] - |
+| 2025 | +0.0070 [-0.0346, +0.0460] - | -0.0065 [-0.0197, +0.0068] - | -0.0179 [-0.0824, +0.0395] - | -0.0132 [-0.0780, +0.0448] - | -0.0939 [-0.1782, -0.0145] M | -0.0997 [-0.1819, -0.0217] M |
+
+##### `all_columns`のpooled部分集合（レース=1,103）
+
+| 指標 | モデル raw | モデル calibrated | 市場 | calibratedの差 [95%区間] | 判定 | rawの判定 |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| win | 2.0834 | 2.0842 | 2.0672 | +0.0170 [+0.0050, +0.0295] | `market_better` | `market_better` |
+| brier | 0.8274 | 0.8276 | 0.8252 | +0.0024 [-0.0017, +0.0069] | `inconclusive` | `inconclusive` |
+| exacta | 4.2624 | 4.2630 | 4.2714 | -0.0083 [-0.0256, +0.0107] | `inconclusive` | `inconclusive` |
+| quinella | 3.5865 | 3.5870 | 3.5983 | -0.0113 [-0.0284, +0.0076] | `inconclusive` | `inconclusive` |
+| trifecta | 6.4955 | 6.4951 | 6.5495 | -0.0544 [-0.0780, -0.0301] | `model_better` | `model_better` |
+| trio | 4.7611 | 4.7604 | 4.8270 | -0.0666 [-0.0899, -0.0429] | `model_better` | `model_better` |
+| 段階別NLL（1着/2着/3着） | 2.0834 / 2.1790 / 2.2331 | 2.0842 / 2.1789 / 2.2321 | 2.0672 / 2.2042 / 2.2781 | | | |
+
+結論の件数（指標ごと、10 fold）は、`win`: `model_better` 0・`inconclusive` 9・`market_better` 1、
+`brier`: 0・10・0、`exacta`: 0・10・0、`quinella`: 0・10・0、`trifecta`: 3・7・0、
+`trio`: 4・6・0だった。
+
+#### `without_market`のfoldごとの市場比較（校正後）
+
+| test | win | brier | exacta | quinella | trifecta | trio |
+| --- | --- | --- | --- | --- | --- | --- |
+| 2016 | +0.2743 [+0.1497, +0.3958] Mk | +0.0569 [+0.0181, +0.0966] Mk | +0.5789 [+0.3989, +0.7676] Mk | +0.5737 [+0.3885, +0.7641] Mk | +0.7421 [+0.4791, +1.0060] Mk | +0.6883 [+0.4258, +0.9495] Mk |
+| 2017 | +0.3403 [+0.2055, +0.4804] Mk | +0.0674 [+0.0279, +0.1092] Mk | +0.3780 [+0.1710, +0.5713] Mk | +0.3550 [+0.1509, +0.5523] Mk | +0.4526 [+0.1562, +0.7362] Mk | +0.3967 [+0.1096, +0.6714] Mk |
+| 2018 | +0.3196 [+0.2045, +0.4389] Mk | +0.0636 [+0.0285, +0.1006] Mk | +0.5379 [+0.3518, +0.7241] Mk | +0.5210 [+0.3357, +0.7082] Mk | +0.6645 [+0.4174, +0.9152] Mk | +0.6155 [+0.3786, +0.8621] Mk |
+| 2019 | +0.2878 [+0.1508, +0.4215] Mk | +0.0729 [+0.0304, +0.1167] Mk | +0.4917 [+0.2782, +0.6953] Mk | +0.4617 [+0.2586, +0.6558] Mk | +0.6208 [+0.3765, +0.8622] Mk | +0.5444 [+0.3145, +0.7628] Mk |
+| 2020 | +0.2453 [+0.1192, +0.3672] Mk | +0.0583 [+0.0183, +0.0999] Mk | +0.4333 [+0.2376, +0.6248] Mk | +0.4132 [+0.2214, +0.5999] Mk | +0.3684 [+0.1136, +0.6039] Mk | +0.3043 [+0.0600, +0.5403] Mk |
+| 2021 | +0.2526 [+0.1243, +0.3880] Mk | +0.0373 [+0.0036, +0.0713] Mk | +0.4698 [+0.2694, +0.6782] Mk | +0.4719 [+0.2744, +0.6808] Mk | +0.5333 [+0.2855, +0.8017] Mk | +0.5013 [+0.2543, +0.7657] Mk |
+| 2022 | +0.2867 [+0.1473, +0.4203] Mk | +0.0421 [+0.0093, +0.0744] Mk | +0.3752 [+0.1559, +0.5828] Mk | +0.3672 [+0.1499, +0.5743] Mk | +0.5222 [+0.2640, +0.7845] Mk | +0.4912 [+0.2408, +0.7488] Mk |
+| 2023 | +0.3402 [+0.2247, +0.4551] Mk | +0.0673 [+0.0332, +0.1013] Mk | +0.5398 [+0.3860, +0.6977] Mk | +0.5221 [+0.3669, +0.6794] Mk | +0.7196 [+0.5026, +0.9562] Mk | +0.6730 [+0.4538, +0.9149] Mk |
+| 2024 | +0.2792 [+0.1287, +0.4425] Mk | +0.0465 [+0.0135, +0.0785] Mk | +0.3889 [+0.1896, +0.5979] Mk | +0.3767 [+0.1809, +0.5848] Mk | +0.3320 [+0.0724, +0.6013] Mk | +0.2805 [+0.0263, +0.5477] Mk |
+| 2025 | +0.2460 [+0.1100, +0.3731] Mk | +0.0238 [-0.0091, +0.0557] - | +0.4782 [+0.2633, +0.6803] Mk | +0.4913 [+0.2777, +0.6963] Mk | +0.5045 [+0.2328, +0.7805] Mk | +0.4796 [+0.2027, +0.7498] Mk |
+
+##### `without_market`のpooled部分集合（レース=1,103）
+
+| 指標 | モデル raw | モデル calibrated | 市場 | calibratedの差 [95%区間] | 判定 | rawの判定 |
+| --- | ---: | ---: | ---: | --- | --- | --- |
+| win | 2.3550 | 2.3547 | 2.0672 | +0.2875 [+0.2462, +0.3302] | `market_better` | `market_better` |
+| brier | 0.8791 | 0.8790 | 0.8252 | +0.0538 [+0.0425, +0.0655] | `market_better` | `market_better` |
+| exacta | 4.7384 | 4.7387 | 4.2714 | +0.4673 [+0.4050, +0.5311] | `market_better` | `market_better` |
+| quinella | 4.0532 | 4.0536 | 3.5983 | +0.4553 [+0.3934, +0.5188] | `market_better` | `market_better` |
+| trifecta | 7.0959 | 7.0961 | 6.5495 | +0.5466 [+0.4667, +0.6300] | `market_better` | `market_better` |
+| trio | 5.3249 | 5.3250 | 4.8270 | +0.4980 [+0.4171, +0.5786] | `market_better` | `market_better` |
+| 段階別NLL（1着/2着/3着） | 2.3550 / 2.3834 / 2.3575 | 2.3547 / 2.3840 / 2.3574 | 2.0672 / 2.2042 / 2.2781 | | | |
+
+結論の件数（指標ごと、10 fold）は、`win`: `model_better` 0・`inconclusive` 0・`market_better` 10、
+`brier`: 0・1・9、`exacta`: 0・0・10、`quinella`: 0・0・10、`trifecta`: 0・0・10、
+`trio`: 0・0・10だった。
+
+#### 校正の要点（pooled部分集合、馬を等しい重みで集計）
+
+帯は`[下限, 上限)`で、最後の帯は1.0を含む。以下はwinとtop3の代表的な帯で、`model n`・`market n`は馬の数、
+`mean`は予測平均、`observed`は実測割合である。
+
+| variant | 対象 | 帯 | model n | model mean | model observed | market n | market mean | market observed |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `all_columns` | win | [0.1, 0.2) | 2875 | 0.1378 | 0.1569 | 2520 | 0.1400 | 0.1536 |
+| `all_columns` | win | [0.5, 1.0] | 14 | 0.5248 | 1.0000 | 72 | 0.5757 | 0.6111 |
+| `all_columns` | top3 | [0.1, 0.2) | 3580 | 0.1463 | 0.1497 | 3194 | 0.1456 | 0.1753 |
+| `all_columns` | top3 | [0.5, 1.0] | 1291 | 0.6307 | 0.6204 | 1730 | 0.6581 | 0.5838 |
+| `without_market` | win | [0.1, 0.2) | 2820 | 0.1339 | 0.1504 | 2520 | 0.1400 | 0.1536 |
+| `without_market` | win | [0.5, 1.0] | 3 | 0.5283 | 0.3333 | 72 | 0.5757 | 0.6111 |
+| `without_market` | top3 | [0.1, 0.2) | 5282 | 0.1481 | 0.1501 | 3194 | 0.1456 | 0.1753 |
+| `without_market` | top3 | [0.5, 1.0] | 664 | 0.6031 | 0.5738 | 1730 | 0.6581 | 0.5838 |
+
+#### 解釈と注意
+
+- 部分集合は1,103レース（各fold 101〜116レース）で、全testの29,754レースより小さい。foldごとの区間は広く、
+  `all_columns`ではbrier・exacta・quinellaの10 foldがすべて`inconclusive`だった。pooledでも、
+  `all_columns`のbrier・exacta・quinellaは`inconclusive`であり、小標本による不確実性を考慮する必要がある。
+- `all_columns`では、pooledのwinは市場が良く（差`+0.0170 [+0.0050, +0.0295]`）、brier・exacta・quinellaは判定不能だった。
+  一方、trifectaとtrioはモデルが良かった（差`-0.0544 [-0.0780, -0.0301]`、`-0.0666 [-0.0899, -0.0429]`）。
+  ただし連勝式の比較相手は単勝確率からのHarville展開であり、連勝式の実際の市場オッズではないため、
+  これを連勝式市場への優位性とは解釈しない。
+- `without_market`ではpooledの6指標すべてで`market_better`となった。これはこの部分集合で市場の単勝オッズ列を除くと、
+  市場確率から作った基準に及ばなかったことを示すが、購入判断の性能を直接示すものではない。
+- `GradeCD`と`TrackCD`は固定snapshotの最終版の値であり、freeze時点の値であることは確かめていない
+  （重賞の格付けとコースは出走前に決まり、後から変わらない前提である）。部分集合の選択にだけ使い、特徴量には使わない。
+- datamartの保留で除かれた平地重賞（test年で186レース）は含まれない。保留は同着・異常区分などの結果にも
+  よるため、評価した平地重賞は全体からの無作為な標本ではない。
+- 部分集合の選択は`GradeCD`と`TrackCD`だけで決まり、testの着順は採点にだけ使った。モデルは平地重賞だけで再学習しておらず、
+  各foldの全レースで学習した後に平地重賞を採点した結果である。
+- [0.5, 1.0]の校正帯は、winで`all_columns`がモデル14頭、`without_market`が3頭にとどまるため、
+  この帯の観測割合は特に不安定である。帯に入る馬はモデルと市場で異なるため、観測割合どうしではなく、
+  それぞれの予測平均と自分の観測割合を比べる。top3の[0.5, 1.0]では、モデルは予測平均0.6307に対して観測0.6204
+  （`all_columns`）、0.6031に対して0.5738（`without_market`）で、市場Harvilleは0.6581に対して0.5838と
+  高く見積もっていた。少数の部分集合からの要約である。

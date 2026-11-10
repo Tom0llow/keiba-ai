@@ -112,7 +112,7 @@ def top3_plackett_luce(
     with respect to the supplied, unscaled scores.
     """
     scaled_scores, temperature_value = _scaled_scores(scores, layout, temperature)
-    positions = _padded_positions(finish_positions, layout)
+    positions = padded_finish_positions(finish_positions, layout)
     ordered_slots = np.argsort(positions, axis=1)[:, :3]
     padded_scores = _pad_scores(scaled_scores, layout)
     probabilities, stage_nll = _stage_probabilities(padded_scores, ordered_slots, layout.mask)
@@ -178,7 +178,7 @@ def top3_combination_log_probabilities(
 ) -> CombinationLogProbabilities:
     """Return log probabilities of the actual win and top-three combinations."""
     scaled_scores, _ = _scaled_scores(scores, layout, temperature)
-    positions = _padded_positions(finish_positions, layout)
+    positions = padded_finish_positions(finish_positions, layout)
     ordered_slots = np.argsort(positions, axis=1)[:, :3]
     padded_scores = _pad_scores(scaled_scores, layout)
 
@@ -237,7 +237,8 @@ def _temperature_value(temperature: float) -> float:
     return value
 
 
-def _padded_positions(finish_positions: npt.ArrayLike, layout: RaceLayout) -> IntArray:
+def padded_finish_positions(finish_positions: npt.ArrayLike, layout: RaceLayout) -> IntArray:
+    """Validate 1..n finishing positions per race and return them in the padded layout."""
     values = np.asarray(finish_positions)
     if values.ndim != 1 or len(values) != layout.row_count:
         raise ValueError(
@@ -350,6 +351,7 @@ __all__ = [
     "MarginalProbabilities",
     "RaceLayout",
     "Top3PlackettLuce",
+    "padded_finish_positions",
     "top3_combination_log_probabilities",
     "top3_marginal_probabilities",
     "top3_plackett_luce",

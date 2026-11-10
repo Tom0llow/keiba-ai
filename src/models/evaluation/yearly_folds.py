@@ -142,25 +142,6 @@ def plan_yearly_folds(
     return tuple(plans)
 
 
-def make_yearly_folds(
-    arrays: RaceArrays,
-    *,
-    train_start_year: int,
-    test_years: Sequence[int],
-) -> tuple[YearlyFold, ...]:
-    """Return every planned fold materialized; see ``plan_yearly_folds``.
-
-    Long runs should materialize one plan at a time instead, because expanding
-    train windows overlap and every fold holds its own copy.
-    """
-    return tuple(
-        plan.materialize(arrays)
-        for plan in plan_yearly_folds(
-            arrays, train_start_year=train_start_year, test_years=test_years
-        )
-    )
-
-
 def _validate_year(value: object, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must contain integer years")
@@ -185,6 +166,5 @@ __all__ = [
     "LabelUseAudit",
     "YearlyFold",
     "YearlyFoldPlan",
-    "make_yearly_folds",
     "plan_yearly_folds",
 ]

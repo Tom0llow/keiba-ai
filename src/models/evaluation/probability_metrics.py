@@ -12,6 +12,7 @@ import numpy.typing as npt
 from models.probability.plackett_luce import (
     MarginalProbabilities,
     RaceLayout,
+    padded_finish_positions,
     top3_combination_log_probabilities,
     top3_marginal_probabilities,
     top3_plackett_luce,
@@ -215,7 +216,11 @@ def odds_calibration_table(
     excluded. The final odds band is left-inclusive and unbounded above.
     """
     odds_values = _one_dimensional_float_values(odds, "odds", layout.row_count)
-    model_values = _probability_values(model_win_probabilities, "model_win_probabilities")
+    model_values = _probability_values(
+        model_win_probabilities,
+        "model_win_probabilities",
+        layout.row_count,
+    )
     market_values = _one_dimensional_float_values(market_q, "market_q", layout.row_count)
     positions = _validated_finish_positions(finish_positions, layout)
     band_values = _odds_bands(bands)
@@ -312,27 +317,16 @@ def _validated_finish_positions(
     finish_positions: npt.ArrayLike,
     layout: RaceLayout,
 ) -> IntArray:
-    values = np.asarray(finish_positions)
-    if values.ndim != 1 or len(values) != layout.row_count:
-        raise ValueError(
-            "finish_positions must be a one-dimensional array matching the layout rows"
-        )
-    if np.issubdtype(values.dtype, np.bool_) or not np.issubdtype(values.dtype, np.integer):
-        raise ValueError("finish_positions must contain integers")
-    padded_positions = np.full(layout.mask.shape, layout.mask.shape[1] + 1, dtype=np.int64)
-    padded_positions[layout.mask] = values.astype(np.int64, copy=False)
-    expected_positions = np.where(
-        layout.mask,
-        np.arange(1, layout.mask.shape[1] + 1, dtype=np.int64),
-        layout.mask.shape[1] + 1,
-    )
-    if not np.array_equal(np.sort(padded_positions, axis=1), expected_positions):
-        raise ValueError("finish_positions must be a 1..n permutation within every race")
-    return values.astype(np.int64, copy=False)
+    padded_finish_positions(finish_positions, layout)
+    return np.asarray(finish_positions).astype(np.int64, copy=False)
 
 
-def _probability_values(values: npt.ArrayLike, name: str) -> FloatArray:
-    result = _one_dimensional_float_values(values, name)
+def _probability_values(
+    values: npt.ArrayLike,
+    name: str,
+    expected_length: int | None = None,
+) -> FloatArray:
+    result = _one_dimensional_float_values(values, name, expected_length)
     if not np.all(np.isfinite(result)):
         raise ValueError(f"{name} must contain finite probabilities between zero and one")
     if np.any(

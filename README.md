@@ -521,11 +521,11 @@ top-3 Plackett–Luceの着順確率をLightGBMで学習し、validでearly stop
 市場確率と比較する。モデルは保存せず、`report.json`と`predictions.parquet`だけを新しいディレクトリへ公開する。
 
 ```powershell
-uv run python src/main.py model evaluate-pl --config-name measure --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-evaluation-2016-2025
+uv run python src/main.py model evaluate-pl --config-name measure --override processed_root=data/processed --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-evaluation-2016-2025
 ```
 
 `configs/pl_evaluation/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が実データ用の明示値
-（train 2006年から、test 2016〜2025年、市場の単勝オッズ列あり・なしの2 variant）を持つ。datamartのパスと
-`datamart build-reference`が出したmanifestのSHA-256は`--override`で渡す。手順・出力形式・結果は
+（train 2006年から、test 2016〜2025年、市場の単勝オッズ列あり・なしの2 variant）を持つ。processed root、datamartの
+パス、`datamart build-reference`が出したmanifestのSHA-256は`--override`で渡す。手順・出力形式・結果は
 [着順確率モデルの評価](docs/experiments/pl-probability-model.md)と
 [ADR-035](docs/decisions/ADR-035-evaluate-top3-plackett-luce-probabilities-on-yearly-folds.md)を参照する。

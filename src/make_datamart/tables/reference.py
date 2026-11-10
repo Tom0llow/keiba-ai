@@ -245,6 +245,47 @@ def read_reference_datamart(
     return ReferenceDatamartRead(manifest_sha256, manifest, rows, races)
 
 
+def read_reference_datamart_race_ids(
+    path: Path, *, years: Sequence[int], expected_manifest_sha256: str
+) -> frozenset[str]:
+    """Read only the race IDs of the given years' race tables, without the full validation.
+
+    The manifest bytes and each selected ``races.parquet`` are checked against the
+    pinned SHA-256 values with the same path rule as the full reader, so callers can
+    check race coverage before ``read_reference_datamart`` (which still verifies everything).
+    """
+    root = path.resolve()
+    manifest_bytes = (root / "manifest.json").read_bytes()
+    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
+        raise ValueError("reference datamart manifest SHA-256 differs from the expected identity")
+    try:
+        manifest = json.loads(manifest_bytes)
+    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+        raise ValueError("reference datamart manifest is not valid UTF-8 JSON") from exc
+    partitions = manifest.get("partitions") if isinstance(manifest, dict) else None
+    if not isinstance(partitions, list):
+        raise ValueError("reference datamart partitions do not cover every target year")
+    wanted = set(years)
+    race_ids: set[str] = set()
+    for entry in partitions:
+        if not isinstance(entry, dict) or type(entry.get("year")) is not int:
+            raise ValueError("reference datamart partition entry is invalid")
+        year = cast(int, entry["year"])
+        if year not in wanted:
+            continue
+        expected_races = f"year={year}/races.parquet"
+        if entry.get("races_file") != expected_races:
+            raise ValueError("reference datamart partition paths are invalid")
+        races_path = root / expected_races
+        if file_sha256(races_path) != entry.get("races_sha256"):
+            raise ValueError("reference datamart partition file hash mismatch")
+        values = read_parquet(races_path, columns=["race_id"]).column("race_id").to_pylist()
+        if len(values) != entry.get("race_count"):
+            raise ValueError("reference datamart partition row count mismatch")
+        race_ids.update(_race_identity({"race_id": value}) for value in values)
+    return frozenset(race_ids)
+
+
 def _metadata(year: int, contract_sha256: str) -> dict[bytes, bytes]:
     common = json.dumps(
         {"format_version": 1, "year": year, "contract_sha256": contract_sha256},

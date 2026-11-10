@@ -53,8 +53,9 @@ datamartは閉じた数値列36列（freeze時点の単勝オッズ`market_chara
    `label_usable_after` < validの最初のfreeze、trainとvalidの最大 < testの最初のfreezeを検査して
    記録する。この除外はfreeze前に決まる日付だけで決まり、結果を見て母集団を選ばない。
    testの着順は採点だけに使い、学習・early stopping・温度推定・確率の生成には使わない。
-   評価母集団は、参考datamartに入った中央競馬10場（場コード01〜10）の全競走であり、格付けの有無、
-   平地・障害を区別しない。
+   評価母集団は、参考datamartに入った中央競馬10場（場コード01〜10）の全競走であり、基本評価では
+   格付けの有無、平地・障害を区別しない。別途、下記の`jra_flat_graded_stakes_v1`部分集合を同じfoldで
+   報告する。
 6. **校正。** validのtop-3 PLのレース平均NLLを最小にする単一の温度を、$\log(1/T)$上の黄金分割で
    求める（既定の範囲は$T\in[0.05,20]$）。単勝のLog Lossだけで温度を合わせる方法や、着順段階別の
    温度は採らない。testには校正前（raw）と校正後（calibrated）の両方を報告する。
@@ -70,16 +71,37 @@ datamartは閉じた数値列36列（freeze時点の単勝オッズ`market_chara
 9. **特徴量のvariant。** 設定のvariantごとに除外する列を指定する。実データでは、市場の単勝オッズ列を
    含む全36列（市場の情報と他の特徴量を合わせて市場を上回るか）と、それを除く35列（市場を使わない
    基礎モデル）の2通りを評価する。どちらも$q_i$との比較には同じ列を使う。
-10. **出力。** 新しいCLI `model evaluate-pl`が、`configs/pl_evaluation/`の設定と、manifestの
-    SHA-256で固定したdatamartを読み、`report.json`（format `pl_probability_evaluation`、
-    format_version 1）と`predictions.parquet`（testの馬ごとのスコア・温度・校正後の確率・
-    単勝オッズ・$q_i$）を新しいディレクトリへ公開する。
+10. **出力。** 新しいCLI `model evaluate-pl`が、`configs/pl_evaluation/`の設定、
+    `processed_root`、datamart manifestのSHA-256で固定したdatamartを読み、`report.json`（format
+    `pl_probability_evaluation`、format_version 1）と`predictions.parquet`（testの馬ごとのスコア・
+    温度・校正後の確率・単勝オッズ・$q_i$・部分集合所属）を新しいディレクトリへ公開する。
 11. **延期。** ADR-009 Validation 4の同じfoldでのLambdaRank MVPとのランキング性能比較（#48）と、
     Validation 5の購入候補帯の校正（#36）は、このADRでは行わない。2・3着の偏りは測るだけで、
     補正は#49で決める。
-12. **評価範囲。** この評価は、上記の広い母集団に対する研究評価である。ADR-009 Validation 2が
-    評価対象とするJRA平地重賞についてのValidation 4・5ではない。平地重賞へ限定した評価は、
-    参考datamartに格付け・平地／障害を区別する列がないため、別Issue候補として扱う。
+12. **評価範囲。** 基本評価は、上記の広い母集団に対する研究評価である。これに加えて、ADR-009
+    Validation 2が評価対象とするJRA平地重賞を、下記の固定snapshot由来の部分集合として比較する。
+
+13. **平地重賞部分集合。** `jra_flat_graded_stakes_v1`は、固定snapshotの`NL_RA_RACE`で
+    `GradeCD`が`A`・`B`・`C`、かつ`TrackCD`が`10`〜`24`のrace_id集合である。D・L・E・空の格付け、
+    TrackCD 51〜59の障害その他のコードは含めない。部分集合の判定は格付け・コースだけから行い、
+    testの着順を使わない。学習母集団は従来どおりdatamartの全レースとし、foldごと・pooledの
+    件数、指標、市場比較、校正を部分集合として報告する。評価するのはdatamartに入ったtestレースだけであり、
+    datamartの保留（同着・異常区分・取消など）で除かれた平地重賞は含まない。その件数をtest年ごとに
+    `report.json`へ記録する。したがって、Validation 2の平地重賞の全体ではなく、保留されなかった平地重賞の評価である。
+
+### Amendment 1: 平地重賞の評価とsnapshot出典（2026-11-10）
+
+- 2026-11-10に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま。Decision Historyを参照）。
+- `model evaluate-pl`は設定の`processed_root`とdatamart manifestの`snapshot_id`・`target_period`・`venues`を使って
+  固定snapshotの`NL_RA_RACE`を読み、datamart manifestに記録された同表のSHA-256と、読込後に再計算した
+  SHA-256を照合する。不一致と、datamartのtest年のレースがsnapshotに無いことは、datamartの全体の読込・学習の前に
+  拒否する（後者は、datamartの読込口`read_reference_datamart_race_ids`がtest年の`races.parquet`をmanifestの
+  SHA-256で照合してから`race_id`列だけを先に読んで調べる）。fold年と全列を除くvariantも読込の前に検査する。
+- `report.json`のトップに部分集合の定義と、表名・SHA-256・`snapshot_id`の出典、test年ごとのdatamartに無い
+  部分集合のレース数（`not_in_datamart_by_test_year`）を記録する。
+  `predictions.parquet`には`in_jra_flat_graded_stakes`（bool、非null）を追加する。追加フィールドは
+  format_version 1の範囲内である。
+- CLIの失敗メッセージは改行を空白へ畳んだ1行とし、`???`が残る設定も終了コード1で拒否する。
 
 ---
 
@@ -93,6 +115,8 @@ datamartは閉じた数値列36列（freeze時点の単勝オッズ`market_chara
   合わせると、2・3着の確率がさらに偏る可能性がある。段階別の温度は補正の一種であり、偏りを
   測ってから決める（#49）。
 - 市場完全レースに限ることで、モデルと市場を同じレース集合で比べられる。
+- 平地重賞の選択をdatamartの特徴量やtestの着順から分離し、固定snapshotの出典とhashを出力へ残すことで、
+  ADR-009 Validation 2の対象を再現可能にする。
 
 ---
 
@@ -172,6 +196,24 @@ Reason not selected:
 
 ADR-009の決定に反するため。
 
+### Option D: datamartに格付け・コースの列を加える（Amendment 1）
+
+Summary:
+
+`races.parquet`に`GradeCD`・`TrackCD`を加え、平地重賞の判定をdatamartから行う。
+
+Advantages:
+
+- 評価時にsnapshotを読まずに済み、datamartだけで部分集合を作れる。
+
+Disadvantages:
+
+- ADR-034の保存形式（format_version）を変え、全期間の再構築（約2.6時間）が要る。
+
+Reason not selected:
+
+人間が、datamartの形式を変えずに評価時に同じsnapshotから読む方法を選んだため（2026-11-10）。
+
 ---
 
 ## Implementation Notes
@@ -183,6 +225,7 @@ ADR-009の決定に反するため。
 - `models/evaluation/yearly_folds.py`: 年単位foldとラベル利用境界の除外・監査。
 - `models/backends/lightgbm.py`: `fit_native_pl_booster`。
 - `models/experiments/pl_evaluation.py`: variant×foldの組立とreport・予測表。
+- `models/serialization/race_subsets.py`: 固定snapshotの`NL_RA_RACE`から評価部分集合を作る純粋な分類。
 - `configuration/pl_evaluation.py`・`configs/pl_evaluation/`・`cli/pl_evaluation.py`: 設定とCLI。
 
 ---
@@ -193,9 +236,11 @@ ADR-009の決定に反するため。
   温度の上下限での有限性、全列挙との一致（頭数3〜6）をunit testで確かめる。
 - 合成データで、学習がsignalを学ぶこと、validのbest scoreが独立に計算したNLLと一致すること、
   testの着順を変えてもスコア・確率・best iteration・温度が変わらないことを確かめる。
+- 合成snapshotとdatamartで、`NL_RA_RACE`のhash照合、testレース欠落の拒否、部分集合の出典と
+  予測列を確かめる。
 - 2006〜2025年の全期間datamartで、test 2016〜2025の10 fold×2 variantを評価し、結果を
-  [着順確率モデルの評価](../experiments/pl-probability-model.md)に記録する。この結果は中央競馬10場の
-  全競走を対象にした研究評価であり、ADR-009 Validation 2が定めるJRA平地重賞の評価は別Issue候補である。
+  [着順確率モデルの評価](../experiments/pl-probability-model.md)に記録する。基本評価は中央競馬10場の
+  全競走、追加の部分集合評価はADR-009 Validation 2のJRA平地重賞を対象とする。
 
 ---
 
@@ -207,6 +252,7 @@ ADR-009の決定に反するため。
 | 市場列を含むvariantが市場を写すだけになる | 市場超過の解釈を誤る | 市場列を除くvariantと並べて報告する |
 | 保留レース（同着・取消など）が評価母集団の外 | 結果が通常レースに限られる | 件数をdatamartの`held_races.json`で確認できる |
 | $q_i$がfreeze時点のオッズで確定オッズではない | 購入判断の評価とずれる | オッズ変動の補正は#35で扱う |
+| 平地重賞の判定に使う`GradeCD`・`TrackCD`はsnapshotの最終版の値で、freeze時点の値であることは確かめていない | 部分集合の選択がずれる可能性がある | 選択にだけ使い特徴量には使わない。重賞の格付け・コースは出走前に決まり後から変わらない前提を記録する |
 
 ---
 
@@ -255,3 +301,4 @@ ADR-009の決定に反するため。
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-09 | Accepted | top-3 PLの微分・年単位fold・ラベル境界・温度校正・市場との比較の手順を決定 |
+| 2026-11-10 | Accepted | Amendment 1: 固定snapshotの`NL_RA_RACE`による平地重賞（GradeCD A・B・C × TrackCD 10〜24）の部分集合評価を追加 |

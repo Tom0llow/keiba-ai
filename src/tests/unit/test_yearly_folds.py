@@ -8,13 +8,14 @@ import numpy as np
 import pytest
 
 from models.dataset.race_arrays import RaceArrays
-from models.evaluation.yearly_folds import make_yearly_folds, plan_yearly_folds
+from models.evaluation.yearly_folds import plan_yearly_folds
 
 
 def test_yearly_folds_purge_labels_at_or_after_the_next_split_freeze() -> None:
     arrays = _yearly_arrays()
 
-    (fold,) = make_yearly_folds(arrays, train_start_year=2020, test_years=[2023])
+    (plan,) = plan_yearly_folds(arrays, train_start_year=2020, test_years=[2023])
+    fold = plan.materialize(arrays)
 
     assert fold.train.race_ids == ("race-2020",)
     assert fold.valid.race_ids == ("race-2022-keep",)
@@ -31,30 +32,29 @@ def test_plans_hold_indexes_and_materialize_to_the_same_folds() -> None:
     arrays = _yearly_arrays()
 
     (plan,) = plan_yearly_folds(arrays, train_start_year=2020, test_years=[2023])
-    (fold,) = make_yearly_folds(arrays, train_start_year=2020, test_years=[2023])
     materialized = plan.materialize(arrays)
 
     assert (plan.train_races, plan.valid_races, plan.test_races) == ((0,), (2,), (4,))
-    assert plan.audit == fold.audit
-    assert materialized.train.race_ids == fold.train.race_ids
-    assert materialized.valid.race_ids == fold.valid.race_ids
-    assert materialized.test.race_ids == fold.test.race_ids
-    np.testing.assert_array_equal(materialized.train.features, fold.train.features)
+    assert materialized.audit == plan.audit
+    assert materialized.train.race_ids == ("race-2020",)
+    assert materialized.valid.race_ids == ("race-2022-keep",)
+    assert materialized.test.race_ids == ("race-2023",)
+    np.testing.assert_array_equal(materialized.train.features, arrays.features[:3])
 
 
 def test_yearly_folds_reject_invalid_years_and_empty_splits() -> None:
     arrays = _yearly_arrays()
 
     with pytest.raises(ValueError, match="strictly increasing"):
-        make_yearly_folds(arrays, train_start_year=2020, test_years=[2023, 2023])
+        plan_yearly_folds(arrays, train_start_year=2020, test_years=[2023, 2023])
     with pytest.raises(ValueError, match="not present"):
-        make_yearly_folds(arrays, train_start_year=2020, test_years=[2024])
+        plan_yearly_folds(arrays, train_start_year=2020, test_years=[2024])
     with pytest.raises(ValueError, match="at most"):
-        make_yearly_folds(arrays, train_start_year=2022, test_years=[2023])
+        plan_yearly_folds(arrays, train_start_year=2022, test_years=[2023])
     with pytest.raises(ValueError, match="train_start_year 2019 is not present"):
-        make_yearly_folds(arrays, train_start_year=2019, test_years=[2023])
+        plan_yearly_folds(arrays, train_start_year=2019, test_years=[2023])
     with pytest.raises(ValueError, match="train after label purge"):
-        make_yearly_folds(arrays.subset([1, 2, 3, 4]), train_start_year=2021, test_years=[2023])
+        plan_yearly_folds(arrays.subset([1, 2, 3, 4]), train_start_year=2021, test_years=[2023])
 
 
 def _yearly_arrays() -> RaceArrays:

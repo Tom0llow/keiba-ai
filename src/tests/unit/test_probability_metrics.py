@@ -166,6 +166,18 @@ def test_odds_calibration_requires_first_band_to_include_minimum_jra_odds() -> N
         )
 
 
+def test_odds_calibration_requires_model_probabilities_for_every_layout_row() -> None:
+    with pytest.raises(ValueError, match="expected length"):
+        odds_calibration_table(
+            np.array([2.0, 3.0, 6.0]),
+            np.array([0.6, 0.3]),
+            np.array([0.5, 1 / 3, 1 / 6]),
+            np.array([2, 1, 3], dtype=np.int64),
+            RaceLayout((3,)),
+            [1.0, 3.0],
+        )
+
+
 def test_paired_bootstrap_is_deterministic_and_uses_the_documented_conclusions() -> None:
     model_better = paired_bootstrap_comparison([0.0, 0.0], [1.0, 1.0], resamples=100, seed=7)
     market_better = paired_bootstrap_comparison([1.0, 1.0], [0.0, 0.0], resamples=100, seed=7)

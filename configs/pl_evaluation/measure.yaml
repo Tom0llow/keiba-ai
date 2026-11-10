@@ -2,7 +2,8 @@ defaults:
   - evaluate
   - _self_
 # Full-period profile: train from 2006, test 2016-2025 (valid is the year before each test year).
-# Pass datamart_path and datamart_manifest_sha256 with --override.
+# Pass processed_root, datamart_path and datamart_manifest_sha256 with --override.
+processed_root: ???
 train_start_year: 2006
 test_years: [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
 variants:

@@ -15,6 +15,7 @@ from omegaconf import OmegaConf
 _KEYS = {
     "datamart_path",
     "datamart_manifest_sha256",
+    "processed_root",
     "train_start_year",
     "test_years",
     "variants",
@@ -46,6 +47,8 @@ def load_pl_evaluation_config(
     values = cast(dict[str, object], raw)
     if not isinstance(values["datamart_path"], str) or not values["datamart_path"]:
         raise ValueError("datamart_path must be a nonempty string")
+    if not isinstance(values["processed_root"], str) or not values["processed_root"]:
+        raise ValueError("processed_root must be a nonempty string")
     digest = values["datamart_manifest_sha256"]
     if not isinstance(digest, str) or re.fullmatch(r"[0-9a-f]{64}", digest) is None:
         raise ValueError("datamart_manifest_sha256 must be a lowercase SHA-256 hex digest")

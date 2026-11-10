@@ -245,7 +245,7 @@ ADR-034の参考datamartは、特徴量中間表の結合とは別の種類のda
 | make_features/generation/observations.py | `CalculationContext`の取得口（窓・騎手・調教師・親・調教・基準集合・事前率・日付で共有する値）。既定の実装は対象ごとの参考経路と同じ値を返す。 |
 | make_features/reference_snapshot.py | 対象1レースの正規化`normalize_reference_target`、履歴・血統・ラベルの正規化。既存の`normalize_reference_input`と共有する。 |
 | models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。I/Oなし。 |
-| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。21群の再計算はしない。`models`をimportしない。 |
+| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。指定年の`race_id`だけをhash照合して読む軽い読込口（`read_reference_datamart_race_ids`）。21群の再計算はしない。`models`をimportしない。 |
 | data/storage/directory_publisher.py | 出力と同じ親のstagingへ書き、完成後にrenameで公開し、失敗時にstagingを削除する。 |
 | data/loader/fixed_snapshot.py / reference_input.py | 表の事前のhash、年・日付の期間読込、O1/O2のfooterを1年の間使い回す読込口。 |
 
@@ -302,7 +302,9 @@ training.jsonとMLflowへその値と学習結果出典・保証区分を保存�
 両方より後を要求する。旧入力/成果物はラベル時点未保証を明示する。新列もnative形式番号3を維持するが旧コードでは読めない。
 
 ADR-035のtop-3 Plackett–Luce（PL）の評価経路は、参考datamartから年単位の拡大型foldで着順確率を学習・校正し、
-同時点の市場確率と比較する。既存のLambdaRankの学習・予測・保存形式とは独立で、PLモデルは永続化しない。
+同時点の市場確率と比較する。固定snapshotの`NL_RA_RACE`から、GradeCD A/B/CかつTrackCD 10〜24の
+`jra_flat_graded_stakes_v1`部分集合も判定し、foldごと・pooledで別集計する。既存のLambdaRankの学習・予測・
+保存形式とは独立で、PLモデルは永続化しない。
 
 | 所有者 | 責務 |
 | --- | --- |
@@ -310,6 +312,7 @@ ADR-035のtop-3 Plackett–Luce（PL）の評価経路は、参考datamartから
 | probability/calibration.py | validのtop-3 PLのレース平均NLLを最小にする単一の温度（黄金分割）。 |
 | evaluation/probability_metrics.py | レース単位の確率指標、市場完全レースの$q_i$、確率帯・オッズ帯の校正表（馬の等重み）、レース単位の対応ありbootstrap。 |
 | dataset/race_arrays.py / serialization/race_arrays.py | numpyの`RaceArrays`の不変条件と部分集合、datamartの`pa.Table`からの列単位の変換。 |
+| serialization/race_subsets.py | 固定snapshotの`NL_RA_RACE`のGradeCD・TrackCDから評価部分集合のrace_id集合を作る純粋な分類。 |
 | evaluation/yearly_folds.py | train〜Y−2・valid Y−1・test Yのfold、次のsplitの最初のfreeze以後に結果が使えるレースの除外と監査。 |
 | backends/lightgbm.py | `fit_native_pl_booster`: callable objectiveとvalidのfeval・early stoppingによる`lightgbm.train`。予約parametersと`gbdt`以外を拒否する。 |
 | experiments/pl_evaluation.py | variant×foldの学習・温度推定・testの確率と指標、市場（連勝式はHarville展開）との比較、report・予測表の組立。I/Oなし。 |
@@ -344,9 +347,12 @@ CLIは出力先がいずれかの入力と同じファイルを指す場合、�
 `--output`は存在しない新しいパスで、親が存在し、processed rootの外にあることを要求する。進捗はstderr、
 公開後の要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130とし、どちらでもstagingを残さない。
 `model evaluate-pl`はcli/pl_evaluation.pyが、configuration/pl_evaluation.pyで合成した`configs/pl_evaluation/`の
-設定を読み、manifestのSHA-256で固定した参考datamartを`read_reference_datamart`で検証して読み、ADR-035の評価を
-実行する。`report.json`と`predictions.parquet`を`publish_directory`で新しいディレクトリへ公開する。
-helpとimportは設定・datamart・LightGBMを読まない。進捗・要約・終了コードは`datamart build-reference`と同じ規則である。
+設定と`processed_root`を読み、datamart manifestの`snapshot_id`で固定snapshotの`NL_RA_RACE`を期間・venue限定で
+読み、表hashを照合する。設定・fold年・variantを検査した後、make_datamart/tables/reference.pyの
+`read_reference_datamart_race_ids`でtest年の`races.parquet`をmanifestのSHA-256で照合して`race_id`列だけを先に読み、
+snapshotに無いtestレースを拒否し、datamartに無い平地重賞の件数をtest年ごとに記録する。その後、manifestのSHA-256で固定した参考datamartを`read_reference_datamart`で検証して読み、
+ADR-035の評価を実行する。`report.json`と`predictions.parquet`を`publish_directory`で新しいディレクトリへ公開する。
+helpとimportは設定・datamart・snapshot・LightGBMを読まない。進捗・要約・終了コードは`datamart build-reference`と同じ規則である。
 
 ## 進化時の制約
 

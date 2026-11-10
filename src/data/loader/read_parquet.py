@@ -1,15 +1,18 @@
 """Read Parquet files and bounded batches without storage-version policy."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Sequence
 from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 
-def read_parquet(path: str | Path) -> pa.Table:
-    """Read the Arrow table and metadata from an explicit Parquet path."""
-    return pq.read_table(Path(path))
+def read_parquet(path: str | Path, *, columns: Sequence[str] | None = None) -> pa.Table:
+    """Read the Arrow table and metadata from an explicit Parquet path.
+
+    ``columns`` optionally projects the read to the named columns.
+    """
+    return pq.read_table(Path(path), columns=None if columns is None else list(columns))
 
 
 def read_parquet_metadata(path: Path) -> pq.FileMetaData:
