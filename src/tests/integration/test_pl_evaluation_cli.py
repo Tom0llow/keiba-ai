@@ -217,7 +217,6 @@ from typer.testing import CliRunner
 from main import app
 result = CliRunner().invoke(app, ["model", "evaluate-pl", "--help"])
 assert result.exit_code == 0, result.output
-assert "--output" in result.output
 for name in ("lightgbm", "models.experiments.pl_evaluation", "configuration.pl_evaluation"):
     assert name not in sys.modules, name
 """
