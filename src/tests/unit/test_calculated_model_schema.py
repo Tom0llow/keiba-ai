@@ -138,6 +138,59 @@ def test_closed_numeric_columns_enumerate_every_dynamic_family_in_contract_order
     assert all(resolve_numeric_column(column.name, semantic) == column for column in columns)
 
 
+_METRIC_UNITS = {
+    "elapsed_sec": "seconds",
+    "velocity_mps": "metres_per_second",
+    "last3f_sec": "seconds",
+    "finish_relative": "fraction",
+    "condition_time_advantage": "dimensionless",
+}
+_LAG_FAMILIES = (
+    "recent_performance__past_finish",
+    "past_racing_ability__past_velocity_mps",
+    "running_style_and_position__past_corner4_relative",
+    "past_lap_and_running_style__past_pace_velocity_gap_mps",
+)
+
+
+@pytest.mark.parametrize("lag_count", [1, 2, 3])
+@pytest.mark.parametrize("metric", sorted(_METRIC_UNITS))
+def test_closed_numeric_columns_follow_lag_count_and_metric(lag_count: int, metric: str) -> None:
+    columns = closed_numeric_columns({"metric": metric, "lag_count": lag_count})
+    names = [column.name for column in columns]
+    # 18 fixed columns, two metric-dependent columns, then lag_count per lag family.
+    assert len(columns) == 18 + 2 + 4 * lag_count
+    assert names[18] == f"recent_stability__past_{metric}_mean"
+    assert names[19] == f"within_race_relative__relative_{metric}_rank"
+    assert columns[18].unit == _METRIC_UNITS[metric]
+    assert columns[19].unit == "rank"
+    assert names[20:] == [
+        f"{family}_lag{lag}" for family in _LAG_FAMILIES for lag in range(1, lag_count + 1)
+    ]
+    assert len(set(names)) == len(names)
+    settings = {"metric": metric, "lag_count": lag_count}
+    assert all(
+        resolve_numeric_column(name, settings) == column
+        for name, column in zip(names, columns, strict=True)
+    )
+
+
+@pytest.mark.parametrize(
+    "settings",
+    [
+        {"metric": "unknown_metric", "lag_count": 4},
+        {"metric": "elapsed_sec", "lag_count": 0},
+        {"metric": "elapsed_sec", "lag_count": True},
+        {"metric": "elapsed_sec", "lag_count": "4"},
+    ],
+)
+def test_closed_numeric_columns_reject_unsupported_metric_or_lag_count(
+    settings: dict[str, object],
+) -> None:
+    with pytest.raises(ValueError, match="supported metric and positive lag_count"):
+        closed_numeric_columns(settings)
+
+
 def test_prepare_cli_rejects_a_dangling_symlink_before_loading_or_writing() -> None:
     with (
         patch.object(Path, "exists", return_value=False),

@@ -27,9 +27,10 @@ from make_datamart.tables.reference import (
     read_reference_datamart_manifest,
     read_reference_prediction_features,
 )
+from make_features import market_characteristics, opponent_pagerank
 from make_features.catalog.loader import load_feature_definitions
 from make_features.catalog.registry import FeatureRegistry, create_feature_registry
-from make_features.contracts.observations import ObservationInput, ReferenceEvidence
+from make_features.contracts.observations import Coverage, ObservationInput, ReferenceEvidence
 from make_features.generation.chronological import (
     ChronologicalHistory,
     ChronologicalInvariantError,
@@ -46,6 +47,7 @@ from make_features.reference_raw import (
     WC_COLUMNS,
     result_boundary,
 )
+from make_features.reference_snapshot import reference_pedigree
 from models.dataset.calculated import closed_numeric_columns
 from models.serialization.reference import prepare_reference_payload
 from models.serialization.reference_datamart import (
@@ -1389,3 +1391,192 @@ def test_prediction_reader_rejects_holds_outside_their_role_and_date(
     _rewrite_held(path, change)
     with pytest.raises(ValueError, match="held race role, stage or date"):
         read_reference_prediction_features(path, expected_columns=builder.columns)
+
+
+# Issue #45: build-time invariants and reader checks of the reference datamart.
+
+
+def _with_coverage(change: Callable[[tuple[Coverage, ...]], tuple[Coverage, ...]]) -> object:
+    original = shared_context
+
+    def patched(source: ObservationInput, **kwargs: object) -> object:
+        return original(replace(source, coverage=change(source.coverage)), **kwargs)  # type: ignore[arg-type]
+
+    return patch("models.serialization.reference_datamart.shared_context", patched)
+
+
+def _replace_kind(
+    target_kind: str, **changes: object
+) -> Callable[[tuple[Coverage, ...]], tuple[Coverage, ...]]:
+    def change(coverage: tuple[Coverage, ...]) -> tuple[Coverage, ...]:
+        return tuple(
+            replace(item, **changes) if item.kind == target_kind else item  # type: ignore[arg-type]
+            for item in coverage
+        )
+
+    return change
+
+
+def _copied_population(coverage: tuple[Coverage, ...]) -> tuple[Coverage, ...]:
+    # An equal but distinct population object breaks the identity the shared views rely on.
+    return tuple(
+        replace(item, horse_ids=tuple(list(item.horse_ids))) if item.kind == "history" else item
+        for item in coverage
+    )
+
+
+def _later_history_start(coverage: tuple[Coverage, ...]) -> tuple[Coverage, ...]:
+    return tuple(
+        replace(item, start_at=item.start_at + timedelta(days=1))
+        if item.kind == "history"
+        else item
+        for item in coverage
+    )
+
+
+def _inverted_market_interval(coverage: tuple[Coverage, ...]) -> tuple[Coverage, ...]:
+    return tuple(
+        replace(item, start_at=item.end_at + timedelta(seconds=1))
+        if item.kind == "market"
+        else item
+        for item in coverage
+    )
+
+
+@pytest.mark.parametrize("labeled", [True, False], ids=["labeled", "label_free"])
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (_replace_kind("market", kind="unknown"), "unsupported coverage kind"),
+        (_inverted_market_interval, "coverage scope or interval"),
+        (_later_history_start, "must span history_start"),
+        (_copied_population, "complete required horse population"),
+    ],
+    ids=["kind", "interval", "span", "population"],
+)
+def test_coverage_violations_fail_the_whole_build(
+    labeled: bool,
+    change: Callable[[tuple[Coverage, ...]], tuple[Coverage, ...]],
+    message: str,
+) -> None:
+    raw = rich_raw_input() if labeled else _rich_with_late_markets()[0]
+
+    def build() -> object:
+        return _build(raw) if labeled else _label_free(raw, END)
+
+    with (
+        _with_coverage(change),  # type: ignore[attr-defined]
+        pytest.raises(ChronologicalInvariantError, match=message),
+    ):
+        build()
+
+
+def test_readers_reject_a_closed_column_group_without_its_availability_clock(
+    tmp_path: Path,
+) -> None:
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    datamart, _, builder = _write(tmp_path / "a")
+    prediction, _, _ = _write_prediction(tmp_path / "b")
+    for path, reader in (
+        (datamart, read_reference_datamart),
+        (prediction, read_reference_prediction_features),
+    ):
+        _rewrite_manifest(
+            path,
+            lambda manifest: cast(list[str], manifest["available_at_groups"]).remove(
+                "market_characteristics"
+            ),
+        )
+        with pytest.raises(ValueError, match="miss a closed column group"):
+            reader(path, expected_columns=builder.columns)
+
+
+def test_a_date_shared_pagerank_failure_holds_only_that_dates_targets() -> None:
+    _, baseline = _build(rich_raw_input())
+    before = _rows(baseline)
+    failing_day = RICH_TARGET_DAYS[1]
+    original = opponent_pagerank._fit
+
+    def fail_on_one_date(context: object) -> object:
+        start = cast(datetime, context.source.card.scheduled_start_at)  # type: ignore[attr-defined]
+        if start.astimezone(JST).date() == failing_day:
+            raise ValueError("PageRank did not converge")
+        return original(context)  # type: ignore[arg-type]
+
+    with patch.object(opponent_pagerank, "_fit", fail_on_one_date):
+        _, outputs = _build(rich_raw_input())
+    stamp = f"{failing_day:%Y%m%d}"
+    calculation = {
+        race_id: reason
+        for race_id, (stage, reason) in _target_holds(outputs).items()
+        if stage == "calculation"
+    }
+    assert set(calculation) == {
+        race_id for race_id in {key[0] for key in before} if race_id.startswith(stamp)
+    }
+    assert all("opponent_pagerank: PageRank did not converge" in r for r in calculation.values())
+    after = _rows(outputs)
+    assert after == {key: row for key, row in before.items() if not key[0].startswith(stamp)}
+    assert {key[0][:8] for key in after} == {
+        f"{day:%Y%m%d}" for day in RICH_TARGET_DAYS if day != failing_day
+    }
+
+
+def test_the_anchor_market_stays_when_a_quote_arrives_at_freeze() -> None:
+    chosen: list[tuple[str, datetime, str]] = []
+    original = market_characteristics._market_at
+
+    def spy(context: object, anchor: datetime) -> object:
+        market = original(context, anchor)  # type: ignore[arg-type]
+        race_id = cast(str, context.source.card.race_id)  # type: ignore[attr-defined]
+        chosen.append((race_id, anchor, market.evidence.observation_id))
+        return market
+
+    target = _race(RICH_TARGET_DAYS[2], "09")
+    with patch.object(market_characteristics, "_market_at", spy):
+        _build(rich_raw_input())
+    baseline = _selections(chosen, target)
+    chosen.clear()
+    raw = rich_raw_input()
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    # 14:55 is the freeze of the 15:00 race; its anchor (14:45) still sees only 14:44.
+    o1, o2 = markets(RICH_TARGET_DAYS[2], clock="1455", total=2500, race_number="09")
+    o1["OddsTansyoInfo0Odds"] = "0123"
+    tables["o1"].append(o1)
+    tables["o2"].append(o2)
+    with patch.object(market_characteristics, "_market_at", spy):
+        _build(raw)
+    changed = _selections(chosen, target)
+    anchor = datetime(2027, 1, 3, 14, 45, tzinfo=JST)
+    freeze = datetime(2027, 1, 3, 14, 55, tzinfo=JST)
+    # Every horse of the race reads the same two anchors.
+    assert set(baseline) == set(changed) == {anchor, freeze}
+    assert all(len(ids) == 1 for ids in (*baseline.values(), *changed.values()))
+    assert changed[anchor] == baseline[anchor]
+    assert changed[freeze] != baseline[freeze]
+
+
+def _selections(chosen: list[tuple[str, datetime, str]], race_id: str) -> dict[datetime, set[str]]:
+    result: dict[datetime, set[str]] = {}
+    for identity, anchor, observation in chosen:
+        if identity == race_id:
+            result.setdefault(anchor, set()).add(observation)
+    return result
+
+
+def test_pedigree_evidence_usable_after_freeze_fails_the_whole_build() -> None:
+    original = reference_pedigree
+
+    def late(horse: str, rows: object, *, start: datetime) -> object:
+        pedigree = original(horse, rows, start=start)  # type: ignore[arg-type]
+        evidence = pedigree.evidence
+        assert isinstance(evidence, ReferenceEvidence)
+        shifted = replace(evidence, usable_after=datetime(2030, 1, 1, tzinfo=JST))
+        return replace(pedigree, evidence=shifted)
+
+    with (
+        patch("models.serialization.reference_datamart.reference_pedigree", late),
+        pytest.raises(ChronologicalInvariantError, match="pedigree"),
+    ):
+        _build(rich_raw_input())

@@ -365,6 +365,9 @@ def _read(
         or len(set(groups)) != len(groups)
     ):
         raise ValueError("reference datamart available_at groups are invalid")
+    # Every closed numeric column needs its group's availability clock in the rows.
+    if {column.group for column in columns} - set(cast(list[str], groups)):
+        raise ValueError("reference datamart available_at groups miss a closed column group")
     start, end = _target_period(manifest["target_period"])
     _validate_held(root, manifest["held_races"], layout, None if layout.labeled else start)
     delay: int | None = None

@@ -255,8 +255,8 @@ ADR-034の参考datamartは、特徴量中間表の結合とは別の種類のda
 半減期がnullのときのPageRankを共有する。freezeの時刻に依存する調教の窓・EWMA・市場は対象ごとに計算する。
 依存は`available_at`と`event_at`の最大値を与えるevidenceに要約し、漏洩は見方ごとの不変条件で防ぐ。
 計算器の`ValueError`はそのレースを`stage=calculation`、対象ごとのcontextの検証の`ValueError`は
-`stage=target_pre_freeze`で保留し、履歴・調教・evidence登録表の不変条件の違反では構築全体を失敗させる。
-読込APIはhash・契約・列一覧・行の時点・ラベル境界・着順の連続性を検証する。
+`stage=target_pre_freeze`で保留し、履歴・調教・evidence登録表の不変条件の違反と、coverageの宣言の違反（未対応の種別・区間・範囲・母集団の同一性。ADR-034 Decision 6の「coverageの要求の不足」）では構築全体を失敗させる。
+読込APIはhash・契約・列一覧・閉じた数値列の全群の`available_at`・行の時点・ラベル境界・着順の連続性を検証する。
 
 ## モデル
 
