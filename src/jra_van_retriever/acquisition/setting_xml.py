@@ -133,6 +133,52 @@ def _set_race_key(
         _set_required_text(key, "RaceNum", race_key.race_number)
 
 
+def verify_realtime_race_key(
+    setting: Path, data_specs: frozenset[str], race_key: RaceKeyLike
+) -> None:
+    """Check that a generated setting enables the requested DataSpecs for the target race.
+
+    Only realtime updates and the requested DataSpecs are checked; other sections are left
+    to the builder.
+
+    Raises:
+        ValueError: If realtime updates, a requested DataSpec, or its race key
+            differ from the requested values.
+        xml.etree.ElementTree.ParseError: If the setting is not well-formed XML.
+        OSError: If the setting cannot be read.
+    """
+    details = _required_child(ET.parse(setting).getroot(), "Details")
+    realtime = _required_child(details, "JVRealTimeDataUpdateSetting")
+    if realtime.findtext("IsEnabled") != "true":
+        raise ValueError("generated setting does not enable realtime updates")
+    expected = {
+        "KaisaiDate": race_key.race_date.isoformat() + "T00:00:00",
+        "JyoCD": race_key.jyo_code,
+        "Kaiji": race_key.kaiji,
+        "Nichiji": race_key.nichiji,
+        "RaceNum": race_key.race_number,
+    }
+    found: set[str] = set()
+    for data_spec_setting in _required_child(realtime, "DataSpecSettings").findall(
+        "JVDataSpecSetting"
+    ):
+        data_spec = data_spec_setting.findtext("DataSpec")
+        if data_spec not in data_specs:
+            continue
+        found.add(data_spec)
+        if data_spec_setting.findtext("IsEnabled") != "true":
+            raise ValueError(f"generated setting does not enable {data_spec}")
+        key = data_spec_setting.find("JVRaceKey")
+        if key is None:
+            raise ValueError(f"{data_spec} setting must contain a JVRaceKey")
+        for tag, value in expected.items():
+            if key.findtext(tag) != value:
+                raise ValueError(f"generated {data_spec} JVRaceKey.{tag} does not match the race")
+    missing = data_specs - found
+    if missing:
+        raise ValueError(f"setting is missing data specs: {', '.join(sorted(missing))}")
+
+
 def _required_child(parent: ET.Element, tag: str) -> ET.Element:
     element = parent.find(tag)
     if element is None:

@@ -3,6 +3,7 @@
 import sqlite3
 import subprocess
 import sys
+import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from unittest.mock import Mock
@@ -17,13 +18,17 @@ from jra_van_retriever.acquisition.jvlink_runner import (
     JVLinkToSQLiteError,
 )
 from jra_van_retriever.acquisition.odds_archive import OddsArchive
+from jra_van_retriever.acquisition.setting_xml import JVLinkSettingBuilder
 from jra_van_retriever.config.profiles import (
     HistoricalOddsBatch,
     JVLinkProfile,
     RaceDayOddsProfile,
 )
 from jra_van_retriever.progress.raw_observation import read_raw_snapshot
-from jra_van_retriever.workflows.race_day_odds import RaceDayOddsRetriever
+from jra_van_retriever.workflows.race_day_odds import (
+    RaceDayOddsRetriever,
+    RaceDayOddsSetupError,
+)
 
 RACE_DATE = date(2026, 11, 15)
 SPECS = frozenset({"0B31", "0B32", "0B33", "0B34", "0B35", "0B36"})
@@ -69,6 +74,8 @@ class FakeRunner:
         self.observed_running: list[set[str]] = []
         self.observed_staging: list[int] = []
         self.fail_calls: set[int] = set()
+        self.failure_message = "JV-Link failed"
+        self.failure_returncode: int | None = 1
         self.assert_not_running = Mock()
 
     def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
@@ -96,7 +103,10 @@ class FakeRunner:
         _stage(self.database, race, f"1115{self.clock.now.astimezone(UTC):%H%M}")
         self.clock.now += timedelta(seconds=2)
         if call in self.fail_calls:
-            raise JVLinkToSQLiteError("JV-Link failed", returncode=1)
+            raise JVLinkToSQLiteError(
+                self.failure_message,
+                returncode=self.failure_returncode,
+            )
         return JVLinkExecutionResult({}, process_returncode=0)
 
 
@@ -162,8 +172,18 @@ def _retriever(
         _create_raw(database)
     clock = FakeClock(start)
     runner = FakeRunner(database, clock)
+    seed = tmp_path / "seed.xml"
+    if not seed.exists():
+        _write_seed(seed)
+    real_builder = JVLinkSettingBuilder(seed)
     builder = Mock()
-    builder.build.side_effect = lambda profile, destination, **kwargs: destination
+    builder.observed_log_rows = []
+
+    def build(profile: RaceDayOddsProfile, destination: Path, **kwargs: object) -> Path:
+        builder.observed_log_rows.append(_log_rows(database))
+        return real_builder.build(profile, destination, **kwargs)  # type: ignore[arg-type]
+
+    builder.build.side_effect = build
     retriever = RaceDayOddsRetriever(
         runner,  # type: ignore[arg-type]
         builder,
@@ -176,6 +196,43 @@ def _retriever(
         sleeper=clock.sleep,
     )
     return retriever, runner, clock, builder, database
+
+
+def _write_seed(path: Path, *, race_key: bool = True) -> None:
+    key = (
+        "<JVRaceKey><KaisaiDate>2026-01-01T00:00:00</KaisaiDate><JyoCD>01</JyoCD>"
+        "<Kaiji>01</Kaiji><Nichiji>01</Nichiji><RaceNum>01</RaceNum></JVRaceKey>"
+        if race_key
+        else ""
+    )
+    realtime = "".join(
+        f"<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>{spec}</DataSpec>{key}"
+        "</JVDataSpecSetting>"
+        for spec in sorted(SPECS)
+    )
+    path.write_text(
+        '<?xml version="1.0" encoding="utf-8"?><JVLinkToSQLiteSetting><Details>'
+        "<JVNormalUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        "</DataSpecSettings></JVNormalUpdateSetting>"
+        "<JVSetupDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        "</DataSpecSettings></JVSetupDataUpdateSetting>"
+        "<JVRealTimeDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        f"{realtime}</DataSpecSettings></JVRealTimeDataUpdateSetting>"
+        "</Details></JVLinkToSQLiteSetting>",
+        encoding="utf-8",
+    )
+
+
+def _log_rows(database: Path) -> int:
+    with sqlite3.connect(database) as connection:
+        if (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = 'ARCHIVE_CAPTURE_LOG'"
+            ).fetchone()
+            is None
+        ):
+            return 0
+        return int(connection.execute("SELECT COUNT(*) FROM ARCHIVE_CAPTURE_LOG").fetchone()[0])
 
 
 def _statuses(database: Path) -> list[tuple[str, str, str]]:
@@ -208,12 +265,15 @@ def test_captures_wait_for_each_planned_time_and_run_in_order(tmp_path: Path) ->
         ("12", "2", "archived"),
     ]
     assert clock.sleeps[0] == pytest.approx(50 * 60)
+    # The first build is the startup check; each capture then builds before it is logged.
     assert [call.kwargs["race_key"].race_number for call in builder.build.call_args_list] == [
+        "11",
         "11",
         "11",
         "12",
         "12",
     ]
+    assert builder.observed_log_rows == [0, 0, 6, 12, 18]
     assert builder.build.call_args_list[0].args[0].realtime_data_specs == SPECS
     assert runner.observed_running == [{"running"}] * 4
     assert runner.observed_staging == [0, 0, 0, 0]
@@ -296,10 +356,22 @@ def test_late_captures_are_skipped_without_running_jvlink(tmp_path: Path) -> Non
     assert not result.failed
 
 
-def test_jvlink_failure_is_recorded_and_later_captures_continue(tmp_path: Path) -> None:
+@pytest.mark.parametrize(
+    ("message", "process_returncode"),
+    [
+        ("JV-Link failed", 1),
+        ("JVLinkToSQLite timed out after 120 seconds", None),
+    ],
+    ids=["process_failure", "timeout"],
+)
+def test_jvlink_failure_is_recorded_and_later_captures_continue(
+    tmp_path: Path, message: str, process_returncode: int | None
+) -> None:
     start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
     retriever, runner, _, _, database = _retriever(tmp_path, start)
     runner.fail_calls = {0}
+    runner.failure_message = message
+    runner.failure_returncode = process_returncode
 
     result = retriever.retrieve(RACE_DATE)
 
@@ -314,7 +386,17 @@ def test_jvlink_failure_is_recorded_and_later_captures_continue(tmp_path: Path) 
         reason = connection.execute(
             "SELECT reason FROM ARCHIVE_CAPTURE_LOG WHERE status = 'failed' AND data_spec='0B36'"
         ).fetchone()[0]
+        running = connection.execute(
+            "SELECT COUNT(*) FROM ARCHIVE_CAPTURE_LOG WHERE status = 'running'"
+        ).fetchone()[0]
+        returncode = connection.execute(
+            "SELECT process_returncode FROM ARCHIVE_CAPTURE_LOG "
+            "WHERE status = 'failed' AND data_spec = '0B36'"
+        ).fetchone()[0]
     assert str(reason).startswith("jvlink_error: quarantined")
+    assert running == 0
+    # The capture log stores every column as TEXT.
+    assert returncode == (None if process_returncode is None else str(process_returncode))
     assert result.summary["failed"] == 6
     assert result.failed
 
@@ -339,7 +421,13 @@ def test_persistence_failure_after_begin_stops_and_recovery_releases_the_lock(
     ledger = tmp_path / "runtime" / "historical-odds-progress.db"
     for allow_unresolved in (False, True):
         with (
-            pytest.raises(AcquisitionBlocked, match="race-day odds capture"),
+            pytest.raises(
+                AcquisitionBlocked,
+                match=(
+                    r"unresolved race-day odds capture; "
+                    r"run --retrieve --mode=race-day-odds --recover first"
+                ),
+            ),
             AcquisitionLock(database, ledger, allow_unresolved=allow_unresolved),
         ):
             pytest.fail("unresolved capture accepted")
@@ -491,3 +579,95 @@ def test_existing_historical_archives_are_left_unchanged(tmp_path: Path) -> None
     retriever.retrieve(RACE_DATE)
 
     assert snapshot() == before == [[("r", "1", "2")], [("r", "1", "2")]]
+
+
+@pytest.mark.parametrize("seed_state", ["malformed", "missing_race_key", "missing_file"])
+def test_invalid_setting_stops_before_any_capture_is_recorded(
+    tmp_path: Path, seed_state: str
+) -> None:
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, runner, clock, _, database = _retriever(tmp_path, start)
+    seed = tmp_path / "seed.xml"
+    if seed_state == "malformed":
+        seed.write_text("<JVLinkToSQLiteSetting><Details>", encoding="utf-8")
+    elif seed_state == "missing_race_key":
+        _write_seed(seed, race_key=False)
+    else:
+        seed.unlink()
+
+    with pytest.raises(RaceDayOddsSetupError, match="execution setting is invalid"):
+        retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == []
+    assert clock.sleeps == []
+    assert _log_rows(database) == 0
+
+
+@pytest.mark.parametrize(
+    "error",
+    [ValueError("setting is missing data specs: 0B36"), ET.ParseError("not well-formed")],
+    ids=["value_error", "parse_error"],
+)
+def test_setting_error_during_the_day_records_nothing_and_later_captures_continue(
+    tmp_path: Path, error: Exception
+) -> None:
+    _race_numbers_by_order[:] = ["11", "12", "12"]
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, runner, _, builder, database = _retriever(tmp_path, start)
+    build = builder.build.side_effect
+
+    def fail_second_capture(
+        profile: RaceDayOddsProfile, destination: Path, **kwargs: object
+    ) -> Path:
+        # Call 0 is the startup check, call 1 the first capture, call 2 the second.
+        if builder.build.call_count == 3:
+            raise error
+        return build(profile, destination, **kwargs)  # type: ignore[no-any-return]
+
+    builder.build.side_effect = fail_second_capture
+
+    result = retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "12", "12"]
+    assert _statuses(database) == [
+        ("11", "10", "archived"),
+        ("12", "10", "archived"),
+        ("12", "2", "archived"),
+    ]
+    assert OddsArchive(database).running_capture_specs() == frozenset()
+    failed = result.captures[1]
+    assert (failed.race_key.race_number, failed.offset_minutes) == ("11", 2)
+    assert {(item.status, item.reason) for item in failed.results.values()} == {
+        ("failed", "capture_not_recorded")
+    }
+    assert result.summary["failed"] == 6
+    assert result.summary["archived"] == 18
+
+
+def test_recover_only_marks_unfinished_captures_interrupted_without_capturing(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, _, _, _, database = _retriever(tmp_path, start)
+    archive = retriever._archive
+    archive.finish_capture = Mock(side_effect=sqlite3.OperationalError("disk I/O error"))  # type: ignore[method-assign]
+    retriever.retrieve(RACE_DATE)
+    assert {status for _, _, status in _statuses(database)} == {"running"}
+
+    recovering, runner, clock, builder, _ = _retriever(
+        tmp_path, datetime(2026, 11, 15, 9, 0, tzinfo=UTC)
+    )
+
+    assert recovering.recover() == 6
+    assert recovering.recover() == 0
+    assert runner.calls == []
+    assert clock.sleeps == []
+    builder.build.assert_not_called()
+    runner.assert_not_running.assert_called()
+    assert {status for _, _, status in _statuses(database)} == {"interrupted"}
+    with sqlite3.connect(database) as connection:
+        staged = connection.execute('SELECT COUNT(*) FROM "RT_O6_ODDS_SANRENTAN"').fetchone()[0]
+    assert staged == 0
+    ledger = tmp_path / "runtime" / "historical-odds-progress.db"
+    with AcquisitionLock(database, ledger):
+        pass

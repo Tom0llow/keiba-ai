@@ -9,10 +9,16 @@ from rich.text import Text
 from typer.testing import CliRunner
 
 from domain.race_key import RaceKey
+from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked
+from jra_van_retriever.acquisition.jvlink_runner import JVLinkToSQLiteError
 from jra_van_retriever.acquisition.odds_archive import CaptureResult
 from jra_van_retriever.retriever import JraVanRetriever
 from jra_van_retriever.workflows.historical_odds import WeeklyBatchResult
-from jra_van_retriever.workflows.race_day_odds import CaptureReport, RaceDayOddsRunResult
+from jra_van_retriever.workflows.race_day_odds import (
+    CaptureReport,
+    RaceDayOddsRunResult,
+    RaceDayOddsSetupError,
+)
 from main import app
 
 runner = CliRunner()
@@ -480,6 +486,12 @@ def test_race_day_odds_cli_exits_130_on_interrupt_with_recovery_count() -> None:
         (["--date=2026-11-15", "--jyo=05"], "accepts --date but not"),
         (["--date=2026-11-15", "--race=11"], "accepts --date but not"),
         (["--date=2026-11-15", "--plan-only"], "odds-only options require"),
+        (["--date=2026-11-15", "--data-spec=0B31"], "odds-only options require"),
+        (["--date=2026-11-15", "--confirm-provider-missing"], "odds-only options require"),
+        (["--recover", "--date=2026-11-15"], "--recover does not accept"),
+        (["--recover", "--jyo=05"], "--recover does not accept"),
+        (["--recover", "--race=11"], "--recover does not accept"),
+        (["--recover", "--data-spec=0B31"], "odds-only options require"),
     ],
 )
 @pytest.mark.usefixtures("cli_color_mode")
@@ -508,3 +520,73 @@ def test_race_day_odds_requires_configured_section() -> None:
 
     with pytest.raises(ValueError, match=r"\[race_day_odds\] is required"):
         retriever.retrieve_race_day_odds(date(2026, 11, 15))
+
+
+def test_race_day_odds_recover_only_recovers_and_reports_the_count() -> None:
+    retriever = Mock()
+    retriever.recover_race_day_odds.return_value = 6
+    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--recover"])
+
+    assert result.exit_code == 0
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == {"interrupted": 6}
+    retriever.recover_race_day_odds.assert_called_once_with()
+    retriever.retrieve_race_day_odds.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    ("error", "message"),
+    [
+        (
+            AcquisitionBlocked("another acquisition process\nholds the raw database lock"),
+            "another acquisition process holds the raw database lock",
+        ),
+        (
+            JVLinkToSQLiteError("JVLinkToSQLite is still running"),
+            "JVLinkToSQLite is still running",
+        ),
+    ],
+    ids=["lock_held", "runner_running"],
+)
+def test_race_day_odds_recover_failure_exits_1_with_one_stderr_line(
+    error: Exception, message: str
+) -> None:
+    retriever = Mock()
+    retriever.recover_race_day_odds.side_effect = error
+    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--recover"])
+
+    assert result.exit_code == 1
+    assert result.stdout == ""
+    assert result.stderr == f"race-day-odds recovery failed: {message}\n"
+
+
+def test_race_day_odds_setup_error_exits_1_with_message_and_summary() -> None:
+    def retrieve(race_date: date, *, reporter: object, recovery_reporter: object) -> None:
+        recovery_reporter(2)  # type: ignore[operator]
+        raise RaceDayOddsSetupError("race-day-odds execution setting is invalid: no JVRaceKey")
+
+    retriever = Mock()
+    retriever.retrieve_race_day_odds.side_effect = retrieve
+    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
+
+    assert result.exit_code == 1
+    assert result.stderr == (
+        "race-day-odds setup failed: race-day-odds execution setting is invalid: no JVRaceKey\n"
+    )
+    assert json.loads(result.stdout.strip().splitlines()[-1]) == {
+        "archived": 0,
+        "no_data": 0,
+        "failed": 0,
+        "skipped_late": 0,
+        "interrupted": 2,
+    }
+
+
+def test_race_day_odds_recover_requires_configured_section() -> None:
+    retriever = JraVanRetriever.__new__(JraVanRetriever)
+    retriever._race_day_odds = None
+
+    with pytest.raises(ValueError, match=r"\[race_day_odds\] is required"):
+        retriever.recover_race_day_odds()

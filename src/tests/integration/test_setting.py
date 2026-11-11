@@ -8,7 +8,10 @@ from pathlib import Path
 import pytest
 
 from domain.race_key import RaceKey
-from jra_van_retriever.acquisition.setting_xml import JVLinkSettingBuilder
+from jra_van_retriever.acquisition.setting_xml import (
+    JVLinkSettingBuilder,
+    verify_realtime_race_key,
+)
 from jra_van_retriever.config.profiles import (
     JVLinkConfig,
     JVLinkProfile,
@@ -85,6 +88,76 @@ def test_builder_applies_exclusive_odds_profile_and_race_key(tmp_path: Path) -> 
         assert setting.findtext("JVRaceKey/Kaiji") == "04"
         assert setting.findtext("JVRaceKey/Nichiji") == "07"
         assert setting.findtext("JVRaceKey/RaceNum") == "12"
+
+
+RACE_DAY_SPECS = frozenset({"0B31", "0B32", "0B33", "0B34", "0B35", "0B36"})
+RACE_DAY_KEY = RaceKey(date(2026, 11, 15), "05", "05", "04", "11")
+
+
+def _race_day_setting(tmp_path: Path) -> Path:
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    profile = JVLinkProfile(
+        normal_update=False,
+        setup_update=False,
+        realtime_update=True,
+        normal_data_specs=frozenset(),
+        setup_data_specs=frozenset(),
+        realtime_data_specs=RACE_DAY_SPECS,
+    )
+    return JVLinkSettingBuilder(seed).build(
+        profile, tmp_path / "race-day-odds.xml", race_key=RACE_DAY_KEY
+    )
+
+
+def test_verify_realtime_race_key_accepts_a_generated_race_day_setting(tmp_path: Path) -> None:
+    verify_realtime_race_key(_race_day_setting(tmp_path), RACE_DAY_SPECS, RACE_DAY_KEY)
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("spec_disabled", "does not enable 0B33"),
+        ("realtime_disabled", "does not enable realtime updates"),
+        ("race_mismatch", "JVRaceKey.RaceNum does not match"),
+        ("no_race_key", "0B31 setting must contain a JVRaceKey"),
+        ("spec_missing", "missing data specs: 0B36"),
+    ],
+)
+def test_verify_realtime_race_key_rejects_settings_that_differ_from_the_race(
+    tmp_path: Path, case: str, message: str
+) -> None:
+    setting = _race_day_setting(tmp_path)
+    tree = ET.parse(setting)
+    root = tree.getroot()
+    realtime = _child(root, "Details/JVRealTimeDataUpdateSetting")
+    if case == "spec_disabled":
+        _child(_spec(root, "0B33"), "IsEnabled").text = "false"
+    elif case == "realtime_disabled":
+        _child(realtime, "IsEnabled").text = "false"
+    elif case == "race_mismatch":
+        _child(_spec(root, "0B35"), "JVRaceKey/RaceNum").text = "12"
+    elif case == "no_race_key":
+        _spec(root, "0B31").remove(_child(_spec(root, "0B31"), "JVRaceKey"))
+    else:
+        _child(realtime, "DataSpecSettings").remove(_spec(root, "0B36"))
+    tree.write(setting, encoding="utf-8", xml_declaration=True)
+
+    with pytest.raises(ValueError, match=message):
+        verify_realtime_race_key(setting, RACE_DAY_SPECS, RACE_DAY_KEY)
+
+
+def _child(parent: ET.Element, path: str) -> ET.Element:
+    node = parent.find(path)
+    assert node is not None, path
+    return node
+
+
+def _spec(root: ET.Element, data_spec: str) -> ET.Element:
+    for node in root.iter("JVDataSpecSetting"):
+        if node.findtext("DataSpec") == data_spec:
+            return node
+    raise AssertionError(data_spec)
 
 
 def test_builder_applies_data_spec_specific_setup_start_datetimes(tmp_path: Path) -> None:
@@ -257,6 +330,7 @@ def test_repository_config_loads_race_day_odds_profile() -> None:
     )
     assert config.race_day_odds.offsets_minutes == (30, 10, 5, 2)
     assert config.race_day_odds.late_tolerance_seconds == 60
+    assert config.race_day_odds.execution_timeout_seconds == 120
 
 
 def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> None:
@@ -284,6 +358,11 @@ def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> Non
         ("offsets_minutes = [30, 10, 5, 2]", 'offsets_minutes = ["5"]', "positive integers"),
         ("late_tolerance_seconds = 60", "late_tolerance_seconds = 0", "positive integer"),
         ("late_tolerance_seconds = 60", "", "positive integer"),
+        ("execution_timeout_seconds = 120", "execution_timeout_seconds = 0", "positive integer"),
+        ("execution_timeout_seconds = 120", "execution_timeout_seconds = -1", "positive integer"),
+        ("execution_timeout_seconds = 120", "execution_timeout_seconds = 1.5", "positive integer"),
+        ("execution_timeout_seconds = 120", "execution_timeout_seconds = true", "positive integer"),
+        ("execution_timeout_seconds = 120", "", "positive integer"),
     ],
 )
 def test_config_rejects_invalid_race_day_odds_section(

@@ -8,6 +8,7 @@ import sys
 import tempfile
 import time
 import uuid
+import xml.etree.ElementTree as ET
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
@@ -24,7 +25,10 @@ from jra_van_retriever.acquisition.jvlink_runner import (
     JVLinkToSQLiteRunner,
 )
 from jra_van_retriever.acquisition.odds_archive import CaptureResult, OddsArchive
-from jra_van_retriever.acquisition.setting_xml import JVLinkSettingBuilder
+from jra_van_retriever.acquisition.setting_xml import (
+    JVLinkSettingBuilder,
+    verify_realtime_race_key,
+)
 from jra_van_retriever.config.profiles import RaceDayOddsProfile
 from jra_van_retriever.config.validation import validate_race_day_odds_profile
 from jra_van_retriever.progress.raw_observation import read_race_day_races
@@ -36,6 +40,10 @@ from jra_van_retriever.workflows.race_day_odds_plan import (
 )
 
 _CAPTURE_STATUSES = ("archived", "no_data", "failed", "skipped_late", "interrupted")
+
+
+class RaceDayOddsSetupError(ValueError):
+    """Report a setting error found before the first race-day capture."""
 
 
 @dataclass(frozen=True)
@@ -104,16 +112,16 @@ class RaceDayOddsRetriever:
         recovery_reporter: Callable[[int], None] | None = None,
     ) -> RaceDayOddsRunResult:
         """Recover interrupted work, then execute every planned capture in order."""
-        interrupted = self._recover()
+        interrupted = self.recover()
         if recovery_reporter is not None:
             recovery_reporter(interrupted)
         rows = read_race_day_races(self._database, race_date)
-        plans = plan_captures(rows, race_date, self._profile.offsets_minutes)
+        all_plans = plan_captures(rows, race_date, self._profile.offsets_minutes)
         # A restart (the recovery path) must not re-run or re-log finished captures.
         finished = self._archive.finished_capture_keys((f"{race_date:%Y}", f"{race_date:%m%d}"))
         plans = tuple(
             plan
-            for plan in plans
+            for plan in all_plans
             if (plan.race_key.race_id, str(plan.offset_minutes)) not in finished
         )
         reports: list[CaptureReport] = []
@@ -121,6 +129,7 @@ class RaceDayOddsRetriever:
         summary["interrupted"] = interrupted
         with tempfile.TemporaryDirectory(prefix="keiba-ai-race-day-odds-") as temporary:
             setting_path = Path(temporary) / "race-day-odds.xml"
+            self._verify_setting(setting_path, all_plans[0].race_key)
             for plan in plans:
                 self._wait_until(plan.planned_at)
                 step = self._capture(plan, setting_path)
@@ -133,7 +142,21 @@ class RaceDayOddsRetriever:
                     break
         return RaceDayOddsRunResult(tuple(reports), summary)
 
-    def _recover(self) -> int:
+    def _verify_setting(self, setting_path: Path, race_key: RaceKey) -> None:
+        """Generate and check the execution XML once before any capture is recorded."""
+        try:
+            self._setting_builder.build(self._profile, setting_path, race_key=race_key)
+            verify_realtime_race_key(setting_path, self._specs, race_key)
+        except (OSError, ValueError, ET.ParseError) as exc:
+            raise RaceDayOddsSetupError(
+                f"race-day-odds execution setting is invalid: {exc}"
+            ) from exc
+
+    def recover(self) -> int:
+        """Quarantine staging of unfinished captures and mark them interrupted.
+
+        Returns the number of capture rows marked interrupted.
+        """
         with AcquisitionLock(
             self._database,
             self._ledger_path,
@@ -187,6 +210,12 @@ class RaceDayOddsRetriever:
                         )
                     )
 
+                # A setting error must not leave a running capture that stops the day.
+                self._setting_builder.build(
+                    self._profile,
+                    setting_path,
+                    race_key=plan.race_key,
+                )
                 self._archive.begin_capture(
                     capture_id,
                     plan.race_key,
@@ -207,11 +236,6 @@ class RaceDayOddsRetriever:
                         capture_id, _evidence_reason("preexisting_staging", artifacts)
                     )
                 self._archive.reset_capture_staging(self._specs)
-                self._setting_builder.build(
-                    self._profile,
-                    setting_path,
-                    race_key=plan.race_key,
-                )
                 started_at = self._now()
                 self._archive.mark_capture_started(capture_id, started_at)
                 try:
@@ -240,7 +264,7 @@ class RaceDayOddsRetriever:
                 )
         except KeyboardInterrupt:
             raise
-        except (AcquisitionBlocked, OSError, ValueError, sqlite3.Error) as exc:
+        except (AcquisitionBlocked, OSError, ValueError, ET.ParseError, sqlite3.Error) as exc:
             print(
                 f"race-day-odds capture {capture_id} failed before completion: {exc}",
                 file=sys.stderr,

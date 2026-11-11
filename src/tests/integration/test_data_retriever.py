@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 from configuration.data_paths import DataPaths
-from jra_van_retriever.config.profiles import JVLinkConfig, JVLinkProfile
+from jra_van_retriever.config.profiles import JVLinkConfig, JVLinkProfile, RaceDayOddsProfile
 from jra_van_retriever.retriever import DataRetriever
 
 
@@ -67,3 +67,38 @@ def test_facade_constructs_retrievers_and_delegates(tmp_path: Path) -> None:
     assert race_key.race_number == "11"
     assert database.parent.is_dir()
     assert runtime.is_dir()
+
+
+def test_race_day_odds_uses_a_dedicated_runner_with_the_profile_timeout(tmp_path: Path) -> None:
+    seed = tmp_path / "setting.xml"
+    seed.write_text("<setting />", encoding="utf-8")
+    paths = DataPaths(tmp_path / "raw" / "race.db", tmp_path / "processed", tmp_path / "runtime")
+    profile = _profile()
+    race_day_odds = RaceDayOddsProfile(
+        normal_update=False,
+        setup_update=False,
+        realtime_update=True,
+        normal_data_specs=frozenset(),
+        setup_data_specs=frozenset(),
+        realtime_data_specs=frozenset({"0B31", "0B32", "0B33", "0B34", "0B35", "0B36"}),
+        execution_timeout_seconds=77,
+    )
+    jvlink = JVLinkConfig(
+        tmp_path / "JVLinkToSQLite.exe",
+        seed,
+        profile,
+        profile,
+        profile,
+        profile,
+        profile,
+        race_day_odds=race_day_odds,
+    )
+
+    retriever = DataRetriever(
+        paths=paths, jvlink=jvlink, timeout_seconds=45.0, validate_executable=False
+    )
+
+    assert retriever._race_day_odds is not None
+    assert retriever._race_day_odds._runner._timeout_seconds == 77.0
+    assert retriever._latest._runner._timeout_seconds == 45.0
+    assert retriever._race_day_odds._runner is not retriever._latest._runner

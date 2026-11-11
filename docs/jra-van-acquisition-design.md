@@ -26,7 +26,7 @@
 
 予測時の `realtime`、基礎データの `historical-basic`、履歴オッズの `historical-odds`、日々の `latest` はそれぞれ分離した責務を持つ。他のリアルタイム系DataSpecは、対象キー、保存先、提供期間、0行応答の意味を確認してから別途対応する。すべての速報系DataSpecを年単位で取得可能とは仮定しない。
 
-開催日の発走前オッズの `race-day-odds` は[ADR-032](decisions/ADR-032-capture-race-day-odds-for-all-bet-types.md)で追加した。`0B31`〜`0B36`を発走前の複数時点で取得し、既存のO1/O2 archiveとは別の `ARCHIVE_CAPTURE_*` 表と取得記録 `ARCHIVE_CAPTURE_LOG` へ保存する。取得記録の `running` は、このモードの起動時復旧まで全取得モードの排他で拒否する。
+開催日の発走前オッズの `race-day-odds` は[ADR-032](decisions/ADR-032-capture-race-day-odds-for-all-bet-types.md)で追加した。`0B31`〜`0B36`を発走前の複数時点で取得し、既存のO1/O2 archiveとは別の `ARCHIVE_CAPTURE_*` 表と取得記録 `ARCHIVE_CAPTURE_LOG` へ保存する。取得記録の `running` は、このモードの起動時復旧、または `--retrieve --mode=race-day-odds --recover` による復旧まで全取得モードの排他で拒否する。1回の取得は `[race_day_odds].execution_timeout_seconds` で打ち切り、最初の取得の前に実行XMLを検証する（ADR-032 Amendment 1）。
 
 ## 3. 現行実装と不足する機能
 
