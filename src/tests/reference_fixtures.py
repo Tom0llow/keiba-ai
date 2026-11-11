@@ -214,8 +214,10 @@ def raw_input(
     }
 
 
-def parquet_snapshot(root: Path, raw: dict[str, object]) -> Path:
-    version = root / "snapshots" / "fixture-v1"
+def parquet_snapshot(
+    root: Path, raw: dict[str, object], *, snapshot_id: str = "fixture-v1"
+) -> Path:
+    version = root / "snapshots" / snapshot_id
     version.mkdir(parents=True)
     tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
     physical = {
@@ -239,7 +241,7 @@ def parquet_snapshot(root: Path, raw: dict[str, object]) -> Path:
         rows = _unique_rows(rows)
         schema = pa.schema([(column, pa.string()) for column in rows[0]])
         pq.write_table(pa.Table.from_pylist(rows, schema=schema), version / f"{name}.parquet")
-    (root / "CURRENT").write_text("fixture-v1", encoding="utf-8")
+    (root / "CURRENT").write_text(snapshot_id, encoding="utf-8")
     return version
 
 
@@ -266,6 +268,7 @@ def datamart_from_raw(
     registry: FeatureRegistry,
     target_start: date,
     target_end: date,
+    labeled: bool = True,
 ) -> tuple[ReferenceDatamartBuilder, list[ReferenceYearOutput]]:
     """Feed a raw fixture to the chronological builder exactly as the CLI reads a snapshot."""
     tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
@@ -279,6 +282,7 @@ def datamart_from_raw(
         target_end=target_end,
         snapshot=cast(dict[str, object], raw["snapshot"]),
         pedigree_rows=tables["um"],
+        labeled=labeled,
     )
     days_window = cast(int, cast(dict[str, object], raw["calculation_settings"])["days_window"])
     outputs = []
@@ -454,3 +458,67 @@ def rich_raw_input(
     raw["races"] = races
     raw["include_labels"] = True
     return raw
+
+
+def add_post_freeze_markets(raw: dict[str, object], *, cancelled_after_freeze: bool = True) -> None:
+    """Add one intermediate publication two minutes before each target's start.
+
+    Publications after freeze never change features; a label-free build needs them as
+    evidence that the snapshot observed the market beyond freeze. The last target's
+    late quote also marks a scratch that appears only after freeze.
+    """
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+    for race in cast(list[dict[str, object]], raw["races"]):
+        start = datetime.fromisoformat(cast(str, race["scheduled_start_at"])).astimezone(JST)
+        identity = cast(str, race["race_id"])
+        o1, o2 = markets(
+            start.date(),
+            clock=(start - timedelta(minutes=2)).strftime("%H%M"),
+            total=3000,
+            race_number=identity[-2:],
+        )
+        if cancelled_after_freeze and race is cast(list[dict[str, object]], raw["races"])[-1]:
+            o1["OddsTansyoInfo3Odds"] = "----"
+        tables["o1"].append(o1)
+        tables["o2"].append(o2)
+
+
+PRE_RACE_RA = {
+    "headDataKubun": "2",
+    "SyussoTosu": "",
+    "NyusenTosu": "",
+    "TenkoBabaSibaBabaCD": "0",
+    "HaronTimeL3": "000",
+}
+PRE_RACE_SE = {
+    "headDataKubun": "2",
+    "KakuteiJyuni": "00",
+    "IJyoCD": "0",
+    "Time": "0000",
+    "TimeDiff": "",
+    "HaronTimeL3": "000",
+    "Jyuni4c": "00",
+    "BaTaijyu": "",
+}
+
+
+def pre_race(raw: dict[str, object], day: date, *, race_number: str | None = None) -> None:
+    """Rewrite one date's stored RA/SE rows in place to their shape before the race."""
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+    stamp = (str(day.year), day.strftime("%m%d"))
+    for name, values in (
+        ("history_ra", PRE_RACE_RA),
+        ("label_ra", PRE_RACE_RA),
+        ("history_se", PRE_RACE_SE),
+        ("label_se", PRE_RACE_SE),
+    ):
+        for row in tables[name]:
+            if (row["idYear"], row["idMonthDay"]) != stamp:
+                continue
+            if race_number is not None and row["idRaceNum"] != race_number:
+                continue
+            row.update(values)
+            if name.endswith("_ra"):
+                for i in range(25):
+                    if row.get(f"LapTime{i}") is not None:
+                        row[f"LapTime{i}"] = "000"

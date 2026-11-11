@@ -27,6 +27,7 @@ def test_application_registers_every_command_once_in_existing_order() -> None:
     assert [command.name for command in datamart_app.registered_commands] == [
         "build",
         "build-reference",
+        "build-reference-prediction",
     ]
 
 

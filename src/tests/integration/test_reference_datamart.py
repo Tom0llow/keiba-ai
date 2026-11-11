@@ -5,6 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
 from datetime import date, datetime, timedelta
@@ -19,7 +20,13 @@ from typer.testing import CliRunner
 
 from data.loader.file_hash import file_sha256
 from main import app
-from make_datamart.tables.reference import ReferenceDatamartWriter, read_reference_datamart
+from make_datamart.tables.reference import (
+    ReferenceDatamartWriter,
+    read_reference_datamart,
+    read_reference_datamart_label_usable_through,
+    read_reference_datamart_manifest,
+    read_reference_prediction_features,
+)
 from make_features.catalog.loader import load_feature_definitions
 from make_features.catalog.registry import FeatureRegistry, create_feature_registry
 from make_features.contracts.observations import ObservationInput, ReferenceEvidence
@@ -29,7 +36,16 @@ from make_features.generation.chronological import (
     SharedCalculationContext,
     shared_context,
 )
-from make_features.reference_raw import result_boundary
+from make_features.real_market import JST
+from make_features.reference_raw import (
+    CARD_RA_COLUMNS,
+    CARD_SE_COLUMNS,
+    HC_COLUMNS,
+    HISTORY_RA_COLUMNS,
+    HISTORY_SE_COLUMNS,
+    WC_COLUMNS,
+    result_boundary,
+)
 from models.dataset.calculated import closed_numeric_columns
 from models.serialization.reference import prepare_reference_payload
 from models.serialization.reference_datamart import (
@@ -39,8 +55,12 @@ from models.serialization.reference_datamart import (
 from tests.reference_fixtures import (
     RICH_TARGET_DAYS,
     ROOT,
+    add_post_freeze_markets,
     datamart_from_raw,
+    markets,
     parquet_snapshot,
+    pre_race,
+    race_rows,
     rich_raw_input,
 )
 
@@ -613,3 +633,707 @@ def test_cli_failures_leave_neither_output_nor_staging(
         assert "datamart build-reference failed" in result.stderr
     assert not output.exists()
     assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
+
+
+# ADR-036: label-free features for races that have no result yet.
+
+RACE_COLUMNS = ("field_size", "horse_mapping_sha256", "history_usable_through")
+CARD_COLUMNS = frozenset((*CARD_RA_COLUMNS, *CARD_SE_COLUMNS))
+
+
+def _label_free(
+    raw: dict[str, object], day: date
+) -> tuple[ReferenceDatamartBuilder, list[ReferenceYearOutput]]:
+    return datamart_from_raw(
+        raw, registry=_registry(), target_start=day, target_end=day, labeled=False
+    )
+
+
+def _races(outputs: list[ReferenceYearOutput]) -> dict[str, Row]:
+    return {cast(str, race["race_id"]): race for output in outputs for race in output.races}
+
+
+def _target_holds(outputs: list[ReferenceYearOutput]) -> dict[str, tuple[str, str]]:
+    return {
+        cast(str, item["race_id"]): (cast(str, item["stage"]), cast(str, item["reason"]))
+        for output in outputs
+        for item in output.held
+        if item["role"] == "target"
+    }
+
+
+def _history_holds(outputs: list[ReferenceYearOutput]) -> dict[str, tuple[str, str]]:
+    return {
+        cast(str, item["race_id"]): (cast(str, item["stage"]), cast(str, item["reason"]))
+        for output in outputs
+        for item in output.held
+        if item["role"] == "history"
+    }
+
+
+def _comparable(row: Row, builder: ReferenceDatamartBuilder) -> dict[str, object]:
+    groups = [f"{name}__available_at" for name in builder.available_at_groups]
+    keys = ["race_id", "horse_id", "scheduled_start_at", "freeze_at", *groups]
+    return {**{key: row[key] for key in keys}, **_features(row, builder)}
+
+
+def _race_id(row: Row) -> str:
+    return "".join(
+        cast(str, row[k])
+        for k in ("idYear", "idMonthDay", "idJyoCD", "idKaiji", "idNichiji", "idRaceNum")
+    )
+
+
+def _add_late_horse_race(raw: dict[str, object]) -> str:
+    """Add a last-date race whose runners appear nowhere else, one with ambiguous UM rows."""
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    day = RICH_TARGET_DAYS[-1]
+    ra, se = race_rows(day, offset=10, race_number="12")
+    ra["HassoTime"] = "1600"
+    tables["label_ra"].append(ra)
+    tables["label_se"].extend(se)
+    for clock, total in (("1544", 1000), ("1554", 2000), ("1558", 3000)):
+        o1, o2 = markets(day, clock=clock, total=total, race_number="12")
+        tables["o1"].append(o1)
+        tables["o2"].append(o2)
+    horse = cast(str, se[0]["KettoNum"])
+    for sire in ("SIREX", "SIREY"):
+        tables["um"].append(
+            {
+                "KettoNum": horse,
+                "headMakeDate": "20261031",
+                "Ketto3Info0HansyokuNum": sire,
+                "Ketto3Info4HansyokuNum": "DAMX",
+            }
+        )
+    return _race(day, "12")
+
+
+def _rich_with_late_markets() -> tuple[dict[str, object], str]:
+    raw = rich_raw_input()
+    add_post_freeze_markets(raw)
+    late = _add_late_horse_race(raw)
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    # A session on the day before each target date is the workout window's last day.
+    for day in RICH_TARGET_DAYS:
+        for kind in ("hc", "wc"):
+            tables[kind].append(_workout(kind, "2020100002", day - timedelta(days=1)))
+    return raw, late
+
+
+def _workout(kind: str, horse: str, day: date) -> Row:
+    row: Row = dict.fromkeys(HC_COLUMNS if kind == "hc" else WC_COLUMNS)
+    row.update(
+        headDataKubun="1",
+        headMakeDate="20270110",
+        TresenKubun="0",
+        ChokyoDate=day.strftime("%Y%m%d"),
+        ChokyoTime="0700",
+        KettoNum=horse,
+    )
+    if kind == "wc":
+        row.update(Course="0", BabaAround="0")
+    for section in range(1, 5):
+        row[f"LapTime{section}"] = "117"
+    return row
+
+
+def test_label_free_rows_equal_the_labeled_datamart_for_every_target_date() -> None:
+    raw, late = _rich_with_late_markets()
+    labeled_builder, labeled = _build(raw)
+    rows, races, holds = _rows(labeled), _races(labeled), _target_holds(labeled)
+    assert holds[late][0] == "target_pre_freeze"
+    outcome = {r for r, (stage, _) in holds.items() if stage == "target_outcome"}
+    assert outcome
+    compared = 0
+    for day in RICH_TARGET_DAYS:
+        builder, outputs = _label_free(raw, day)
+        assert builder.columns == labeled_builder.columns
+        free_rows, free_races = _rows(outputs), _races(outputs)
+        prefix = f"{day:%Y%m%d}"
+        for race_id, race in free_races.items():
+            assert not {"label_usable_after", "result_delay_days", "label_raw_sha256"} & set(race)
+            if race_id not in races:
+                continue
+            for column in RACE_COLUMNS:
+                assert race[column] == races[race_id][column], (race_id, column)
+        for key, row in free_rows.items():
+            assert "finish_position" not in row
+            if key[0] in races:
+                assert _comparable(row, builder) == _comparable(rows[key], labeled_builder), key
+                compared += 1
+        assert {key for key in free_rows if key[0] in races} == {
+            key for key in rows if key[0].startswith(prefix)
+        }
+        ordered = [
+            (row["race_id"], row["horse_id"])
+            for output in outputs
+            for row in output.rows
+            if row["race_id"] in races
+        ]
+        assert ordered == [
+            (row["race_id"], row["horse_id"])
+            for output in labeled
+            for row in output.rows
+            if cast(str, row["race_id"]).startswith(prefix)
+        ]
+        # Labeled races plus outcome holds equal the label-free races plus the extra
+        # races the label-free build held at calculation instead; other holds agree.
+        free_holds = _target_holds(outputs)
+        day_outcome = {r for r in outcome if r.startswith(prefix)}
+        extra_calc = {
+            r for r, (stage, _) in free_holds.items() if stage == "calculation" and r in day_outcome
+        }
+        day_races = {r for r in races if r.startswith(prefix)}
+        assert day_races | day_outcome == set(free_races) | extra_calc
+        assert {r: h for r, h in free_holds.items() if r not in day_outcome} == {
+            r: h for r, h in holds.items() if r.startswith(prefix) and r not in day_outcome
+        }
+        assert _history_holds(outputs) == {
+            r: h for r, h in _history_holds(labeled).items() if r[:8] < prefix
+        }
+    assert compared == len(rows)
+
+
+def test_a_label_free_builder_covers_exactly_one_target_date() -> None:
+    with pytest.raises(ValueError, match="exactly one target date"):
+        datamart_from_raw(
+            rich_raw_input(),
+            registry=_registry(),
+            target_start=START,
+            target_end=END,
+            labeled=False,
+        )
+
+
+@pytest.mark.parametrize("day", RICH_TARGET_DAYS)
+def test_label_free_features_never_read_target_date_results(day: date) -> None:
+    raw, _ = _rich_with_late_markets()
+    _, baseline = _label_free(raw, day)
+    assert _rows(baseline)
+    changed, _ = _rich_with_late_markets()
+    pre_race(changed, day)
+    _, rewritten = _label_free(changed, day)
+    assert _rows(rewritten) == _rows(baseline)
+    assert _races(rewritten) == _races(baseline)
+    assert [output.held for output in rewritten] == [output.held for output in baseline]
+    # Every result-only column may hold any value; nothing reads it.
+    scrambled, _ = _rich_with_late_markets()
+    tables = cast(dict[str, list[Row]], scrambled["tables"])
+    stamp = (str(day.year), day.strftime("%m%d"))
+    for name, columns in (
+        ("label_ra", HISTORY_RA_COLUMNS),
+        ("label_se", HISTORY_SE_COLUMNS),
+        ("history_ra", HISTORY_RA_COLUMNS),
+        ("history_se", HISTORY_SE_COLUMNS),
+    ):
+        for row in tables[name]:
+            if (row["idYear"], row["idMonthDay"]) == stamp:
+                row.update({c: "X" for c in columns if c not in CARD_COLUMNS})
+    _, garbage = _label_free(scrambled, day)
+    assert _rows(garbage) == _rows(baseline)
+    assert _races(garbage) == _races(baseline)
+    assert [output.held for output in garbage] == [output.held for output in baseline]
+    # The labeled datamart cannot label the same unfinished races.
+    _, labeled = datamart_from_raw(changed, registry=_registry(), target_start=day, target_end=day)
+    outcome = {r for r, (stage, _) in _target_holds(labeled).items() if stage == "target_outcome"}
+    assert outcome == set(_races(baseline))
+
+
+def test_race_day_rows_hold_single_targets_instead_of_failing_the_build() -> None:
+    day = RICH_TARGET_DAYS[-1]
+    race_09, race_10 = _race(day, "09"), _race(day, "10")
+    for table, column, value in (
+        ("label_se", "KettoNum", "          "),
+        ("label_se", "Umaban", "00"),
+        ("label_ra", "HassoTime", ""),
+    ):
+        raw, late = _rich_with_late_markets()
+        pre_race(raw, day)
+        rows = cast(dict[str, list[Row]], raw["tables"])[table]
+        next(row for row in rows if _race_id(row) == race_09)[column] = value
+        _, outputs = _label_free(raw, day)
+        holds = _target_holds(outputs)
+        assert holds[race_09][0] == "target_pre_freeze", column
+        assert holds[late][0] == "target_pre_freeze", column
+        assert race_10 in _races(outputs), column
+    # A day mixing a finished race with an unfinished one.
+    mixed, _ = _rich_with_late_markets()
+    pre_race(mixed, day, race_number="10")
+    _, both = _label_free(mixed, day)
+    assert {race_09, race_10} <= set(_races(both))
+
+
+def test_targets_without_a_market_observed_after_freeze_are_held() -> None:
+    day = RICH_TARGET_DAYS[0]
+    raw = rich_raw_input()
+    _, outputs = _label_free(raw, day)
+    assert not _races(outputs)
+    assert set(_target_holds(outputs).values()) == {
+        ("target_pre_freeze", "market_not_observed_after_freeze")
+    }
+    add_post_freeze_markets(raw)
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    tables["o1"] = [row for row in tables["o1"] if _race_id(row) != _race(day, "09")]
+    _, bare = _label_free(raw, day)
+    assert _target_holds(bare)[_race(day, "09")] == (
+        "target_pre_freeze",
+        "market_not_observed_after_freeze",
+    )
+    assert _race(day, "10") in _races(bare)
+    at_freeze = rich_raw_input()
+    o1, o2 = markets(day, clock="1455", total=2500, race_number="09")
+    cast(dict[str, list[Row]], at_freeze["tables"])["o1"].append(o1)
+    cast(dict[str, list[Row]], at_freeze["tables"])["o2"].append(o2)
+    _, boundary = _label_free(at_freeze, day)
+    assert _target_holds(boundary)[_race(day, "09")] == (
+        "target_pre_freeze",
+        "market_not_observed_after_freeze",
+    )
+
+
+def test_freshness_reports_workouts_pedigrees_and_recent_history_holds() -> None:
+    raw, _ = _rich_with_late_markets()
+    builder, _ = _label_free(raw, RICH_TARGET_DAYS[-1])
+    assert builder.freshness() == {
+        "latest_workout_date": {"hc": "2027-01-02", "wc": "2027-01-02"},
+        "card_horses": 10,
+        "card_horses_without_pedigree_row": 3,
+        "history_held_recent": 1,
+        "history_held_recent_window_days": 7,
+    }
+
+
+def test_manifest_kinds_follow_the_builder_mode() -> None:
+    raw, _ = _rich_with_late_markets()
+    snapshot = cast(dict[str, object], raw["snapshot"])
+    free, _ = _label_free(raw, RICH_TARGET_DAYS[0])
+    labeled, _ = _build(raw)
+    with pytest.raises(ValueError, match="prediction_manifest"):
+        free.manifest(snapshot=snapshot, provenance={}, preparation_config={})
+    with pytest.raises(ValueError, match="manifest instead"):
+        labeled.prediction_manifest(
+            snapshot=snapshot, provenance={}, preparation_config={}, source_datamart={}
+        )
+    manifest = free.prediction_manifest(
+        snapshot=snapshot, provenance={}, preparation_config={}, source_datamart={"a": 1}
+    )
+    assert manifest["format"] == "reference_prediction_features"
+    assert "label" not in manifest
+    assert manifest["source_datamart"] == {"a": 1}
+    assert manifest["freshness"] == free.freshness()
+    expected = labeled.manifest(snapshot=snapshot, provenance={}, preparation_config={})
+    assert manifest["contract"] == expected["contract"]
+
+
+def _source_binding(contract_sha256: str) -> dict[str, object]:
+    return {
+        "manifest_sha256": "a" * 64,
+        "contract_sha256": contract_sha256,
+        "target_period": {"start": "2026-12-20", "end": "2027-01-03"},
+        "label_usable_through": "2027-01-11T00:00:00+09:00",
+        "provenance_source_sha256": "b" * 64,
+    }
+
+
+def _write_prediction(tmp_path: Path) -> tuple[Path, str, ReferenceDatamartBuilder]:
+    raw, _ = _rich_with_late_markets()
+    builder, outputs = _label_free(raw, RICH_TARGET_DAYS[-1])
+    path = tmp_path / "prediction"
+    path.mkdir()
+    writer = ReferenceDatamartWriter(
+        path,
+        columns=builder.columns,
+        available_at_groups=builder.available_at_groups,
+        contract=builder.contract.as_metadata(),
+        labeled=False,
+    )
+    held: list[dict[str, object]] = []
+    for output in outputs:
+        held.extend(output.held)
+        if output.year in builder.target_years():
+            writer.write_year(output.year, output.rows, output.races)
+    manifest = builder.prediction_manifest(
+        snapshot=cast(dict[str, object], raw["snapshot"]),
+        provenance={"fixture": True},
+        preparation_config={"fixture": True},
+        source_datamart=_source_binding(cast(str, builder.contract.as_metadata()["sha256"])),
+    )
+    return path, writer.finish(manifest, held), builder
+
+
+def test_written_prediction_features_round_trip_without_label_columns(tmp_path: Path) -> None:
+    path, digest, builder = _write_prediction(tmp_path)
+    loaded = read_reference_prediction_features(
+        path, expected_columns=builder.columns, expected_manifest_sha256=digest
+    )
+    assert loaded.manifest_sha256 == digest == file_sha256(path / "manifest.json")
+    assert loaded.races.num_rows == 2
+    assert loaded.rows.num_rows == 8
+    assert "finish_position" not in loaded.rows.column_names
+    assert not {"label_usable_after", "result_delay_days", "label_raw_sha256"} & set(
+        loaded.races.column_names
+    )
+    manifest = loaded.manifest
+    assert manifest["format"] == "reference_prediction_features"
+    assert "label" not in manifest
+    held = json.loads((path / "held_races.json").read_text(encoding="utf-8"))
+    assert held["format"] == "reference_prediction_features_held_races"
+    assert {item["stage"] for item in held["held_races"]} <= {
+        "history_result",
+        "target_pre_freeze",
+        "calculation",
+    }
+    schema = pq.read_schema(path / "year=2027" / "part-0.parquet")
+    identity = json.loads(schema.metadata[b"keiba_ai.reference_datamart"])
+    assert identity["format"] == "reference_prediction_features"
+    assert schema.metadata[b"keiba_ai.table_kind"] == b"reference_prediction_rows"
+
+
+def test_labeled_datamart_parquet_metadata_bytes_are_unchanged(tmp_path: Path) -> None:
+    path, _, builder = _write(tmp_path)
+    contract = cast(str, builder.contract.as_metadata()["sha256"])
+    for year in (2026, 2027):
+        identity = (
+            '{"contract_sha256":"' + contract + '","format_version":1,"year":' + str(year) + "}"
+        ).encode()
+        for file, kind in (
+            ("part-0.parquet", b"reference_datamart_rows"),
+            ("races.parquet", b"reference_datamart_races"),
+        ):
+            assert pq.read_schema(path / f"year={year}" / file).metadata == {
+                b"keiba_ai.timestamp_timezone": b"UTC",
+                b"keiba_ai.reference_datamart": identity,
+                b"keiba_ai.table_kind": kind,
+            }
+
+
+def test_each_reader_rejects_the_other_format(tmp_path: Path) -> None:
+    for name in ("a", "b"):
+        (tmp_path / name).mkdir()
+    datamart, _, builder = _write(tmp_path / "a")
+    prediction, _, _ = _write_prediction(tmp_path / "b")
+    with pytest.raises(ValueError, match=r"fields|format"):
+        read_reference_prediction_features(datamart, expected_columns=builder.columns)
+    with pytest.raises(ValueError, match=r"fields|format"):
+        read_reference_datamart(prediction, expected_columns=builder.columns)
+
+
+def _shift_to_next_day(rows: list[Row]) -> None:
+    for name in ("scheduled_start_at", "freeze_at"):
+        rows[-1][name] = cast(datetime, rows[-1][name]) + timedelta(days=1)
+
+
+def _history_into_target_date(rows: list[Row]) -> None:
+    rows[0]["history_usable_through"] = datetime(2027, 1, 3, 1, 0, tzinfo=JST)
+
+
+def _drop_first(rows: list[Row]) -> None:
+    rows.pop(0)
+
+
+@pytest.mark.parametrize(
+    ("file", "change", "message"),
+    [
+        (
+            "year=2027/part-0.parquet",
+            _shift("market_characteristics__available_at", 1),
+            "time boundary",
+        ),
+        ("year=2027/races.parquet", _shift("freeze_at", -60), "freeze boundary"),
+        ("year=2027/part-0.parquet", _drop_first, "differ from its field size"),
+        ("year=2027/races.parquet", _shift_to_next_day, "outside its target period"),
+        ("year=2027/races.parquet", _history_into_target_date, "target date"),
+        ("year=2027/part-0.parquet", lambda rows: rows.insert(1, dict(rows[0])), "duplicated"),
+    ],
+)
+def test_prediction_reader_rejects_meaning_changes_even_when_every_hash_is_recomputed(
+    tmp_path: Path, file: str, change: object, message: str
+) -> None:
+    path, _, builder = _write_prediction(tmp_path)
+    _rewrite_rows(path, file, change)
+    with pytest.raises(ValueError, match=message):
+        read_reference_prediction_features(path, expected_columns=builder.columns)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda source: source.pop("label_usable_through"), "binding is invalid"),
+        (lambda source: source.update(contract_sha256="c" * 64), "contract differs"),
+        (lambda source: source.update(manifest_sha256="short"), "binding is invalid"),
+        (lambda source: source.update(label_usable_through="2027-01-11"), "label boundary"),
+    ],
+)
+def test_prediction_reader_rejects_an_invalid_source_datamart_binding(
+    tmp_path: Path, change: Callable[[dict[str, object]], object], message: str
+) -> None:
+    path, _, builder = _write_prediction(tmp_path)
+    manifest_path = path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    change(manifest["source_datamart"])
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        read_reference_prediction_features(path, expected_columns=builder.columns)
+
+
+def test_partial_readers_pin_the_labeled_datamart_manifest(tmp_path: Path) -> None:
+    path, digest, builder = _write(tmp_path)
+    manifest = read_reference_datamart_manifest(path, expected_manifest_sha256=digest)
+    assert manifest["contract"] == builder.contract.as_metadata()
+    races = read_reference_datamart(path, expected_columns=builder.columns).races
+    through = read_reference_datamart_label_usable_through(path, expected_manifest_sha256=digest)
+    assert through == max(races.column("label_usable_after").to_pylist())
+    for reader in (read_reference_datamart_manifest, read_reference_datamart_label_usable_through):
+        with pytest.raises(ValueError, match="expected identity"):
+            reader(path, expected_manifest_sha256="0" * 64)
+    (tmp_path / "p").mkdir()
+    prediction, prediction_digest, _ = _write_prediction(tmp_path / "p")
+    with pytest.raises(ValueError, match=r"fields|format"):
+        read_reference_datamart_manifest(prediction, expected_manifest_sha256=prediction_digest)
+
+
+def _train(tmp_path: Path, raw: dict[str, object]) -> tuple[Path, Path, str]:
+    """Publish a labeled training datamart from a fixture snapshot; return its identity."""
+    processed = tmp_path / "processed"
+    parquet_snapshot(processed, raw)
+    datamart = tmp_path / "training"
+    result = CliRunner().invoke(app, _cli(processed, datamart))
+    assert result.exit_code == 0, result.output
+    return processed, datamart, result.stdout.strip().rsplit("manifest_sha256=", 1)[1]
+
+
+def _predict_cli(
+    datamart: Path,
+    digest: str,
+    processed: Path,
+    output: Path,
+    day: date = END,
+    *extra: str,
+) -> list[str]:
+    return [
+        "datamart",
+        "build-reference-prediction",
+        "--reference-datamart",
+        str(datamart),
+        "--reference-datamart-manifest-sha256",
+        digest,
+        "--date",
+        day.isoformat(),
+        "--processed-root",
+        str(processed),
+        "--output",
+        str(output),
+        "--features-config",
+        str(ROOT / "configs/features.toml"),
+        *extra,
+    ]
+
+
+def _rewrite_manifest(path: Path, change: Callable[[dict[str, object]], None]) -> str:
+    manifest_path = path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    change(manifest)
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+    return file_sha256(manifest_path)
+
+
+def test_prediction_cli_publishes_the_labeled_values_and_binds_the_training_datamart(
+    tmp_path: Path,
+) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    output = tmp_path / "prediction"
+    result = CliRunner().invoke(app, _predict_cli(datamart, digest, processed, output))
+    assert result.exit_code == 0, result.output
+    assert result.stdout.startswith(
+        "Built reference prediction features: date=2027-01-03 targets=3 races=2 rows=8 "
+        "held_targets=1 "
+    )
+    assert "freshness " in result.stderr
+    assert "target_holds target_pre_freeze=1" in result.stderr
+    builder, _ = _label_free(raw, END)
+    loaded = read_reference_prediction_features(output, expected_columns=builder.columns)
+    training = read_reference_datamart(datamart, expected_columns=builder.columns)
+    labeled = {(row["race_id"], row["horse_id"]): row for row in training.rows.to_pylist()}
+    assert loaded.rows.num_rows == 8
+    for row in loaded.rows.to_pylist():
+        assert _comparable(row, builder) == _comparable(
+            labeled[(row["race_id"], row["horse_id"])], builder
+        )
+    source = cast(dict[str, object], loaded.manifest["source_datamart"])
+    assert source["manifest_sha256"] == digest
+    assert source["contract_sha256"] == training.manifest["contract"]["sha256"]  # type: ignore[index]
+    assert source["target_period"] == training.manifest["target_period"]
+    assert (
+        source["label_usable_through"]
+        == max(training.races.column("label_usable_after").to_pylist()).isoformat()
+    )
+    assert source["provenance_source_sha256"] == training.manifest["provenance"]["source_sha256"]  # type: ignore[index]
+    assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
+
+
+def test_prediction_cli_reads_a_newer_race_day_snapshot_without_its_results(
+    tmp_path: Path,
+) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    race_day, _ = _rich_with_late_markets()
+    pre_race(race_day, END)
+    parquet_snapshot(processed, race_day, snapshot_id="race-day")
+    same = tmp_path / "same"
+    newer = tmp_path / "newer"
+    pinned = CliRunner().invoke(
+        app, _predict_cli(datamart, digest, processed, same, END, "--snapshot-id", "fixture-v1")
+    )
+    current = CliRunner().invoke(app, _predict_cli(datamart, digest, processed, newer))
+    assert pinned.exit_code == 0, pinned.output
+    assert current.exit_code == 0, current.output
+    builder, _ = _label_free(raw, END)
+    first = read_reference_prediction_features(same, expected_columns=builder.columns)
+    second = read_reference_prediction_features(newer, expected_columns=builder.columns)
+    assert second.manifest["snapshot"]["snapshot_id"] == "race-day"  # type: ignore[index]
+    assert first.rows.to_pylist() == second.rows.to_pylist()
+
+
+def test_prediction_cli_publishes_zero_rows_when_every_target_is_held(tmp_path: Path) -> None:
+    processed, datamart, digest = _train(tmp_path, rich_raw_input())
+    output = tmp_path / "prediction"
+    result = CliRunner().invoke(
+        app, _predict_cli(datamart, digest, processed, output, RICH_TARGET_DAYS[0])
+    )
+    assert result.exit_code == 0, result.output
+    assert "races=0 rows=0 held_targets=2 " in result.stdout
+    assert "target_pre_freeze=2" in result.stderr
+
+
+def _days_window_plus_one(manifest: dict[str, object]) -> None:
+    config = cast(dict[str, dict[str, int]], manifest["preparation_config"])
+    config["calculation_settings"]["days_window"] += 1
+
+
+def _other_column_meaning(manifest: dict[str, object]) -> None:
+    columns = cast(list[dict[str, object]], manifest["columns"])
+    columns[0]["meaning"] = "changed meaning"
+
+
+def _other_definitions(manifest: dict[str, object]) -> None:
+    definitions = cast(list[dict[str, object]], manifest["feature_definitions"])
+    definitions.reverse()
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("digest", "expected identity"),
+        ("contract", "calculation contract differs"),
+        ("definitions", "feature definitions differ"),
+        ("early", "history_start"),
+        ("no_races", "no races on 2027-01-04"),
+        ("columns", "closed numeric columns differ"),
+        ("existing", "new non-symbolic-link"),
+        ("inside", "outside processed_root"),
+    ],
+)
+def test_prediction_cli_rejects_without_publishing(tmp_path: Path, case: str, message: str) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    output = tmp_path / "prediction"
+    day = END
+    if case == "digest":
+        digest = "0" * 64
+    elif case == "contract":
+        digest = _rewrite_manifest(datamart, _days_window_plus_one)
+    elif case == "definitions":
+        digest = _rewrite_manifest(datamart, _other_definitions)
+    elif case == "columns":
+        digest = _rewrite_manifest(datamart, _other_column_meaning)
+    elif case == "early":
+        day = date(2026, 10, 1)
+    elif case == "no_races":
+        day = date(2027, 1, 4)
+    elif case == "existing":
+        output.mkdir()
+    elif case == "inside":
+        output = processed / "prediction"
+    result = CliRunner().invoke(app, _predict_cli(datamart, digest, processed, output, day))
+    assert result.exit_code == 1
+    assert "datamart build-reference-prediction failed" in result.stderr
+    assert message in result.stderr
+    if case == "no_races":
+        assert "phase=year" not in result.stderr
+    if case != "existing":
+        assert not output.exists()
+    assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
+
+
+def test_prediction_cli_interrupt_leaves_neither_output_nor_staging(tmp_path: Path) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    output = tmp_path / "prediction"
+    original = ReferenceDatamartBuilder.add_year
+
+    def interrupt(self: ReferenceDatamartBuilder, year: int, **kwargs: object) -> object:
+        if year == END.year:
+            raise KeyboardInterrupt
+        return original(self, year, **kwargs)  # type: ignore[arg-type]
+
+    with patch.object(ReferenceDatamartBuilder, "add_year", interrupt):
+        result = CliRunner().invoke(app, _predict_cli(datamart, digest, processed, output))
+    assert result.exit_code == 130
+    assert not output.exists()
+    assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
+
+
+def _rewrite_held(path: Path, change: Callable[[list[Row]], None]) -> None:
+    """Rewrite held races and the manifest entry that covers them, so only meaning checks remain."""
+    held_path = path / "held_races.json"
+    payload = json.loads(held_path.read_text(encoding="utf-8"))
+    change(payload["held_races"])
+    payload["held_races"].sort(key=lambda item: (item["race_id"], item["role"]))
+    held_path.write_text(json.dumps(payload), encoding="utf-8")
+    manifest_path = path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    items = payload["held_races"]
+    manifest["held_races"].update(
+        sha256=file_sha256(held_path),
+        count=len(items),
+        by_role=dict(sorted(Counter(item["role"] for item in items).items())),
+        by_stage=dict(sorted(Counter(item["stage"] for item in items).items())),
+    )
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
+
+
+def _history_hold_on(day: date) -> Callable[[list[Row]], None]:
+    def change(items: list[Row]) -> None:
+        items.append(
+            {
+                "race_id": _race(day, "11"),
+                "role": "history",
+                "stage": "history_result",
+                "reason": "tampered",
+                "whole_race": True,
+            }
+        )
+
+    return change
+
+
+def _target_as_history_result(items: list[Row]) -> None:
+    target = next(item for item in items if item["role"] == "target")
+    target["stage"] = "history_result"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [_history_hold_on(END), _history_hold_on(END + timedelta(days=1)), _target_as_history_result],
+    ids=["history_on_target_date", "history_after_target_date", "target_as_history_result"],
+)
+def test_prediction_reader_rejects_holds_outside_their_role_and_date(
+    tmp_path: Path, change: Callable[[list[Row]], None]
+) -> None:
+    path, _, builder = _write_prediction(tmp_path)
+    read_reference_prediction_features(path, expected_columns=builder.columns)
+    _rewrite_held(path, change)
+    with pytest.raises(ValueError, match="held race role, stage or date"):
+        read_reference_prediction_features(path, expected_columns=builder.columns)

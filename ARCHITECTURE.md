@@ -246,8 +246,8 @@ ADR-034の参考datamartは、特徴量中間表の結合とは別の種類のda
 | make_features/generation/chronological.py | 開始順の1本の履歴配列、JST日付ごとの接頭辞の見方、基準集合の統計、調教の日付索引、対象ごとの共有context、時点の不変条件。I/Oなし。 |
 | make_features/generation/observations.py | `CalculationContext`の取得口（窓・騎手・調教師・親・調教・基準集合・事前率・日付で共有する値）。既定の実装は対象ごとの参考経路と同じ値を返す。 |
 | make_features/reference_snapshot.py | 対象1レースの正規化`normalize_reference_target`、履歴・血統・ラベルの正規化。既存の`normalize_reference_input`と共有する。 |
-| models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。I/Oなし。 |
-| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。指定年の`race_id`だけをhash照合して読む軽い読込口（`read_reference_datamart_race_ids`）。21群の再計算はしない。`models`をimportしない。 |
+| models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。ADR-036の`labeled=False`では、対象日1日について、対象日より前の行だけを履歴とし、対象には出馬表の列だけを渡し、freezeの後の市場の観測を要求し、ラベルを読まない。鮮度（`freshness`）を集計する。I/Oなし。 |
+| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。ADR-036のラベルなしの形式`reference_prediction_features`も、形式ごとの違いを`_Layout`にまとめて同じ検証で書込み・読込む（`read_reference_prediction_features`）。manifestのSHA-256で固定して一部だけ読む読込口（`read_reference_datamart_race_ids`・`read_reference_datamart_manifest`・`read_reference_datamart_label_usable_through`）。21群の再計算はしない。`models`をimportしない。 |
 | data/storage/directory_publisher.py | 出力と同じ親のstagingへ書き、完成後にrenameで公開し、失敗時にstagingを削除する。 |
 | data/loader/fixed_snapshot.py / reference_input.py | 表の事前のhash、年・日付の期間読込、O1/O2のfooterを1年の間使い回す読込口。 |
 
@@ -348,6 +348,7 @@ CLIは出力先がいずれかの入力と同じファイルを指す場合、�
 `configs/reference_datamart/`の設定と固定snapshotを読み、年ごとに読込・計算・書込みを繰り返す。
 `--output`は存在しない新しいパスで、親が存在し、processed rootの外にあることを要求する。進捗はstderr、
 公開後の要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130とし、どちらでもstagingを残さない。
+`datamart build-reference-prediction`は同じcli/reference_datamart.pyが、学習用datamartのmanifestをSHA-256で固定して読み、`preparation_config`の設定をconfiguration/reference_datamart.pyで検証し、計算契約と特徴量定義の一致をsnapshotの読込前に確かめる。対象日1日をラベルなしで構築し、年ごとの読込は`build-reference`と共有する。出力・進捗・終了コードの規則は`build-reference`と同じである。
 `model evaluate-pl`はcli/pl_evaluation.pyが、configuration/pl_evaluation.pyで合成した`configs/pl_evaluation/`の
 設定と`processed_root`を読み、datamart manifestの`snapshot_id`で固定snapshotの`NL_RA_RACE`を期間・venue限定で
 読み、表hashを照合する。設定・fold年・variantを検査した後、make_datamart/tables/reference.pyの

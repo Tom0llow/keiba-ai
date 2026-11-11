@@ -85,7 +85,9 @@ coherent responsibility and have a name that describes that responsibility.
   physical I/O and feature validation.
 - The ADR-034 reference datamart keeps its file contract (yearly Parquet, held
   races, manifest, read-time verification) in `make_datamart/tables/reference.py`,
-  which receives its column list explicitly and never imports `models`. Pure build
+  which receives its column list explicitly and never imports `models`. The
+  ADR-036 label-free prediction format shares that module, with every format
+  difference held in one layout record. Pure build
   assembly belongs to `models/serialization/reference_datamart.py`; shared
   chronological history views belong to `make_features/generation/chronological.py`;
   staging and rename publication belong to `data/storage/directory_publisher.py`.
