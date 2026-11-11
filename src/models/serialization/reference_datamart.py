@@ -4,6 +4,10 @@ The caller reads the fixed snapshot one calendar year at a time and supplies eac
 target date's market rows through a callback. Every history race is normalized
 once, every target is normalized and calculated once in ``(freeze_at, race_id)``
 order, and only the projected rows of the current year are kept.
+
+With ``labeled=False`` (ADR-036) the same calculation runs for races that have no
+result yet: rows on or after ``target_start`` never enter the history, targets see
+only their pre-race card projections, and no label or finishing position is read.
 """
 
 from __future__ import annotations
@@ -36,7 +40,7 @@ from make_features.generation.chronological import (
     WorkoutView,
     shared_context,
 )
-from make_features.real_market import JST, canonical_hash, timestamp
+from make_features.real_market import JST, canonical_hash, publication, timestamp
 from make_features.reference_raw import (
     CARD_RA_COLUMNS,
     CARD_SE_COLUMNS,
@@ -62,6 +66,9 @@ from models.serialization.reference import REFERENCE_LABEL_ASSURANCE, reference_
 
 type MarketRows = Callable[[date], tuple[Sequence[dict[str, object]], Sequence[dict[str, object]]]]
 _AMBIGUOUS_PEDIGREE = "ambiguous_or_missing_race_row"
+MARKET_NOT_OBSERVED_AFTER_FREEZE = "market_not_observed_after_freeze"
+# Recent history holds are reported for this many days before the result-delay boundary.
+_RECENT_HISTORY_DAYS = 7
 
 
 @dataclass(frozen=True)
@@ -88,12 +95,18 @@ class ReferenceDatamartBuilder:
         target_end: date,
         snapshot: Mapping[str, object],
         pedigree_rows: Sequence[dict[str, object]],
+        labeled: bool = True,
     ) -> None:
+        self.labeled = labeled
         self.rules = validate_reference_rules(rules)
         self.parameters, self._start = reference_parameters(dict(settings), self.rules)
         history_start = self._start.date()
         if not history_start <= target_start <= target_end:
             raise ValueError("history_start <= target_start <= target_end is required")
+        if not labeled and target_start != target_end:
+            # Earlier target dates' results are history for later ones; without labels the
+            # target dates' rows never enter the history, so only one date is equivalent.
+            raise ValueError("a builder without labels covers exactly one target date")
         self.settings = dict(settings)
         self.registry = registry
         self.target_start = target_start
@@ -114,6 +127,10 @@ class ReferenceDatamartBuilder:
         self._pedigrees: dict[str, PedigreeObservation] = {}
         self._pedigree_errors: dict[str, str] = {}
         self._next_year = history_start.year
+        self._first_target = target_start.strftime("%Y%m%d")
+        self._latest_workouts: dict[str, date | None] = {"hc": None, "wc": None}
+        self._card_horses: set[str] = set()
+        self._recent_history_holds = 0
 
     @property
     def years(self) -> range:
@@ -143,26 +160,38 @@ class ReferenceDatamartBuilder:
         if year != self._next_year:
             raise ValueError(f"years must be supplied in order; expected {self._next_year}")
         self._next_year += 1
+        # Without labels, rows on or after the first target date are never history: a
+        # target date's own unfinished rows must not be held or fail the whole build.
+        # Values are unchanged because a target date only sees the earlier prefix.
+        history_ra = ra_rows if self.labeled else [r for r in ra_rows if self._before_targets(r)]
+        history_se = se_rows if self.labeled else [r for r in se_rows if self._before_targets(r)]
         validate_reference_projections(
             {
-                "history_ra": list(ra_rows),
-                "history_se": list(se_rows),
+                "history_ra": list(history_ra),
+                "history_se": list(history_se),
                 "target_ra": [],
                 "target_se": [],
                 "label_ra": [],
                 "label_se": [],
             }
         )
-        races, held = normalize_reference_history(ra_rows, se_rows, rules=self.rules)
+        races, held = normalize_reference_history(history_ra, history_se, rules=self.rules)
         held_rows = [_with_stage(item, "history_result") for item in held]
-        for row in se_rows:
+        self._recent_history_holds += sum(1 for item in held if self._recent(item))
+        for row in history_se:
             horse = identifier(row, "KettoNum")
             if horse is not None:
                 self._ensure_pedigree(horse)
         self._history.append(races)
         if year < self.target_start.year:
             return ReferenceYearOutput(year, (), (), tuple(held_rows), 0)
-        self._workouts.load(tuple(workout(row, kind=kind) for kind, row in workout_rows))
+        sessions = tuple(workout(row, kind=kind) for kind, row in workout_rows)
+        for (kind, _), session in zip(workout_rows, sessions, strict=True):
+            day = session.evidence.event_at.astimezone(JST).date()
+            latest = self._latest_workouts.get(kind)
+            if day < self.target_start and (latest is None or day > latest):
+                self._latest_workouts[kind] = day
+        self._workouts.load(sessions)
         targets = self._targets(ra_rows, se_rows, held_rows)
         rows: list[dict[str, object]] = []
         race_rows: list[dict[str, object]] = []
@@ -203,13 +232,67 @@ class ReferenceDatamartBuilder:
         preparation_config: Mapping[str, object],
     ) -> dict[str, object]:
         """Return the semantic manifest; the writer adds held-race and partition entries."""
+        if not self.labeled:
+            raise ValueError("a builder without labels writes prediction_manifest instead")
+        self._check_complete(snapshot)
+        return {
+            "format": "reference_feature_datamart",
+            "format_version": 1,
+            **self._common_manifest(snapshot),
+            "label": {
+                "kind": "reference_result_v1",
+                "assurance": REFERENCE_LABEL_ASSURANCE,
+                "label_boundary_meaning": "declared_usable_after",
+                "result_delay_days": self.rules["result_delay_days"],
+            },
+            "provenance": dict(provenance),
+            "preparation_config": dict(preparation_config),
+        }
+
+    def prediction_manifest(
+        self,
+        *,
+        snapshot: Mapping[str, object],
+        provenance: Mapping[str, object],
+        preparation_config: Mapping[str, object],
+        source_datamart: Mapping[str, object],
+    ) -> dict[str, object]:
+        """Return the label-free manifest bound to the training datamart (ADR-036)."""
+        if self.labeled:
+            raise ValueError("a labeled builder writes manifest instead of prediction_manifest")
+        self._check_complete(snapshot)
+        return {
+            "format": "reference_prediction_features",
+            "format_version": 1,
+            **self._common_manifest(snapshot),
+            "source_datamart": dict(source_datamart),
+            "freshness": self.freshness(),
+            "provenance": dict(provenance),
+            "preparation_config": dict(preparation_config),
+        }
+
+    def freshness(self) -> dict[str, object]:
+        """Return how current the target date's workouts, pedigrees and history are."""
+        missing = sorted(horse for horse in self._card_horses if not self._um.get(horse))
+        return {
+            "latest_workout_date": {
+                kind: None if day is None else day.isoformat()
+                for kind, day in sorted(self._latest_workouts.items())
+            },
+            "card_horses": len(self._card_horses),
+            "card_horses_without_pedigree_row": len(missing),
+            "history_held_recent": self._recent_history_holds,
+            "history_held_recent_window_days": _RECENT_HISTORY_DAYS,
+        }
+
+    def _check_complete(self, snapshot: Mapping[str, object]) -> None:
         if self._next_year != self.target_end.year + 1:
             raise ValueError("every history and target year must be supplied before the manifest")
         if snapshot.get("tables") != self._snapshot.get("tables"):
             raise ValueError("snapshot table identities changed during the build")
+
+    def _common_manifest(self, snapshot: Mapping[str, object]) -> dict[str, object]:
         return {
-            "format": "reference_feature_datamart",
-            "format_version": 1,
             "implementation": "snapshot_reference_21_groups_v1",
             "verification": "build_time_audit_no_read_recomputation_v1",
             "contract": self.contract.as_metadata(),
@@ -231,15 +314,19 @@ class ReferenceDatamartBuilder:
             },
             "snapshot": dict(snapshot),
             "assurance": reference_assurance(self.rules),
-            "label": {
-                "kind": "reference_result_v1",
-                "assurance": REFERENCE_LABEL_ASSURANCE,
-                "label_boundary_meaning": "declared_usable_after",
-                "result_delay_days": self.rules["result_delay_days"],
-            },
-            "provenance": dict(provenance),
-            "preparation_config": dict(preparation_config),
         }
+
+    def _before_targets(self, row: Mapping[str, object]) -> bool:
+        return f"{row.get('idYear')}{row.get('idMonthDay')}" < self._first_target
+
+    def _recent(self, item: Mapping[str, object]) -> bool:
+        """Return whether a history hold lies just before the result-delay boundary."""
+        try:
+            started = datetime.strptime(cast(str, item["race_id"])[:8], "%Y%m%d").date()
+        except ValueError:
+            return False
+        boundary = self.target_start - timedelta(days=cast(int, self.rules["result_delay_days"]))
+        return boundary - timedelta(days=_RECENT_HISTORY_DAYS) <= started < self.target_start
 
     def _ensure_pedigree(self, horse: str) -> None:
         if horse in self._pedigrees or horse in self._pedigree_errors:
@@ -264,12 +351,21 @@ class ReferenceDatamartBuilder:
         for row in ra_rows:
             identity = race_identity(row)
             if first <= identity[:8] <= last:
-                ra_by_race.setdefault(identity, []).append(row)
+                # Without labels a target carries only its pre-race card columns, so result
+                # columns cannot reach de-duplication, normalization or any calculator.
+                ra_by_race.setdefault(identity, []).append(
+                    row if self.labeled else {k: row.get(k) for k in CARD_RA_COLUMNS}
+                )
         se_by_race: dict[str, list[dict[str, object]]] = {}
         for row in se_rows:
             identity = race_identity(row)
             if identity in ra_by_race:
-                se_by_race.setdefault(identity, []).append(row)
+                se_by_race.setdefault(identity, []).append(
+                    row if self.labeled else {k: row.get(k) for k in CARD_SE_COLUMNS}
+                )
+                horse = identifier(row, "KettoNum")
+                if horse is not None:
+                    self._card_horses.add(horse)
         targets = []
         offset = cast(int, self.rules["freeze_offset_seconds"])
         for identity, candidates in sorted(ra_by_race.items()):
@@ -341,13 +437,17 @@ class ReferenceDatamartBuilder:
         ]
         for horse in card_horses:
             self._ensure_pedigree(horse)
+        if not self.labeled and not _observed_after(o1, timestamp(manifest["freeze_at"])):
+            # A snapshot taken before freeze would silently turn its latest quote into the
+            # freeze value; snapshots carry no creation clock, so require later evidence.
+            return _hold(identity, "target_pre_freeze", MARKET_NOT_OBSERVED_AFTER_FREEZE)
         sources = ReferenceTargetSources(
             [{k: row.get(k) for k in CARD_RA_COLUMNS} for row in target_ra],
             [{k: row.get(k) for k in CARD_SE_COLUMNS} for row in target_se],
             o1,
             o2,
-            target_ra,
-            target_se,
+            target_ra if self.labeled else (),
+            target_se if self.labeled else (),
             history_for,
             population_for,
             pedigrees_for,
@@ -379,13 +479,15 @@ class ReferenceDatamartBuilder:
             # publication, hold the race; history and evidence invariants stay fatal.
             return _hold(identity, "target_pre_freeze", str(exc))
         # Pre-freeze checks run first so they are never counted as outcome holds.
-        mapping = {runner.horse_number: runner.horse_id for runner in observation.card.runners}
-        try:
-            label = reference_label(mapping, target_ra, target_se, rules=self.rules)
-        except ChronologicalInvariantError:
-            raise
-        except ValueError as exc:
-            return _hold(identity, "target_outcome", str(exc))
+        label: dict[str, object] | None = None
+        if self.labeled:
+            mapping = {runner.horse_number: runner.horse_id for runner in observation.card.runners}
+            try:
+                label = reference_label(mapping, target_ra, target_se, rules=self.rules)
+            except ChronologicalInvariantError:
+                raise
+            except ValueError as exc:
+                return _hold(identity, "target_outcome", str(exc))
         try:
             calculated = calculate_reference_context(context, registry=self.registry)
         except FeatureCalculationValueError as exc:
@@ -396,19 +498,23 @@ class ReferenceDatamartBuilder:
         self,
         observation: ObservationInput,
         manifests: Sequence[Mapping[str, CalculatedValues]],
-        label: Mapping[str, object],
+        label: Mapping[str, object] | None,
         view: HistoryView,
     ) -> tuple[list[dict[str, object]], dict[str, object]]:
         card = observation.card
         if len(manifests) != len(card.runners):
             raise ValueError("calculation output does not cover the complete target field")
-        raw = cast(Mapping[str, object], label["raw"])
-        finishes = {
-            cast(str, identifier(row, "KettoNum")): cast(int, positive_integer(row, "KakuteiJyuni"))
-            for row in cast(Sequence[dict[str, object]], raw["se"])
-        }
-        if set(finishes) != set(card.expected_horse_ids):
-            raise ValueError("label does not cover the complete frozen target field")
+        finishes: dict[str, int] | None = None
+        if label is not None:
+            raw = cast(Mapping[str, object], label["raw"])
+            finishes = {
+                cast(str, identifier(row, "KettoNum")): cast(
+                    int, positive_integer(row, "KakuteiJyuni")
+                )
+                for row in cast(Sequence[dict[str, object]], raw["se"])
+            }
+            if set(finishes) != set(card.expected_horse_ids):
+                raise ValueError("label does not cover the complete frozen target field")
         ids = {
             name: self.registry.by_name(name).definition.feature_id
             for name in self.available_at_groups
@@ -432,20 +538,26 @@ class ReferenceDatamartBuilder:
                 if available > observation.freeze_at:
                     raise ValueError("calculated group is available only after freeze_at")
                 row[f"{name}__available_at"] = available
-            row["finish_position"] = finishes[runner.horse_id]
+            if finishes is not None:
+                row["finish_position"] = finishes[runner.horse_id]
             rows.append(row)
         mapping = {runner.horse_number: runner.horse_id for runner in card.runners}
-        race = {
+        race: dict[str, object] = {
             "race_id": card.race_id,
             "scheduled_start_at": card.scheduled_start_at,
             "freeze_at": observation.freeze_at,
             "field_size": len(card.runners),
-            "label_usable_after": timestamp(label["usable_after"]),
-            "result_delay_days": label["result_delay_days"],
-            "label_raw_sha256": label["raw_sha256"],
-            "horse_mapping_sha256": canonical_hash(mapping),
-            "history_usable_through": view.usable_through,
         }
+        if label is not None:
+            race.update(
+                label_usable_after=timestamp(label["usable_after"]),
+                result_delay_days=label["result_delay_days"],
+                label_raw_sha256=label["raw_sha256"],
+            )
+        race.update(
+            horse_mapping_sha256=canonical_hash(mapping),
+            history_usable_through=view.usable_through,
+        )
         return rows, race
 
 
@@ -475,6 +587,17 @@ def _number(value: object, name: str) -> float | None:
     if not isfinite(number):
         raise ValueError(f"reference datamart rejects an infinite value: {name}")
     return number
+
+
+def _observed_after(o1: Sequence[dict[str, object]], freeze: datetime) -> bool:
+    """Return whether any parsable O1 publication of the race lies after its freeze."""
+    for row in o1:
+        try:
+            if publication(row) > freeze:
+                return True
+        except ValueError:
+            continue
+    return False
 
 
 def _by_race(rows: Sequence[dict[str, object]]) -> dict[str, list[dict[str, object]]]:

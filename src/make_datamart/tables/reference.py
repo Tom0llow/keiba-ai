@@ -1,4 +1,9 @@
-"""Persist and fully validate the reference-feature datamart format."""
+"""Persist and fully validate the reference-feature datamart and prediction formats.
+
+The labeled datamart (ADR-034) and the label-free prediction features (ADR-036) share
+one directory layout and one validator; ``_Layout`` holds every difference so that no
+check is switched on or off piecemeal.
+"""
 
 from __future__ import annotations
 
@@ -61,6 +66,62 @@ _MANIFEST_KEYS = {
     "provenance",
     "preparation_config",
 }
+_SOURCE_DATAMART_KEYS = frozenset(
+    {
+        "manifest_sha256",
+        "contract_sha256",
+        "target_period",
+        "label_usable_through",
+        "provenance_source_sha256",
+    }
+)
+_FRESHNESS_KEYS = frozenset(
+    {
+        "latest_workout_date",
+        "card_horses",
+        "card_horses_without_pedigree_row",
+        "history_held_recent",
+        "history_held_recent_window_days",
+    }
+)
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+
+
+@dataclass(frozen=True)
+class _Layout:
+    """Every persisted difference between the labeled and label-free formats."""
+
+    labeled: bool
+    format: str
+    held_format: str
+    manifest_keys: frozenset[str]
+    stages: frozenset[str]
+    rows_kind: bytes
+    races_kind: bytes
+    # The labeled datamart's metadata bytes predate the prediction format and never change.
+    metadata_format: str | None
+
+
+_DATAMART = _Layout(
+    labeled=True,
+    format="reference_feature_datamart",
+    held_format="reference_feature_datamart_held_races",
+    manifest_keys=frozenset(_MANIFEST_KEYS),
+    stages=frozenset({"history_result", "target_pre_freeze", "target_outcome", "calculation"}),
+    rows_kind=b"reference_datamart_rows",
+    races_kind=b"reference_datamart_races",
+    metadata_format=None,
+)
+_PREDICTION = _Layout(
+    labeled=False,
+    format="reference_prediction_features",
+    held_format="reference_prediction_features_held_races",
+    manifest_keys=frozenset((_MANIFEST_KEYS - {"label"}) | {"source_datamart", "freshness"}),
+    stages=frozenset({"history_result", "target_pre_freeze", "calculation"}),
+    rows_kind=b"reference_prediction_rows",
+    races_kind=b"reference_prediction_races",
+    metadata_format="reference_prediction_features",
+)
 
 
 @dataclass(frozen=True)
@@ -83,9 +144,11 @@ class ReferenceDatamartWriter:
         columns: Sequence[ReferenceColumn],
         available_at_groups: Sequence[str],
         contract: Mapping[str, object],
+        labeled: bool = True,
     ) -> None:
         if not path.is_dir() or any(path.iterdir()):
             raise ValueError("reference datamart staging must be an existing empty directory")
+        self._layout = _DATAMART if labeled else _PREDICTION
         self._path = path
         self._columns = tuple(columns)
         self._groups = tuple(available_at_groups)
@@ -106,11 +169,12 @@ class ReferenceDatamartWriter:
             raise ValueError("reference datamart partitions must be written in year order")
         directory = self._path / f"year={year}"
         directory.mkdir()
-        metadata = _metadata(year, self._contract_sha256)
+        layout = self._layout
+        metadata = _metadata(year, self._contract_sha256, layout)
         row_table = pa.Table.from_pylist(
-            list(rows), schema=_rows_schema(self._columns, self._groups, metadata)
+            list(rows), schema=_rows_schema(self._columns, self._groups, metadata, layout)
         )
-        race_table = pa.Table.from_pylist(list(races), schema=_races_schema(metadata))
+        race_table = pa.Table.from_pylist(list(races), schema=_races_schema(metadata, layout))
         rows_path = directory / "part-0.parquet"
         races_path = directory / "races.parquet"
         write_parquet(row_table, rows_path)
@@ -141,7 +205,7 @@ class ReferenceDatamartWriter:
         write_json(
             held_path,
             {
-                "format": "reference_feature_datamart_held_races",
+                "format": self._layout.held_format,
                 "format_version": 1,
                 "held_races": [dict(item) for item in held],
             },
@@ -160,10 +224,10 @@ class ReferenceDatamartWriter:
             },
             "partitions": list(self._partitions),
         }
-        if set(complete) != _MANIFEST_KEYS:
+        if set(complete) != self._layout.manifest_keys:
             raise ValueError("reference datamart manifest fields differ from the format contract")
         write_json(self._path / "manifest.json", complete, overwrite=False)
-        return read_reference_datamart(self._path, expected_columns=self._columns).manifest_sha256
+        return _read(self._path, self._layout, expected_columns=self._columns).manifest_sha256
 
 
 def read_reference_datamart(
@@ -173,6 +237,98 @@ def read_reference_datamart(
     expected_manifest_sha256: str | None = None,
 ) -> ReferenceDatamartRead:
     """Validate hashes, schemas, time boundaries and complete labels without recomputation."""
+    return _read(
+        path,
+        _DATAMART,
+        expected_columns=expected_columns,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
+
+
+def read_reference_prediction_features(
+    path: Path,
+    *,
+    expected_columns: Sequence[ReferenceColumn],
+    expected_manifest_sha256: str | None = None,
+) -> ReferenceDatamartRead:
+    """Validate label-free prediction features (ADR-036) without recomputation.
+
+    Every label-independent datamart check applies. In addition, every race lies on the
+    single target date, the history ends by that date's start, no label column exists,
+    and the training-datamart binding is well formed.
+    """
+    return _read(
+        path,
+        _PREDICTION,
+        expected_columns=expected_columns,
+        expected_manifest_sha256=expected_manifest_sha256,
+    )
+
+
+def read_reference_datamart_manifest(
+    path: Path, *, expected_manifest_sha256: str
+) -> dict[str, object]:
+    """Read only a labeled datamart's manifest, pinned by its SHA-256.
+
+    The format, the manifest keys, the column list and the calculation contract are
+    checked; the partitions are not read (``finish`` read them when it was published).
+    """
+    manifest = _pinned_manifest(path.resolve(), expected_manifest_sha256)
+    if set(manifest) != _MANIFEST_KEYS:
+        raise ValueError("reference datamart manifest fields differ from the format contract")
+    _check_format(manifest, _DATAMART)
+    columns = manifest["columns"]
+    if (
+        not isinstance(columns, list)
+        or not columns
+        or any(
+            not isinstance(column, dict) or not isinstance(column.get("name"), str)
+            for column in columns
+        )
+    ):
+        raise ValueError("reference datamart columns are invalid")
+    _validate_contract(manifest["contract"], [cast(str, column["name"]) for column in columns])
+    return manifest
+
+
+def read_reference_datamart_label_usable_through(
+    path: Path, *, expected_manifest_sha256: str
+) -> datetime:
+    """Return the latest label-use boundary of a labeled datamart's races.
+
+    The pinned manifest is checked like ``read_reference_datamart_manifest``; then only the
+    ``label_usable_after`` column of each hash-checked ``races.parquet`` is read. The value
+    is the maximum over the whole datamart, an upper bound of any training fold's boundary.
+    A model trained on this datamart may predict only races whose freeze lies at or after
+    this instant (ADR-036).
+    """
+    read_reference_datamart_manifest(path, expected_manifest_sha256=expected_manifest_sha256)
+    values = _pinned_races_column(path, expected_manifest_sha256, None, "label_usable_after")
+    if not values:
+        raise ValueError("reference datamart has no labeled races")
+    return max(cast(datetime, value) for value in values)
+
+
+def read_reference_datamart_race_ids(
+    path: Path, *, years: Sequence[int], expected_manifest_sha256: str
+) -> frozenset[str]:
+    """Read only the race IDs of the given years' race tables, without the full validation.
+
+    The manifest bytes and each selected ``races.parquet`` are checked against the
+    pinned SHA-256 values with the same path rule as the full reader, so callers can
+    check race coverage before ``read_reference_datamart`` (which still verifies everything).
+    """
+    values = _pinned_races_column(path, expected_manifest_sha256, set(years), "race_id")
+    return frozenset(_race_identity({"race_id": value}) for value in values)
+
+
+def _read(
+    path: Path,
+    layout: _Layout,
+    *,
+    expected_columns: Sequence[ReferenceColumn],
+    expected_manifest_sha256: str | None = None,
+) -> ReferenceDatamartRead:
     root = path.resolve()
     if not root.is_dir():
         raise ValueError("reference datamart path must be a directory")
@@ -181,19 +337,10 @@ def read_reference_datamart(
     manifest_sha256 = hashlib.sha256(manifest_bytes).hexdigest()
     if expected_manifest_sha256 is not None and manifest_sha256 != expected_manifest_sha256:
         raise ValueError("reference datamart manifest SHA-256 differs from the expected identity")
-    try:
-        manifest = json.loads(manifest_bytes)
-    except (UnicodeDecodeError, json.JSONDecodeError) as exc:
-        raise ValueError("reference datamart manifest is not valid UTF-8 JSON") from exc
-    if not isinstance(manifest, dict) or set(manifest) != _MANIFEST_KEYS:
+    manifest = _parse_manifest(manifest_bytes)
+    if set(manifest) != layout.manifest_keys:
         raise ValueError("reference datamart manifest fields differ from the format contract")
-    if (
-        manifest["format"] != "reference_feature_datamart"
-        or manifest["format_version"] != 1
-        or manifest["implementation"] != "snapshot_reference_21_groups_v1"
-        or manifest["verification"] != "build_time_audit_no_read_recomputation_v1"
-    ):
-        raise ValueError("unsupported reference datamart format or implementation")
+    _check_format(manifest, layout)
     columns = tuple(expected_columns)
     if not columns or len({column.name for column in columns}) != len(columns):
         raise ValueError("expected reference datamart columns must be nonempty and unique")
@@ -218,9 +365,19 @@ def read_reference_datamart(
         or len(set(groups)) != len(groups)
     ):
         raise ValueError("reference datamart available_at groups are invalid")
-    _validate_held(root, manifest["held_races"])
+    # Every closed numeric column needs its group's availability clock in the rows.
+    if {column.group for column in columns} - set(cast(list[str], groups)):
+        raise ValueError("reference datamart available_at groups miss a closed column group")
     start, end = _target_period(manifest["target_period"])
-    delay = _declared_delay(manifest)
+    _validate_held(root, manifest["held_races"], layout, None if layout.labeled else start)
+    delay: int | None = None
+    if layout.labeled:
+        delay = _declared_delay(manifest)
+    else:
+        if start != end:
+            raise ValueError("reference prediction features cover exactly one target date")
+        _validate_source_datamart(manifest["source_datamart"], contract_sha256)
+        _validate_freshness(manifest["freshness"])
     expected_years = list(range(start.year, end.year + 1))
     partitions = manifest["partitions"]
     if (
@@ -233,7 +390,7 @@ def read_reference_datamart(
     seen_races: set[str] = set()
     for entry in cast(list[dict[str, object]], partitions):
         rows, races = _read_partition(
-            root, entry, columns, cast(list[str], groups), contract_sha256
+            root, entry, columns, cast(list[str], groups), contract_sha256, layout
         )
         _validate_partition_rows(
             rows, races, cast(int, entry["year"]), seen_races, delay=delay, period=(start, end)
@@ -245,33 +402,48 @@ def read_reference_datamart(
     return ReferenceDatamartRead(manifest_sha256, manifest, rows, races)
 
 
-def read_reference_datamart_race_ids(
-    path: Path, *, years: Sequence[int], expected_manifest_sha256: str
-) -> frozenset[str]:
-    """Read only the race IDs of the given years' race tables, without the full validation.
-
-    The manifest bytes and each selected ``races.parquet`` are checked against the
-    pinned SHA-256 values with the same path rule as the full reader, so callers can
-    check race coverage before ``read_reference_datamart`` (which still verifies everything).
-    """
-    root = path.resolve()
-    manifest_bytes = (root / "manifest.json").read_bytes()
-    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
-        raise ValueError("reference datamart manifest SHA-256 differs from the expected identity")
+def _parse_manifest(manifest_bytes: bytes) -> dict[str, object]:
     try:
         manifest = json.loads(manifest_bytes)
     except (UnicodeDecodeError, json.JSONDecodeError) as exc:
         raise ValueError("reference datamart manifest is not valid UTF-8 JSON") from exc
-    partitions = manifest.get("partitions") if isinstance(manifest, dict) else None
+    if not isinstance(manifest, dict):
+        raise ValueError("reference datamart manifest fields differ from the format contract")
+    return manifest
+
+
+def _pinned_manifest(root: Path, expected_manifest_sha256: str) -> dict[str, object]:
+    manifest_bytes = (root / "manifest.json").read_bytes()
+    if hashlib.sha256(manifest_bytes).hexdigest() != expected_manifest_sha256:
+        raise ValueError("reference datamart manifest SHA-256 differs from the expected identity")
+    return _parse_manifest(manifest_bytes)
+
+
+def _check_format(manifest: Mapping[str, object], layout: _Layout) -> None:
+    if (
+        manifest["format"] != layout.format
+        or manifest["format_version"] != 1
+        or manifest["implementation"] != "snapshot_reference_21_groups_v1"
+        or manifest["verification"] != "build_time_audit_no_read_recomputation_v1"
+    ):
+        raise ValueError("unsupported reference datamart format or implementation")
+
+
+def _pinned_races_column(
+    path: Path, expected_manifest_sha256: str, years: set[int] | None, column: str
+) -> list[object]:
+    """Read one column of hash-checked race tables of a pinned labeled datamart."""
+    root = path.resolve()
+    manifest = _pinned_manifest(root, expected_manifest_sha256)
+    partitions = manifest.get("partitions")
     if not isinstance(partitions, list):
         raise ValueError("reference datamart partitions do not cover every target year")
-    wanted = set(years)
-    race_ids: set[str] = set()
+    values: list[object] = []
     for entry in partitions:
         if not isinstance(entry, dict) or type(entry.get("year")) is not int:
             raise ValueError("reference datamart partition entry is invalid")
         year = cast(int, entry["year"])
-        if year not in wanted:
+        if years is not None and year not in years:
             continue
         expected_races = f"year={year}/races.parquet"
         if entry.get("races_file") != expected_races:
@@ -279,16 +451,58 @@ def read_reference_datamart_race_ids(
         races_path = root / expected_races
         if file_sha256(races_path) != entry.get("races_sha256"):
             raise ValueError("reference datamart partition file hash mismatch")
-        values = read_parquet(races_path, columns=["race_id"]).column("race_id").to_pylist()
-        if len(values) != entry.get("race_count"):
+        selected = read_parquet(races_path, columns=[column]).column(column).to_pylist()
+        if len(selected) != entry.get("race_count"):
             raise ValueError("reference datamart partition row count mismatch")
-        race_ids.update(_race_identity({"race_id": value}) for value in values)
-    return frozenset(race_ids)
+        values.extend(selected)
+    return values
 
 
-def _metadata(year: int, contract_sha256: str) -> dict[bytes, bytes]:
+def _validate_source_datamart(value: object, contract_sha256: str) -> None:
+    if not isinstance(value, dict) or set(value) != _SOURCE_DATAMART_KEYS:
+        raise ValueError("reference prediction source datamart binding is invalid")
+    for name in ("manifest_sha256", "contract_sha256", "provenance_source_sha256"):
+        if not isinstance(value[name], str) or _HEX64.fullmatch(value[name]) is None:
+            raise ValueError("reference prediction source datamart binding is invalid")
+    if value["contract_sha256"] != contract_sha256:
+        raise ValueError("reference prediction contract differs from its source datamart")
+    _target_period(value["target_period"])
+    through = value["label_usable_through"]
+    try:
+        parsed = datetime.fromisoformat(cast(str, through))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("reference prediction source label boundary is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("reference prediction source label boundary is invalid")
+
+
+def _validate_freshness(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != _FRESHNESS_KEYS:
+        raise ValueError("reference prediction freshness is invalid")
+    workouts = value["latest_workout_date"]
+    if not isinstance(workouts, dict) or set(workouts) != {"hc", "wc"}:
+        raise ValueError("reference prediction freshness is invalid")
+    for day in workouts.values():
+        if day is not None:
+            try:
+                datetime.strptime(cast(str, day), "%Y-%m-%d")
+            except (TypeError, ValueError) as exc:
+                raise ValueError("reference prediction freshness is invalid") from exc
+    for name in _FRESHNESS_KEYS - {"latest_workout_date"}:
+        if type(value[name]) is not int or value[name] < 0:
+            raise ValueError("reference prediction freshness is invalid")
+
+
+def _metadata(year: int, contract_sha256: str, layout: _Layout) -> dict[bytes, bytes]:
+    identity: dict[str, object] = {
+        "format_version": 1,
+        "year": year,
+        "contract_sha256": contract_sha256,
+    }
+    if layout.metadata_format is not None:
+        identity["format"] = layout.metadata_format
     common = json.dumps(
-        {"format_version": 1, "year": year, "contract_sha256": contract_sha256},
+        identity,
         sort_keys=True,
         separators=(",", ":"),
     ).encode("utf-8")
@@ -323,7 +537,10 @@ def _validate_contract(value: object, expected_names: Sequence[str]) -> str:
 
 
 def _rows_schema(
-    columns: Sequence[ReferenceColumn], groups: Sequence[str], metadata: Mapping[bytes, bytes]
+    columns: Sequence[ReferenceColumn],
+    groups: Sequence[str],
+    metadata: Mapping[bytes, bytes],
+    layout: _Layout,
 ) -> pa.Schema:
     names = [column.name for column in columns]
     available = [f"{group}__available_at" for group in groups]
@@ -338,37 +555,41 @@ def _rows_schema(
             pa.field("freeze_at", _TIMESTAMP, nullable=False),
             *(pa.field(name, pa.float64(), nullable=True) for name in names),
             *(pa.field(name, _TIMESTAMP, nullable=False) for name in available),
-            pa.field("finish_position", pa.int64(), nullable=False),
+            *([pa.field("finish_position", pa.int64(), nullable=False)] if layout.labeled else []),
         ],
         metadata={
             **metadata,
-            b"keiba_ai.table_kind": b"reference_datamart_rows",
+            b"keiba_ai.table_kind": layout.rows_kind,
         },
     )
     return schema
 
 
-def _races_schema(metadata: Mapping[bytes, bytes]) -> pa.Schema:
+def _races_schema(metadata: Mapping[bytes, bytes], layout: _Layout) -> pa.Schema:
+    labels = [
+        pa.field("label_usable_after", _TIMESTAMP, nullable=False),
+        pa.field("result_delay_days", pa.int64(), nullable=False),
+        pa.field("label_raw_sha256", pa.string(), nullable=False),
+    ]
     return pa.schema(
         [
             pa.field("race_id", pa.string(), nullable=False),
             pa.field("scheduled_start_at", _TIMESTAMP, nullable=False),
             pa.field("freeze_at", _TIMESTAMP, nullable=False),
             pa.field("field_size", pa.int64(), nullable=False),
-            pa.field("label_usable_after", _TIMESTAMP, nullable=False),
-            pa.field("result_delay_days", pa.int64(), nullable=False),
-            pa.field("label_raw_sha256", pa.string(), nullable=False),
+            *(labels if layout.labeled else []),
             pa.field("horse_mapping_sha256", pa.string(), nullable=False),
             pa.field("history_usable_through", _TIMESTAMP, nullable=True),
         ],
         metadata={
             **metadata,
-            b"keiba_ai.table_kind": b"reference_datamart_races",
+            b"keiba_ai.table_kind": layout.races_kind,
         },
     )
 
 
-def _validate_held(root: Path, value: object) -> None:
+def _validate_held(root: Path, value: object, layout: _Layout, target_day: datetime | None) -> None:
+    """Check held races; ``target_day`` is the single label-free target date, if any."""
     if not isinstance(value, dict) or set(value) != {
         "file",
         "sha256",
@@ -387,7 +608,7 @@ def _validate_held(root: Path, value: object) -> None:
     if (
         not isinstance(payload, dict)
         or set(payload) != {"format", "format_version", "held_races"}
-        or payload["format"] != "reference_feature_datamart_held_races"
+        or payload["format"] != layout.held_format
         or payload["format_version"] != 1
         or not isinstance(payload["held_races"], list)
     ):
@@ -404,13 +625,14 @@ def _validate_held(root: Path, value: object) -> None:
             or set(item) != {"race_id", "role", "stage", "reason", "whole_race"}
             or re.fullmatch(r"[0-9]{16}", str(item["race_id"])) is None
             or item["role"] not in {"history", "target"}
-            or item["stage"]
-            not in {"history_result", "target_pre_freeze", "target_outcome", "calculation"}
+            or item["stage"] not in layout.stages
             or not isinstance(item["reason"], str)
             or not item["reason"]
             or item["whole_race"] is not True
         ):
             raise ValueError("reference datamart held-race entry is invalid")
+        if target_day is not None and not _label_free_hold(item, f"{target_day:%Y%m%d}"):
+            raise ValueError("reference prediction held race role, stage or date is invalid")
         key = (cast(str, item["race_id"]), cast(str, item["role"]))
         if previous is not None and key < previous:
             raise ValueError("reference datamart held races are not deterministically ordered")
@@ -422,6 +644,14 @@ def _validate_held(root: Path, value: object) -> None:
         or dict(sorted(stages.items())) != value["by_stage"]
     ):
         raise ValueError("reference datamart held-race role or stage counts differ")
+
+
+def _label_free_hold(item: Mapping[str, object], day: str) -> bool:
+    """History holds precede the target date; target holds lie on it, before any label."""
+    race_day = str(item["race_id"])[:8]
+    if item["stage"] == "history_result":
+        return item["role"] == "history" and race_day < day
+    return item["role"] == "target" and race_day == day
 
 
 def _target_period(value: object) -> tuple[datetime, datetime]:
@@ -443,6 +673,7 @@ def _read_partition(
     columns: Sequence[ReferenceColumn],
     groups: Sequence[str],
     contract_sha256: str,
+    layout: _Layout,
 ) -> tuple[pa.Table, pa.Table]:
     required = {
         "year",
@@ -468,11 +699,11 @@ def _read_partition(
         or file_sha256(races_path) != entry["races_sha256"]
     ):
         raise ValueError("reference datamart partition file hash mismatch")
-    metadata = _metadata(year, contract_sha256)
+    metadata = _metadata(year, contract_sha256, layout)
     rows, races = read_parquet(rows_path), read_parquet(races_path)
-    if not rows.schema.equals(_rows_schema(columns, groups, metadata), check_metadata=True):
+    if not rows.schema.equals(_rows_schema(columns, groups, metadata, layout), check_metadata=True):
         raise ValueError("reference datamart row schema or metadata differs")
-    if not races.schema.equals(_races_schema(metadata), check_metadata=True):
+    if not races.schema.equals(_races_schema(metadata, layout), check_metadata=True):
         raise ValueError("reference datamart race schema or metadata differs")
     if rows.num_rows != entry["row_count"] or races.num_rows != entry["race_count"]:
         raise ValueError("reference datamart partition row count mismatch")
@@ -502,9 +733,10 @@ def _validate_partition_rows(
     year: int,
     seen_races: set[str],
     *,
-    delay: int,
+    delay: int | None,
     period: tuple[datetime, datetime],
 ) -> None:
+    """Check rows; ``delay`` is the label delay, or None for label-free prediction rows."""
     row_values = cast(list[dict[str, object]], rows.to_pylist())
     race_values = cast(list[dict[str, object]], races.to_pylist())
     row_order = [(row["freeze_at"], row["race_id"]) for row in row_values]
@@ -520,24 +752,32 @@ def _validate_partition_rows(
         race_map[identity] = race
         scheduled = cast(datetime, race["scheduled_start_at"])
         freeze = cast(datetime, race["freeze_at"])
-        label = cast(datetime, race["label_usable_after"])
         local = scheduled.astimezone(JST)
         if local.year != year or scheduled - freeze != timedelta(seconds=300):
             raise ValueError("reference datamart race year or freeze boundary differs")
         if not period[0].date() <= local.date() <= period[1].date():
             raise ValueError("reference datamart race lies outside its target period")
-        if (
-            race["result_delay_days"] != delay
-            or label != result_boundary(scheduled, delay)
-            or label <= freeze
-        ):
-            raise ValueError("reference datamart label-use boundary differs")
         history = race["history_usable_through"]
         if history is not None and cast(datetime, history) > freeze:
             raise ValueError("reference datamart history crosses freeze_at")
+        hashes = ["horse_mapping_sha256"]
+        if delay is not None:
+            label = cast(datetime, race["label_usable_after"])
+            if (
+                race["result_delay_days"] != delay
+                or label != result_boundary(scheduled, delay)
+                or label <= freeze
+            ):
+                raise ValueError("reference datamart label-use boundary differs")
+            hashes.append("label_raw_sha256")
+        elif history is not None and cast(datetime, history) > datetime.combine(
+            local.date(), datetime.min.time(), JST
+        ):
+            # A label-free target date sees only history usable before the date begins.
+            raise ValueError("reference prediction history crosses the target date")
         if type(race["field_size"]) is not int or race["field_size"] < 1:
             raise ValueError("reference datamart race field_size is invalid")
-        for name in ("label_raw_sha256", "horse_mapping_sha256"):
+        for name in hashes:
             if re.fullmatch(r"[0-9a-f]{64}", str(race[name])) is None:
                 raise ValueError("reference datamart label hashes are invalid")
     by_race: dict[str, list[dict[str, object]]] = defaultdict(list)
@@ -566,7 +806,7 @@ def _validate_partition_rows(
             value = row[name]
             if value is not None and not isfinite(cast(float, value)):
                 raise ValueError("reference datamart numeric value must be finite or null")
-        if type(row["finish_position"]) is not int:
+        if delay is not None and type(row["finish_position"]) is not int:
             raise ValueError("reference datamart finish_position is invalid")
         by_race[identity].append(row)
     if set(by_race) != set(race_map):
@@ -574,9 +814,11 @@ def _validate_partition_rows(
     for identity, race in race_map.items():
         selected = by_race[identity]
         field_size = cast(int, race["field_size"])
-        finishes = sorted(cast(int, row["finish_position"]) for row in selected)
         if len(selected) != field_size:
             raise ValueError("reference datamart race rows differ from its field size")
+        if delay is None:
+            continue
+        finishes = sorted(cast(int, row["finish_position"]) for row in selected)
         if finishes != list(range(1, field_size + 1)):
             raise ValueError("reference datamart finishing positions are noncontiguous")
 

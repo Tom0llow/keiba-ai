@@ -690,13 +690,15 @@ def shared_context(
     coverage = {
         c.kind: c for c in select_versions(source.coverage, lambda c: c.kind, source.freeze_at)
     }
+    # Coverage is declared by the target normalizer; a violation is a build defect, never a
+    # property of one race, so it fails the whole build (ADR-034 Decision 6).
     for kind, covered in coverage.items():
         aware(covered.start_at, f"{kind} coverage start_at")
         aware(covered.end_at, f"{kind} coverage end_at")
         if kind not in {"history", "workouts", "pedigree", "market"}:
-            raise ValueError(f"unsupported coverage kind: {kind}")
+            raise ChronologicalInvariantError(f"unsupported coverage kind: {kind}")
         if not covered.scope or covered.start_at > covered.end_at:
-            raise ValueError(f"invalid {kind} coverage scope or interval")
+            raise ChronologicalInvariantError(f"invalid {kind} coverage scope or interval")
         required_start = datetime.combine(parameters.history_start, time.min, JST)
         if kind == "market":
             required_start = source.freeze_at - timedelta(
@@ -705,7 +707,9 @@ def shared_context(
         elif kind == "workouts":
             required_start = source.freeze_at - timedelta(days=parameters.days_window)
         if covered.start_at > required_start or covered.end_at < source.freeze_at:
-            raise ValueError(f"{kind} coverage must span history_start through freeze_at")
+            raise ChronologicalInvariantError(
+                f"{kind} coverage must span history_start through freeze_at"
+            )
         # The population object was built from this date's history horses plus the card.
         complete = (
             covered.horse_ids is population
@@ -713,7 +717,7 @@ def shared_context(
             else set(source.card.expected_horse_ids) <= set(covered.horse_ids)
         )
         if not complete:
-            raise ValueError(
+            raise ChronologicalInvariantError(
                 f"{kind} coverage does not cover the complete required horse population"
             )
         history.register(covered.evidence)

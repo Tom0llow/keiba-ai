@@ -69,6 +69,11 @@ def load_reference_datamart_config(
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir.resolve())):
         config = compose(config_name=config_name, overrides=list(overrides))
         raw = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+    return validate_reference_datamart_config(raw)
+
+
+def validate_reference_datamart_config(raw: object) -> dict[str, object]:
+    """Validate a resolved build config, such as a datamart manifest's preparation_config."""
     if not isinstance(raw, dict) or set(raw) != {
         "processed_root",
         "snapshot_id",

@@ -526,6 +526,31 @@ uv run python src/main.py datamart build-reference --config-name measure --overr
 形式・検証・計測結果は[参考特徴量datamartの構築と計測](docs/experiments/reference-feature-datamart.md)と
 [ADR-034](docs/decisions/ADR-034-build-full-period-reference-feature-datamart.md)を参照する。
 
+## 当日の未確定レースの参考特徴量を作る
+
+`datamart build-reference-prediction`は、学習用の参考datamartにmanifestのSHA-256で固定し、同じ計算設定・
+参考規則・計算器で、対象日1日の特徴量を結果を読まずに作る
+（[ADR-036](docs/decisions/ADR-036-build-label-free-reference-features-for-unfinished-races.md)）。
+
+```powershell
+uv run python src/main.py datamart build-reference-prediction --reference-datamart <学習用datamart> --reference-datamart-manifest-sha256 <manifestのSHA-256> --date 2025-12-28 --processed-root data/processed --output output/reference-prediction-20251228
+```
+
+- 計算設定と参考規則は、学習用datamartのmanifestだけから取る。特徴量定義と計算契約が異なれば、snapshotを読む前に
+  失敗する。
+- `--processed-root`は必須とする。学習用datamartに記録されたパスは、構築時のcwdからの相対パスのことがあるためである。
+- `--snapshot-id`を省略すると、CURRENTを最初の一度だけ解決する。snapshotに対象日のレースがなければ終了コード1になる。
+- 出力の形式は`reference_prediction_features`で、ラベルの列を持たない。manifestの`source_datamart`は、学習用datamartとの
+  結び付き（ラベルの利用境界を含む）を記録する。`freshness`は、調教と血統の鮮度を記録する。
+- freezeより後のO1の発表がsnapshotにない対象は、`market_not_observed_after_freeze`で保留される。対象が全件保留でも、
+  行数0の出力を公開して終了コード0とする。
+- freeze以前のO1で取消が示された出走馬がいるレースは、学習と同じく`target_pre_freeze`で保留される（#46）。
+  当日は取消が起きやすいため、対象から外れるレースが多くなりうる。
+- 当日の市場の接続（#37）と、調教・血統の当日の取得（#61）はまだない。そのため、当日の発走前の予測にはまだ使えない。
+- 実データでは1日分で約3.5分・約4.6GBかかる。race-day-oddsの常駐と同じ機械で重ねると、取得が遅れることがある。
+
+結果と計測は[当日の未確定レースの参考特徴量の構築と計測](docs/experiments/reference-prediction-features.md)を参照する。
+
 ## 年単位foldでtop-3 PLの着順確率を評価する
 
 `model evaluate-pl`は、全期間の参考datamartから年単位の拡大型fold（train〜Y−2・valid Y−1・test Y）で
