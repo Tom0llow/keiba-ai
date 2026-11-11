@@ -30,7 +30,9 @@ uv run python src/main.py datamart build-reference-prediction --reference-datama
   - `label_usable_through`: 学習用の`label_usable_after`の最大値
   - `provenance_source_sha256`
 - `freshness`は、当日のsnapshotで調教と血統が古くないかを判断するための指標である。
-  - `latest_workout_date`: HC・WCの対象日より前の最新の調教日。
+  - `latest_workout_date`: HC・WCごとに、対象日のために読み込んだ調教の窓（対象日の`days_window`+1日前から
+    前日まで）の中で最も新しい調教日。窓の中に調教がなければnullになる。調教の表が窓より前で止まっている
+    （古い）場合もnullになるので、nullは「調教がない」ではなく「窓の中に見つからない」を意味する。
   - `card_horses`: 出馬表の馬の数。
   - `card_horses_without_pedigree_row`: そのうち`NL_UM_UMA`に行がない馬の数。
   - `history_held_recent`: 対象日の`result_delay_days`+7日前から前日までに開始した、履歴として採用できなかったレースの数。

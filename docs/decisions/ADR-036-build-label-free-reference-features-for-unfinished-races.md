@@ -52,7 +52,7 @@ ADR-034の参考datamartは、対象レースの通常の確定結果をラベ�
    - manifestは`label`を持たず、`source_datamart`と`freshness`を持つ。
    - `source_datamart`の内容: 学習用manifestのSHA-256、計算契約のSHA-256、対象期間、
      `label_usable_through`（学習用datamart全体の`label_usable_after`の最大値。どの学習foldの境界よりも遅いか等しい、保守的な上限）、`provenance_source_sha256`。
-   - `freshness`の内容: HC・WCの最新の調教日、出馬表の馬の数とそのうち`NL_UM_UMA`に行がない数、
+   - `freshness`の内容: HC・WCごとの、読み込んだ調教の窓（対象日の`days_window`+1日前から前日まで）の中の最新の調教日（窓の中になければnull）、出馬表の馬の数とそのうち`NL_UM_UMA`に行がない数、
      直近の履歴の保留件数（`history_held_recent`）とその窓の日数（`history_held_recent_window_days`）。
    - 読込API`read_reference_prediction_features`は、ラベルに依存しない検証をすべて行い、次も検査する。
      - 全レースが対象日の日付であること。

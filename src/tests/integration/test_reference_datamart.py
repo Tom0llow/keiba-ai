@@ -714,11 +714,36 @@ def _rich_with_late_markets() -> tuple[dict[str, object], str]:
     add_post_freeze_markets(raw)
     late = _add_late_horse_race(raw)
     tables = cast(dict[str, list[Row]], raw["tables"])
+    _add_same_year_late_horse(tables)
     # A session on the day before each target date is the workout window's last day.
     for day in RICH_TARGET_DAYS:
         for kind in ("hc", "wc"):
             tables[kind].append(_workout(kind, "2020100002", day - timedelta(days=1)))
     return raw, late
+
+
+def _add_same_year_late_horse(tables: dict[str, list[Row]]) -> None:
+    """Add a 2026-12-28 history race whose new runner has ambiguous UM rows.
+
+    A labeled build over 2026-12-20..2027-01-03 registers that horse while reading 2026,
+    before it calculates the 2026-12-20 and 2026-12-27 targets; a label-free build for
+    those dates never reads it. Its result becomes usable at 2027-01-05 00:00 JST (eight
+    days later), after every target date, so no target sees the race itself. Inside the
+    labeled period it is also a target without any O1, held outside RICH_TARGET_DAYS.
+    """
+    ra, se = race_rows(date(2026, 12, 28), offset=20, race_number="11")
+    tables["history_ra"].append(ra)
+    tables["history_se"].extend(se)
+    horse = cast(str, se[0]["KettoNum"])
+    for sire in ("SIREP", "SIREQ"):
+        tables["um"].append(
+            {
+                "KettoNum": horse,
+                "headMakeDate": "20261031",
+                "Ketto3Info0HansyokuNum": sire,
+                "Ketto3Info4HansyokuNum": "DAMP",
+            }
+        )
 
 
 def _workout(kind: str, horse: str, day: date) -> Row:
@@ -890,6 +915,33 @@ def test_targets_without_a_market_observed_after_freeze_are_held() -> None:
         "target_pre_freeze",
         "market_not_observed_after_freeze",
     )
+    # A later row with an unparsable publication clock is no evidence and is skipped.
+    unparsable = rich_raw_input()
+    o1, _ = markets(day, clock="1458", total=2500, race_number="09")
+    o1["HappyoTime"] = "00000000"
+    o1["headDataKubun"] = "4"
+    cast(dict[str, list[Row]], unparsable["tables"])["o1"].append(o1)
+    _, skipped = _label_free(unparsable, day)
+    assert _target_holds(skipped)[_race(day, "09")] == (
+        "target_pre_freeze",
+        "market_not_observed_after_freeze",
+    )
+    # Any parsable publication after freeze counts, whatever its headDataKubun; a row
+    # after freeze never becomes the freeze value.
+    other_kind = rich_raw_input()
+    o1, _ = markets(day, clock="1458", total=2500, race_number="09")
+    o1["headDataKubun"] = "2"
+    o1["OddsTansyoInfo0Odds"] = "0999"
+    cast(dict[str, list[Row]], other_kind["tables"])["o1"].append(o1)
+    _, observed = _label_free(other_kind, day)
+    assert _race(day, "09") in _races(observed)
+    reference = rich_raw_input()
+    add_post_freeze_markets(reference)
+    _, expected = _label_free(reference, day)
+    race_09 = _race(day, "09")
+    assert {k: v for k, v in _rows(observed).items() if k[0] == race_09} == {
+        k: v for k, v in _rows(expected).items() if k[0] == race_09
+    }
 
 
 def test_freshness_reports_workouts_pedigrees_and_recent_history_holds() -> None:
