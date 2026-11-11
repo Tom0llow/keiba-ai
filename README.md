@@ -147,7 +147,11 @@ setup_data_specs = []
 realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]
 offsets_minutes = [30, 10, 5, 2]
 late_tolerance_seconds = 60
+execution_timeout_seconds = 120
 ```
+
+`execution_timeout_seconds`は、1回の取得でJVLinkToSQLiteを待つ上限の秒数で、必須である。超えた取得は
+`failed/jvlink_error`と記録して次の取得へ進む。120秒は実測の前の値なので、運用で所要時間を確かめて見直す。
 
 race-day-oddsの実行中に、`latest`や`preprocess rebuild`による完全なParquet出力を重ねない。raw DBは
 ロールバックジャーナル方式のため、長い読取の間は取得の書込みが`database is locked`で失敗し、
@@ -180,6 +184,7 @@ uv run python src/main.py --retrieve --mode=historical-odds
 uv run python src/main.py --retrieve --mode=latest
 uv run python src/main.py --retrieve --mode=realtime
 uv run python src/main.py --retrieve --mode=race-day-odds --date 2026-11-15
+uv run python src/main.py --retrieve --mode=race-day-odds --recover
 ```
 
 取得と完全なParquet公開は、workflowごとに分かれている。
@@ -225,9 +230,16 @@ uv run python src/main.py --retrieve --mode=race-day-odds --date 2026-11-15
   保存する。当日の`NL_RA_RACE`は、事前に`latest`で取得しておく。取得ごとに
   `race-day-odds capture <capture_id> <race> -<offset>m <spec>=<status> ...`を出力し、最後の行に件数の要約を
   JSONで出す。失敗があれば終了コード1、Ctrl+Cでは130となる。予定時刻を`late_tolerance_seconds`より過ぎた取得は
-  `skipped_late`とし、発走時刻の変更には追従しない。取得の途中で止まった場合は、取得記録の`running`が残り、
-  他の取得モードはこのコマンドを再起動して復旧するまで拒否される。このコマンドはParquetを公開しないので、
-  `preprocess rebuild`などの完全な再構築で出力する。
+  `skipped_late`とし、発走時刻の変更には追従しない。最初の取得の前に実行XMLを一度生成して検証し、設定に誤りが
+  あれば取得を始めずに、stderrへ`race-day-odds setup failed: ...`、stdoutへ要約を出して終了コード1で終わる。
+  seedのファイル自体がない場合は、従来どおり起動時に例外で終わる（`--recover`も同じ）。
+  取得の途中で止まった場合は、取得記録の`running`が残り、他の取得モードは復旧するまで拒否される。
+  このコマンドはParquetを公開しないので、`preprocess rebuild`などの完全な再構築で出力する。
+- `--retrieve --mode=race-day-odds --recover`: 取得はせず、`running`の取得のstagingを退避・初期化して
+  `interrupted`にし、`{"interrupted":N}`を出力する。開催のない日でも使える。`--date`とは併用できない。
+  常駐中のrace-day-oddsを止めてから実行する。ロックを取れない場合やJVLinkToSQLiteが動いている場合は、
+  stderrへ`race-day-odds recovery failed: ...`を出して終了コード1で終わる。`--date`付きの起動でも、
+  従来どおり最初に同じ復旧を行う。
 
 すべての取得モードは、フラグ形式のインターフェースを使う。既存のrawデータからprocessedデータを
 公開するための別の`preprocess`コマンドも、引き続き利用できる。

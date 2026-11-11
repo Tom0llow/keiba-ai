@@ -116,9 +116,17 @@ class JraVanRetriever:
             jvlink.realtime_history,
             jvlink.realtime_current,
         )
-        self._race_day_odds = (
-            RaceDayOddsRetriever(
-                runner,
+        if jvlink.race_day_odds is None:
+            self._race_day_odds = None
+        else:
+            race_day_odds_runner = JVLinkToSQLiteRunner(
+                jvlink.executable,
+                paths.raw_db,
+                timeout_seconds=float(jvlink.race_day_odds.execution_timeout_seconds),
+                validate_executable=validate_executable,
+            )
+            self._race_day_odds = RaceDayOddsRetriever(
+                race_day_odds_runner,
                 builder,
                 archive,
                 jvlink.race_day_odds,
@@ -126,9 +134,6 @@ class JraVanRetriever:
                 self._ledger_path,
                 paths.jvlink_runtime_dir,
             )
-            if jvlink.race_day_odds is not None
-            else None
-        )
         self._weekly = (
             WeeklyHistoricalOddsRetriever(
                 runner,
@@ -243,6 +248,12 @@ class JraVanRetriever:
         return self._race_day_odds.retrieve(
             race_date, reporter=reporter, recovery_reporter=recovery_reporter
         )
+
+    def recover_race_day_odds(self) -> int:
+        """Recover interrupted race-day captures without capturing any odds."""
+        if self._race_day_odds is None:
+            raise ValueError("[race_day_odds] is required for race-day-odds")
+        return self._race_day_odds.recover()
 
 
 # Keep the existing documented acquisition API name at its new owning module.

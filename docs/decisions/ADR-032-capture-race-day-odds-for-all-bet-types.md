@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-08
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: N/A
+- Related Issues/PRs: #27, #29（Amendment 1）
 - Supersedes: N/A
 - Superseded by: N/A
 
@@ -62,9 +62,28 @@ historical-oddsは`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`の行�
    既存のstaging行を検証付きで退避して空にし、実行する。失敗でstagingに行が残れば退避してから空にする。
    `running`の確定後にraw DBへの書込みが失敗した場合は、`running`とstagingを残して処理を止める。
    `ARCHIVE_CAPTURE_LOG`に`running`の行がある間、`AcquisitionLock`は全取得モードで取得を拒否する。
-   既存の`allow_unresolved=True`でも拒否し、race-day-oddsの起動時復旧だけが解除できる。
+   既存の`allow_unresolved=True`でも拒否し、race-day-oddsの起動時復旧と、Amendment 1の`--recover`だけが解除できる。
    起動時復旧は、runner停止を確認し、stagingを退避・初期化して、その行を`interrupted`にする。
 7. 設定は`configs/jvlink.toml`の任意section `[race_day_odds]`に置く。DataSpecは`0B31`〜`0B36`の6種ちょうどとする。
+
+### Amendment 1: 実行タイムアウト・実行XMLの起動時検証・復旧専用の手段（2026-11-11）
+
+- 2026-11-11に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま。Decision Historyを参照）。Issue #29。
+- `[race_day_odds]`に必須キー`execution_timeout_seconds`（正の整数、秒）を加える。リポジトリの設定値は120秒とする。
+  race-day-oddsは、この値をタイムアウトとする専用のJVLinkToSQLite runnerで実行する。他の取得モードのrunnerとタイムアウトは変えない。
+  タイムアウトはJV-Linkの失敗と同じ`failed/jvlink_error`として記録し、stagingに行があれば退避してから初期化し、次の取得へ進む。
+  120秒は実測の前の値であり、運用で計測して見直す。タイムアウトが戻るのは、killしたJVLinkToSQLiteの出力を他のプロセスが
+  握っていない場合である（Risks参照）。
+- 起動時復旧と取得予定の計画の後、最初の待機の前に、最初の予定のレースキーで実行XMLを一度生成し、実時間更新と`0B31`〜`0B36`が
+  有効で、各`JVRaceKey`がそのレースの値であることを検証する。失敗すれば取得記録に何も書かずに終了する
+  （CLIはstderrに`race-day-odds setup failed: ...`を1行、stdoutに要約のJSONを出し、終了コード1）。
+  seedのファイル自体がない場合は、従来どおりretrieverの構築時に例外で終わる（`--recover`も同じ）。どちらも何も書かない。
+- 各取得では、実行XMLの生成を`running`の確定の前に行う。生成に失敗した取得は記録せずに`failed/capture_not_recorded`と報告し、
+  次の取得へ進む。Decision 6の`running`確定後の書込み失敗で止まる挙動は変えない。
+- `--retrieve --mode=race-day-odds --recover`は、起動時復旧と同じ手順だけを行って`{"interrupted":N}`を出力し、取得はしない。
+  `--date`やレースのoptionとは併用できない。ロックを取れない場合とrunnerが動いている場合は、stderrに
+  `race-day-odds recovery failed: ...`を1行出して終了コード1とする。常駐中のrace-day-oddsを止めてから実行する。
+- 取得記録の`running`が残っているときの他モードの拒否メッセージは、`--retrieve --mode=race-day-odds --recover`を示す。
 
 ---
 
@@ -91,7 +110,7 @@ historical-oddsは`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`の行�
 ### Negative
 
 - 3連単の子表は1取得で最大4,896行となり、1開催日で最大約70万行増える。
-- `running`の記録が残ると、race-day-oddsを再起動して復旧するまで全取得モードが止まる。
+- `running`の記録が残ると、`--recover`またはrace-day-oddsの起動時復旧で復旧するまで全取得モードが止まる。
 - 同じ`HappyoTime`の訂正版はarchiveに入らず、退避だけされる。
 
 ### Neutral / Follow-on effects
@@ -185,6 +204,9 @@ Reason not selected:
 | 発走前の中間オッズで子表が全組合せを返すか未確認 | 一部の組合せが欠ける | `child_observed_rows`で事後に確認する |
 | 発走時刻の変更に追従しない | 変更レースの取得時点がずれる | 基準時刻と実測時計を記録し、事後に補正する |
 | 常駐中のスリープ・認証切れ・ネットワーク断 | 取得が欠ける | 失敗を記録し、復旧は行わない |
+| JVLinkToSQLiteが応答しない | その時点の取得が欠ける | `execution_timeout_seconds`で打ち切り、`failed/jvlink_error`として次の取得へ進む（Amendment 1） |
+| タイムアウトでkillした後にJV-Linkの別のプロセスが残るかが未確認 | 次の取得のstagingに前の行が混ざる | 取得前の退避・初期化と同一レース1行の検査で、archiveには入れない |
+| TTYでない実行で、killした後もJVLinkToSQLiteの出力を握る別のプロセスが残る | 出力の読取が終わらず、タイムアウトが戻らずに常駐が止まる | 未確認。kill後の待機に上限を設けるか、プロセスツリーごと終了するかは後続課題とする |
 | 完全なParquet出力との重なり | 書込みが`database is locked`で失敗し、取得が欠けるか当日の取得が止まる | 運用で重ねない。出力側との排他は後続課題とする |
 | 中断で残ったロールバックジャーナル | 読取専用の接続では巻き戻せない | 取得記録の検査は読み書き接続で開き、SQLiteに巻き戻させる |
 
@@ -203,7 +225,8 @@ Reason not selected:
   raw DBはロールバックジャーナル方式のため、出力の長い読取取引の間は取得の書込みが失敗する。
 - 再起動すると、取得記録に終了状態がある（レース、分前）の組は実行も記録もし直さない。
 - raw DBの容量が開催日ごとに増える。
-- 中断後は、race-day-oddsの再起動で復旧するまで他の取得モードが止まる。
+- 中断後は、`--retrieve --mode=race-day-odds --recover`、またはrace-day-oddsの起動時復旧で解消するまで他の取得モードが止まる。
+  `--recover`は、常駐中のrace-day-oddsを止めてから実行する。
 
 ---
 
@@ -216,7 +239,7 @@ Reason not selected:
 ### Rollback
 
 `[race_day_odds]`を削除すればコマンドは使えなくなる。作成済みの`ARCHIVE_CAPTURE_*`表は残る。
-`running`の行が残っている場合は、先にrace-day-oddsの起動時復旧で解消する。
+`running`の行が残っている場合は、先に`--retrieve --mode=race-day-odds --recover`で解消する。
 
 ---
 
@@ -243,3 +266,4 @@ Reason not selected:
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-08 | Accepted | 開催日の発走前複数時点で全券種の速報オッズをarchiveすることを決定 |
+| 2026-11-11 | Accepted | Amendment 1: 実行タイムアウト、実行XMLの起動時検証と`running`確定前の生成、`--recover`を追加 |

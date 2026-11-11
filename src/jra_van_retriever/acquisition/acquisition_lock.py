@@ -59,7 +59,8 @@ def check_unresolved_capture(raw_db: Path) -> None:
             ("running",),
         ).fetchone():
             raise AcquisitionBlocked(
-                "unresolved race-day odds capture; recover capture staging first"
+                "unresolved race-day odds capture; "
+                "run --retrieve --mode=race-day-odds --recover first"
             )
 
 

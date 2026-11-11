@@ -191,13 +191,15 @@ realtimeはhistoryの0B41/0B42を取得・archive後にcurrentの0B31/0B32を取
 
 ADR-032のrace-day-oddsは、指定日の`NL_RA_RACE`の`HassoTime`から`[race_day_odds]`の各分前に
 0B31〜0B36を1回のJVLinkToSQLite実行で取得し、既存O1/O2 archiveとは別の`ARCHIVE_CAPTURE_*`表へ保存する。
+実行は`execution_timeout_seconds`をタイムアウトとするrace-day-odds専用のrunnerで行い、タイムアウトは`failed/jvlink_error`とする。
 
 | モジュール | 責務 |
 | --- | --- |
 | workflows/race_day_odds_plan.py | 取得予定の純粋な計画、遅延判定、ADR-013と同じ規則の結果分類。 |
-| workflows/race_day_odds.py | 起動時復旧、予定時刻までの待機、ロック内の1件ずつの取得の組立。時計とsleepは注入可能。 |
+| workflows/race_day_odds.py | 起動時復旧（`--recover`も使う公開の`recover`）、実行XMLの起動時検証、予定時刻までの待機、ロック内の1件ずつの取得の組立（XMLの生成は`running`の確定より前）。時計とsleepは注入可能。 |
 | acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化、取得記録`ARCHIVE_CAPTURE_LOG`、DataSpec別SAVEPOINTでのarchive。 |
-| acquisition/acquisition_lock.py | 取得記録の`running`行がある間、全取得モードを拒否する。race-day-oddsの起動時復旧だけが解除する。 |
+| acquisition/acquisition_lock.py | 取得記録の`running`行がある間、全取得モードを拒否する。race-day-oddsの起動時復旧と`--recover`だけが解除する。 |
+| acquisition/setting_xml.py | 実行XMLの生成と、生成した実時間XMLが対象のDataSpecとレースキーを有効にしていることの検証。 |
 | progress/raw_observation.py | 指定日の`NL_RA_RACE`のキー・区分・発走時刻の読取。 |
 
 3連複・3連単の子表のarchiveは、親表の`headDataKubun`/`HappyoTime`を列として加え、全列`TEXT`とする。

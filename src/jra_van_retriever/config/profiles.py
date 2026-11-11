@@ -47,6 +47,7 @@ class RaceDayOddsProfile(JVLinkProfile):
 
     offsets_minutes: tuple[int, ...] = (30, 10, 5, 2)
     late_tolerance_seconds: int = 60
+    execution_timeout_seconds: int = 120
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,9 @@ def _load_race_day_odds(config: dict[str, Any]) -> RaceDayOddsProfile | None:
         offsets_minutes=_require_positive_int_tuple(section, "offsets_minutes", "race_day_odds"),
         late_tolerance_seconds=_require_positive_int(
             section, "late_tolerance_seconds", "race_day_odds"
+        ),
+        execution_timeout_seconds=_require_positive_int(
+            section, "execution_timeout_seconds", "race_day_odds"
         ),
     )
     validate_race_day_odds_profile(profile)

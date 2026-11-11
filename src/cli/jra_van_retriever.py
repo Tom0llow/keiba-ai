@@ -13,9 +13,11 @@ import typer
 from cli.options import DataConfigOption, JVLinkConfigOption
 from data.storage.snapshot_builder import SnapshotBuilder
 from domain.race_key import RaceKey
+from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked
+from jra_van_retriever.acquisition.jvlink_runner import JVLinkToSQLiteError
 from jra_van_retriever.config.profiles import JVLinkConfig
 from jra_van_retriever.retriever import DataRetriever
-from jra_van_retriever.workflows.race_day_odds import CaptureReport
+from jra_van_retriever.workflows.race_day_odds import CaptureReport, RaceDayOddsSetupError
 
 
 @dataclass(frozen=True)
@@ -70,7 +72,11 @@ def main(
     recover: Annotated[
         bool,
         typer.Option(
-            "--recover", help="Quarantine and recover an interrupted historical-odds request."
+            "--recover",
+            help=(
+                "Quarantine and recover an interrupted historical-odds request "
+                "or race-day-odds capture."
+            ),
         ),
     ] = False,
     confirm_provider_missing: Annotated[
@@ -145,8 +151,16 @@ def main(
         retrieve_realtime(race_key, data_config, jvlink_config)
         return
     if mode == "race-day-odds":
-        if odds_options:
+        if plan_only or confirm_provider_missing or data_spec:
             raise typer.BadParameter("odds-only options require --mode historical-odds")
+        if recover:
+            if race.specified:
+                raise typer.BadParameter(
+                    "race-day-odds --recover does not accept --date, --jyo, --kaiji, "
+                    "--nichiji, or --race"
+                )
+            recover_race_day_odds(data_config, jvlink_config)
+            return
         if race.race_datetime is None:
             raise typer.BadParameter("race-day-odds requires --date")
         if any(
@@ -357,6 +371,24 @@ def retrieve_race_day_odds(
     except KeyboardInterrupt:
         typer.echo(json.dumps(partial_summary, separators=(",", ":")))
         raise typer.Exit(code=130) from None
+    except RaceDayOddsSetupError as exc:
+        typer.echo(f"race-day-odds setup failed: {_one_line(exc)}", err=True)
+        typer.echo(json.dumps(partial_summary, separators=(",", ":")))
+        raise typer.Exit(code=1) from None
     typer.echo(json.dumps(result.summary, separators=(",", ":")))
     if result.failed:
         raise typer.Exit(code=1)
+
+
+def recover_race_day_odds(data_config: Path, jvlink_config: Path) -> None:
+    """Recover interrupted race-day captures without starting the capture loop."""
+    try:
+        interrupted = _retriever(data_config, jvlink_config).recover_race_day_odds()
+    except (AcquisitionBlocked, JVLinkToSQLiteError) as exc:
+        typer.echo(f"race-day-odds recovery failed: {_one_line(exc)}", err=True)
+        raise typer.Exit(code=1) from None
+    typer.echo(json.dumps({"interrupted": interrupted}, separators=(",", ":")))
+
+
+def _one_line(error: BaseException) -> str:
+    return " ".join(str(error).split())

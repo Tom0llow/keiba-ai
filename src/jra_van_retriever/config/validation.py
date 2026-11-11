@@ -141,3 +141,5 @@ def validate_race_day_odds_profile(profile: RaceDayOddsProfile) -> None:
         raise ValueError("race-day-odds offsets_minutes must not contain duplicates")
     if type(profile.late_tolerance_seconds) is not int or profile.late_tolerance_seconds <= 0:
         raise ValueError("race-day-odds late_tolerance_seconds must be a positive integer")
+    if type(profile.execution_timeout_seconds) is not int or profile.execution_timeout_seconds <= 0:
+        raise ValueError("race-day-odds execution_timeout_seconds must be a positive integer")
