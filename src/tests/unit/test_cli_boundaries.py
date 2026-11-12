@@ -23,6 +23,7 @@ def test_application_registers_every_command_once_in_existing_order() -> None:
         "prepare-real-input",
         "prepare-reference-input",
         "evaluate-pl",
+        "train-pl",
     ]
     assert [command.name for command in datamart_app.registered_commands] == [
         "build",

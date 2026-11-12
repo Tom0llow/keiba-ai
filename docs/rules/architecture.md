@@ -103,6 +103,10 @@ coherent responsibility and have a name that describes that responsibility.
   shared contexts must return the same sets in the same order.
 - Dataset types, schema, validation, availability and construction have distinct owners.
   Model artifacts belong to `artifacts/native_model.py`, native LightGBM to `backends/`.
+  The ADR-038 final PL model artifact belongs to `artifacts/pl_model.py`; like
+  `native_model.py` it owns its small byte I/O and never imports `data` or the CLI.
+  Its final fit lives in `models/experiments/pl_training.py`, and the CLI composes
+  reading, training and publication.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
   See ADR-025 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
 - Share option definitions through `cli/options.py` and generic CLI JSON handling

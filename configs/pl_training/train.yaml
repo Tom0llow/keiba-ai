@@ -1,0 +1,11 @@
+# Train the final top-three Plackett-Luce model on one reference datamart (ADR-038).
+# Every value is required; see final.yaml for the operational profile.
+datamart_path: ???
+datamart_manifest_sha256: ???
+train_start_year: ???
+valid_year: ???
+variant: ???
+lightgbm: ???
+num_boost_round: ???
+early_stopping_rounds: ???
+temperature_bounds: ???

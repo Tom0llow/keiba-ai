@@ -46,6 +46,9 @@ _PL_RESERVED_PARAMETERS = frozenset(
         "n_iter_no_change",
         "verbosity",
         "verbose",
+        # The PL model's missing-value guard (ADR-038) assumes NaN is LightGBM's missing value.
+        "use_missing",
+        "zero_as_missing",
     }
 )
 _PL_BOOSTING_KEYS = ("boosting", "boosting_type", "boost")
@@ -156,6 +159,93 @@ class PLBooster(Protocol):
 
     def feature_name(self) -> object:
         """Return the native model feature names."""
+
+    def save_model(self, filename: str, *, num_iteration: int | None = None) -> object:
+        """Write the native text model, keeping at most ``num_iteration`` iterations."""
+
+    def current_iteration(self) -> int:
+        """Return the number of boosting iterations the booster holds."""
+
+    def dump_model(self, num_iteration: int | None = None) -> object:
+        """Return the native model as a JSON-compatible tree dump."""
+
+
+class LoadedPLBooster(Protocol):
+    """Describe a PL booster read back from its native text model (ADR-038)."""
+
+    def predict(self, data: object) -> object:
+        """Return raw model scores from every held iteration."""
+
+    def feature_name(self) -> object:
+        """Return the native model feature names."""
+
+    def current_iteration(self) -> int:
+        """Return the number of boosting iterations the booster holds."""
+
+    def dump_model(self) -> object:
+        """Return the native model as a JSON-compatible tree dump."""
+
+
+_MISSING_TYPES = frozenset({"None", "Zero", "NaN"})
+
+
+def split_missing_types(dump: object, feature_count: int) -> tuple[frozenset[str], ...]:
+    """Return, per feature, the missing types of every split on it in a booster dump.
+
+    LightGBM fixes a feature's missing type from its bin-construction sample, not from
+    every training row, so a feature with rare missing values can split with type
+    ``None`` and send a missing value to the zero branch (ADR-038).
+
+    Raises:
+        ValueError: If the dump is malformed or holds a categorical split.
+    """
+    trees = dump.get("tree_info") if isinstance(dump, Mapping) else None
+    if not isinstance(trees, list):
+        raise ValueError("LightGBM model dump has no tree_info")
+    found: list[set[str]] = [set() for _ in range(feature_count)]
+    stack: list[object] = [
+        tree.get("tree_structure") if isinstance(tree, Mapping) else None for tree in trees
+    ]
+    while stack:
+        node = stack.pop()
+        if not isinstance(node, Mapping):
+            raise ValueError("LightGBM model dump has an invalid tree node")
+        if "split_index" not in node:
+            continue
+        feature = node.get("split_feature")
+        missing = node.get("missing_type")
+        if (
+            isinstance(feature, bool)
+            or not isinstance(feature, int)
+            or not 0 <= feature < feature_count
+            or missing not in _MISSING_TYPES
+        ):
+            raise ValueError("LightGBM model dump has an invalid split")
+        if node.get("decision_type") != "<=":
+            raise ValueError("PL models support only numerical splits")
+        found[feature].add(cast(str, missing))
+        stack.extend((node.get("left_child"), node.get("right_child")))
+    return tuple(frozenset(kinds) for kinds in found)
+
+
+def load_pl_booster(model_text: str, feature_names: Sequence[str]) -> LoadedPLBooster:
+    """Load a PL booster from verified native model text and check its feature names.
+
+    The text is passed as a string so that the bytes whose hash was verified are the
+    bytes LightGBM reads. A booster trained with the callable PL objective is saved
+    without an objective line and predicts raw scores.
+
+    Raises:
+        LightGBMUnavailableError: If LightGBM is unavailable.
+        ValueError: If the feature names differ from ``feature_names``.
+    """
+    module = load_lightgbm()
+    booster_constructor = cast(Callable[..., object], module.__dict__["Booster"])
+    booster = cast(LoadedPLBooster, booster_constructor(model_str=model_text))
+    names = booster.feature_name()
+    if not isinstance(names, Sequence) or tuple(cast(Sequence[str], names)) != tuple(feature_names):
+        raise ValueError("native PL model feature names differ from its manifest")
+    return booster
 
 
 @dataclass(frozen=True)

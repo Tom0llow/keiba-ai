@@ -142,6 +142,98 @@ def plan_yearly_folds(
     return tuple(plans)
 
 
+@dataclass(frozen=True)
+class FinalFitAudit:
+    """Record the exclusions and label-use boundaries of a final fit without a test year."""
+
+    valid_first_freeze_at: datetime
+    train_max_label_usable_after: datetime
+    valid_max_label_usable_after: datetime
+    purged_train_races: int
+    # The latest label the fit used: a prediction freeze must lie strictly after it.
+    label_usable_through: datetime
+
+
+@dataclass(frozen=True)
+class FinalFit:
+    """Hold the train and valid races of one final fit and its audit."""
+
+    train_start_year: int
+    valid_year: int
+    train: RaceArrays
+    valid: RaceArrays
+    audit: FinalFitAudit
+
+
+@dataclass(frozen=True)
+class FinalFitPlan:
+    """Hold one audited final fit as race indexes into the source arrays (ADR-038)."""
+
+    train_start_year: int
+    valid_year: int
+    train_races: tuple[int, ...]
+    valid_races: tuple[int, ...]
+    audit: FinalFitAudit
+
+    def materialize(self, arrays: RaceArrays) -> FinalFit:
+        """Copy the planned races out of the arrays the plan was made from."""
+        return FinalFit(
+            train_start_year=self.train_start_year,
+            valid_year=self.valid_year,
+            train=arrays.subset(self.train_races),
+            valid=arrays.subset(self.valid_races),
+            audit=self.audit,
+        )
+
+
+def plan_final_fit(arrays: RaceArrays, *, train_start_year: int, valid_year: int) -> FinalFitPlan:
+    """Plan the final fit: train ``train_start_year``..``valid_year - 1``, valid ``valid_year``.
+
+    Train labels available at or after the first valid freeze are excluded, as in
+    ``plan_yearly_folds``. With no test year, no valid race is excluded; every valid
+    label is used by early stopping and the temperature, so the boundary of the fit is
+    the later of the train and valid maxima.
+
+    Raises:
+        ValueError: If years are invalid or absent, a split is empty, or the post-purge
+            train labels are not strictly before the first valid freeze.
+    """
+    _validate_year(train_start_year, "train_start_year")
+    _validate_year(valid_year, "valid_year")
+    available_years = {int(year) for year in arrays.years}
+    for name, year in (("train_start_year", train_start_year), ("valid_year", valid_year)):
+        if year not in available_years:
+            raise ValueError(f"{name} {year} is not present in the datamart")
+    if train_start_year > valid_year - 1:
+        raise ValueError("train_start_year must be at most valid_year - 1")
+    train_indices = _race_indices_between(arrays.years, train_start_year, valid_year - 1)
+    valid_indices = _race_indices_for_year(arrays.years, valid_year)
+    _require_nonempty_split(train_indices, "train")
+    _require_nonempty_split(valid_indices, "valid")
+    valid_first_freeze_at = min(arrays.freeze_at[index] for index in valid_indices)
+    retained_train = tuple(
+        index for index in train_indices if arrays.label_usable_after[index] < valid_first_freeze_at
+    )
+    _require_nonempty_split(retained_train, "train after label purge")
+    train_max = max(arrays.label_usable_after[index] for index in retained_train)
+    valid_max = max(arrays.label_usable_after[index] for index in valid_indices)
+    if train_max >= valid_first_freeze_at:
+        raise ValueError("train labels cross the valid freeze boundary")
+    return FinalFitPlan(
+        train_start_year=train_start_year,
+        valid_year=valid_year,
+        train_races=retained_train,
+        valid_races=valid_indices,
+        audit=FinalFitAudit(
+            valid_first_freeze_at=valid_first_freeze_at,
+            train_max_label_usable_after=train_max,
+            valid_max_label_usable_after=valid_max,
+            purged_train_races=len(train_indices) - len(retained_train),
+            label_usable_through=max(train_max, valid_max),
+        ),
+    )
+
+
 def _validate_year(value: object, name: str) -> None:
     if isinstance(value, bool) or not isinstance(value, int):
         raise ValueError(f"{name} must contain integer years")
@@ -163,8 +255,12 @@ def _require_nonempty_split(indices: Sequence[int], name: str) -> None:
 
 
 __all__ = [
+    "FinalFit",
+    "FinalFitAudit",
+    "FinalFitPlan",
     "LabelUseAudit",
     "YearlyFold",
     "YearlyFoldPlan",
+    "plan_final_fit",
     "plan_yearly_folds",
 ]
