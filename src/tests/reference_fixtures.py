@@ -5,7 +5,7 @@ from __future__ import annotations
 from datetime import date, datetime, timedelta
 from itertools import combinations
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -35,6 +35,8 @@ from make_features.reference_raw import (
     WC_TABLE,
 )
 from models.serialization.reference_datamart import (
+    MarketRows,
+    PreparedTargets,
     ReferenceDatamartBuilder,
     ReferenceYearOutput,
     workout_window,
@@ -272,8 +274,6 @@ def datamart_from_raw(
 ) -> tuple[ReferenceDatamartBuilder, list[ReferenceYearOutput]]:
     """Feed a raw fixture to the chronological builder exactly as the CLI reads a snapshot."""
     tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
-    ra_rows = _unique_rows(tables["history_ra"] + tables["label_ra"])
-    se_rows = _unique_rows(tables["history_se"] + tables["label_se"])
     builder = ReferenceDatamartBuilder(
         settings=cast(dict[str, object], raw["calculation_settings"]),
         rules=cast(dict[str, object], raw["rules"]),
@@ -284,44 +284,79 @@ def datamart_from_raw(
         pedigree_rows=tables["um"],
         labeled=labeled,
     )
-    days_window = cast(int, cast(dict[str, object], raw["calculation_settings"])["days_window"])
-    outputs = []
-    for year in builder.years:
-        window = workout_window(
-            year, target_start=target_start, target_end=target_end, days_window=days_window
-        )
-        workouts = (
-            [
-                (kind, row)
-                for kind in ("hc", "wc")
-                for row in tables[kind]
-                if window[0].strftime("%Y%m%d")
-                <= cast(str, row["ChokyoDate"])
-                <= window[1].strftime("%Y%m%d")
-            ]
-            if window is not None
-            else []
-        )
-
-        def markets(
-            day: date,
-        ) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
-            stamp = (str(day.year), day.strftime("%m%d"))
-            return tuple(  # type: ignore[return-value]
-                [row for row in tables[name] if (row["idYear"], row["idMonthDay"]) == stamp]
-                for name in ("o1", "o2")
-            )
-
-        outputs.append(
-            builder.add_year(
-                year,
-                ra_rows=[row for row in ra_rows if _in_year(row, year, target_end)],
-                se_rows=[row for row in se_rows if _in_year(row, year, target_end)],
-                workout_rows=workouts,
-                markets=markets,
-            )
-        )
+    outputs = [
+        builder.add_year(year, **_year_inputs(raw, builder, year), markets=day_markets(raw))
+        for year in builder.years
+    ]
     return builder, outputs
+
+
+def prepared_from_raw(
+    raw: dict[str, object], *, registry: FeatureRegistry, day: date
+) -> tuple[ReferenceDatamartBuilder, PreparedTargets]:
+    """Feed history years through ``add_year`` and prepare the one label-free date."""
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+    builder = ReferenceDatamartBuilder(
+        settings=cast(dict[str, object], raw["calculation_settings"]),
+        rules=cast(dict[str, object], raw["rules"]),
+        registry=registry,
+        target_start=day,
+        target_end=day,
+        snapshot=cast(dict[str, object], raw["snapshot"]),
+        pedigree_rows=tables["um"],
+        labeled=False,
+    )
+    for year in builder.years:
+        if year < day.year:
+            builder.add_year(year, **_year_inputs(raw, builder, year), markets=day_markets(raw))
+    return builder, builder.prepare_targets(day.year, **_year_inputs(raw, builder, day.year))
+
+
+def day_markets(raw: dict[str, object]) -> MarketRows:
+    """Return the fixture's O1/O2 rows of one date, as the CLI reads a pinned snapshot."""
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+
+    def markets(day: date) -> tuple[list[dict[str, object]], list[dict[str, object]]]:
+        stamp = (str(day.year), day.strftime("%m%d"))
+        o1, o2 = (
+            [row for row in tables[name] if (row["idYear"], row["idMonthDay"]) == stamp]
+            for name in ("o1", "o2")
+        )
+        return o1, o2
+
+    return markets
+
+
+def _year_inputs(
+    raw: dict[str, object], builder: ReferenceDatamartBuilder, year: int
+) -> dict[str, Any]:
+    tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
+    ra_rows = _unique_rows(tables["history_ra"] + tables["label_ra"])
+    se_rows = _unique_rows(tables["history_se"] + tables["label_se"])
+    days_window = cast(int, cast(dict[str, object], raw["calculation_settings"])["days_window"])
+    window = workout_window(
+        year,
+        target_start=builder.target_start,
+        target_end=builder.target_end,
+        days_window=days_window,
+    )
+    workouts = (
+        [
+            (kind, row)
+            for kind in ("hc", "wc")
+            for row in tables[kind]
+            if window[0].strftime("%Y%m%d")
+            <= cast(str, row["ChokyoDate"])
+            <= window[1].strftime("%Y%m%d")
+        ]
+        if window is not None
+        else []
+    )
+    return {
+        "ra_rows": [row for row in ra_rows if _in_year(row, year, builder.target_end)],
+        "se_rows": [row for row in se_rows if _in_year(row, year, builder.target_end)],
+        "workout_rows": workouts,
+    }
 
 
 RICH_TARGET_DAYS = (date(2026, 12, 20), date(2026, 12, 27), date(2027, 1, 3))

@@ -100,3 +100,7 @@ realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]
 offsets_minutes = [30, 10, 5, 2]
 late_tolerance_seconds = 60
 execution_timeout_seconds = 120
+# Minutes before the start of each race's 0B41/0B42 prediction fetch (ADR-032
+# Amendment 2). Loading rejects values outside 3-5: the fetch must start at or after the
+# reference freeze (5, ADR-037) and leave time to calculate before sales close (2).
+prediction_offset_minutes = 5

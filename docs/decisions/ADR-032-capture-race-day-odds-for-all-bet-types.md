@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-08
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: #27, #29（Amendment 1）
+- Related Issues/PRs: #27, #29（Amendment 1）, #37（Amendment 2）
 - Supersedes: N/A
 - Superseded by: N/A
 
@@ -84,6 +84,30 @@ historical-oddsは`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`の行�
   `--date`やレースのoptionとは併用できない。ロックを取れない場合とrunnerが動いている場合は、stderrに
   `race-day-odds recovery failed: ...`を1行出して終了コード1とする。常駐中のrace-day-oddsを止めてから実行する。
 - 取得記録の`running`が残っているときの他モードの拒否メッセージは、`--retrieve --mode=race-day-odds --recover`を示す。
+
+### Amendment 2: freezeの時刻の0B41/0B42の予測用の取得（2026-11-12）
+
+- 2026-11-12に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #37、ADR-037。
+- `[race_day_odds]`に任意のキー`prediction_offset_minutes`（整数3〜5）を加える。リポジトリの設定値は5で、参考特徴量の
+  freeze（発走5分前）と同じ時刻である。キーがなければ、従来の動作と変わらない。
+- 値があるとき、各レースに予測用の取得を1件、発走の`prediction_offset_minutes`分前に置く。`[realtime_history]`の
+  profile（realtimeの更新だけで、DataSpecはちょうど0B41/0B42）を使い、起動時の実行XMLの検証もこのprofileに行う。
+  予定時刻が同じ取得では、予測用の取得を先に実行する。
+- 変わる決定:
+  - D1: 予測用の取得という工程を加える。
+  - D2: 予測用の取得に限り、`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`へ書き込む（ADR-007と同じ全行の重複除去）。
+  - D3: 予測用の取得の取得記録では、`HappyoTime`は保存したstagingの行のうち`headDataKubun="1"`の`HappyoTime`の最大値、
+    `headDataKubun`はその行があれば`"1"`とする（なければどちらもnull）。
+  - D4: 予測用の取得には`staging_multiple_rows`を適用しない（時系列は複数行）。
+  - D5: 予測用の取得には`happyo_conflict`を適用しない。
+  - D6: 起動時復旧と`--recover`は、予測用の取得の`running`の行も扱う。0B31と0B41が共有する`RT_O1`
+    （0B32と0B42の`RT_O2`）は1回だけ退避する。
+  - D7: 変更なし。
+- 予測用の取得が終了状態になるたびに（`skipped_late`を含む）、ロックを持ったまま、そのレースのO1/O2の行と取得記録を
+  レース別のParquetへ公開する（`SnapshotBuilder.update_race`）。公開の失敗は、取得記録のreasonに`publish_failed`として
+  追記し、その日の取得は続ける。
+- 再開時の終了済みの判定は（レース、分前、種類）で行い、同じ分前の予測用の取得と0B31〜0B36の取得を区別する。
+- 帰結: historical-oddsは、予測用の取得で行のあるレースを取得済みとみなし、発走後の発表をbackfillしない（#66）。
 
 ---
 
@@ -267,3 +291,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-08 | Accepted | 開催日の発走前複数時点で全券種の速報オッズをarchiveすることを決定 |
 | 2026-11-11 | Accepted | Amendment 1: 実行タイムアウト、実行XMLの起動時検証と`running`確定前の生成、`--recover`を追加 |
+| 2026-11-12 | Accepted | Amendment 2: freezeの時刻の0B41/0B42の予測用の取得と、レース別Parquetへの公開を追加（ADR-037） |

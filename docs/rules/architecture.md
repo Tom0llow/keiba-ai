@@ -91,6 +91,13 @@ coherent responsibility and have a name that describes that responsibility.
   assembly belongs to `models/serialization/reference_datamart.py`; shared
   chronological history views belong to `make_features/generation/chronological.py`;
   staging and rename publication belong to `data/storage/directory_publisher.py`.
+  ADR-037 race-day features prepare the target date once
+  (`prepare_targets`) and calculate each race later from the
+  race-scoped Parquet that race-day-odds publishes after its 0B41/0B42
+  prediction fetch; `data/loader/race_version.py` pins that version, and
+  the waiting and publishing loop lives in `cli/reference_datamart.py`.
+  The fetch itself belongs to `jra_van_retriever/workflows/race_day_odds.py`,
+  which receives the publisher as a callable and never imports `data`.
   Calculators read windows, indexes and as-of baselines through
   `CalculationContext` accessors whose defaults keep the per-race reference values;
   shared contexts must return the same sets in the same order.

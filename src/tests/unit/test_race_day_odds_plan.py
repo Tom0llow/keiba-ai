@@ -157,3 +157,55 @@ def test_race_day_profile_validation_rejects_invalid_values(
 ) -> None:
     with pytest.raises(ValueError, match=message):
         validate_race_day_odds_profile(_profile(**changes))
+
+
+def test_prediction_fetch_precedes_a_capture_planned_at_the_same_instant() -> None:
+    rows = [_row("05", "11", "1500"), _row("05", "12", "1530")]
+
+    plans = plan_captures(
+        rows,  # type: ignore[arg-type]
+        RACE_DATE,
+        (5, 2),
+        prediction_offset_minutes=5,
+    )
+
+    assert [(p.race_key.race_number, p.offset_minutes, p.kind) for p in plans] == [
+        ("11", 5, "prediction"),
+        ("11", 5, "capture"),
+        ("11", 2, "capture"),
+        ("12", 5, "prediction"),
+        ("12", 5, "capture"),
+        ("12", 2, "capture"),
+    ]
+    assert plans[0].planned_at == datetime(2026, 11, 15, 5, 55, tzinfo=UTC)
+
+
+def test_plans_without_a_prediction_offset_are_captures_only() -> None:
+    plans = plan_captures([_row("05", "11", "1500")], RACE_DATE, (5,))  # type: ignore[list-item]
+
+    assert [plan.kind for plan in plans] == ["capture"]
+
+
+@pytest.mark.parametrize("offset", [2, 6, True])
+def test_prediction_offset_must_start_at_or_after_freeze_and_before_close(offset: object) -> None:
+    with pytest.raises(ValueError, match="3 through 5"):
+        validate_race_day_odds_profile(_profile(prediction_offset_minutes=offset))
+
+
+def test_a_prediction_fetch_precedes_another_race_capture_at_the_same_instant() -> None:
+    # Race 12's freeze (14:58) coincides with race 11's two-minute capture.
+    rows = [_row("05", "11", "1500"), _row("05", "12", "1503")]
+
+    plans = plan_captures(
+        rows,  # type: ignore[arg-type]
+        RACE_DATE,
+        (2,),
+        prediction_offset_minutes=5,
+    )
+
+    assert [(p.race_key.race_number, p.offset_minutes, p.kind) for p in plans] == [
+        ("11", 5, "prediction"),
+        ("12", 5, "prediction"),
+        ("11", 2, "capture"),
+        ("12", 2, "capture"),
+    ]

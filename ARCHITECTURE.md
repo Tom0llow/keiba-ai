@@ -137,8 +137,9 @@ ADR-027により`configuration/experiments.py`が明示呼出し時にHydra Comp
 | data/loader/read_parquet.py | 明示Parquetパスのtable/metadata/RecordBatchの物理読込。CURRENTを扱わない。 |
 | data/storage/snapshot_builder.py | 読込・変換・保存・保存結果照合・完成版公開を統括。DataPreprocesserのAPI名も維持する。 |
 | data/storage/snapshot_store.py | complete/race別保存構造、versionパス、CURRENT解決、表パスの所有。 |
-| data/storage/snapshot_publisher.py | stagingの完成版rename後、os.replaceでCURRENTを原子的に更新する。 |
+| data/storage/snapshot_publisher.py | stagingの完成版rename後、os.replaceでCURRENTを原子的に更新する。読込中のためWindowsで置換が拒否された場合は、短い間隔で有限回だけ再試行し、失敗したら一時ファイルを消して旧CURRENTを残す。 |
 | data/loader/processed_data_loader.py | DataLoader公開API。Storageから選択パスを取得し、物理readerへ渡す。 |
+| data/loader/race_version.py | ADR-037の`current_race_version_id`と`read_race_version`。レース別のCURRENTを一度だけ解決するか、指定のversionを読み、指定列だけを読み、nullable stringとレースキーを検査し、ファイルのSHA-256を返す。CURRENTがなければNone。 |
 | data/loader/read_json.py / data/saver/write_json.py | UTF-8 JSON object読込と、NaNをnullへ変換する汎用JSON保存。 |
 
 完全snapshotの全表を一つのSQLite読取取引内で処理する。バッチは最大65,536行、
@@ -147,11 +148,11 @@ ADR-027により`configuration/experiments.py`が明示呼出し時にHydra Comp
 
 完全版は`data/processed/snapshots/<id>/`、ポインタは`data/processed/CURRENT`。
 レース別は`data/processed/realtime/<race-id>/versions/<id>/`と同階層のCURRENTを使用する。
-対象RaceKeyのO1/O2 archiveをフィルタし、両方の生成・検証成功後にだけ切り替える。
+対象RaceKeyのO1/O2 archiveと、raw DBにあれば同じレースの`ARCHIVE_CAPTURE_LOG`の行を1つの読取取引でフィルタし、全表の生成・検証成功後にだけ切り替える。
 変換や公開の失敗では旧CURRENTを維持する。公開されなかった完成版の保持も従来通りである。
 DataLoader.iter_batchesは最初の反復までパスを解決せず、batch_sizeを先に検証する。
 
-Reader/Converter/WriterはStorage生成処理へ依存しない。DataLoaderだけが読込APIの組立として
+Reader/Converter/WriterはStorage生成処理へ依存しない。DataLoader・fixed_snapshot・race_versionだけが読込APIの組立として
 SnapshotStoreへ依存する。各packageの__init__は下位から上位への暗黙依存を作らない。
 
 ## 取得・進捗・復旧
@@ -192,12 +193,13 @@ realtimeはhistoryの0B41/0B42を取得・archive後にcurrentの0B31/0B32を取
 ADR-032のrace-day-oddsは、指定日の`NL_RA_RACE`の`HassoTime`から`[race_day_odds]`の各分前に
 0B31〜0B36を1回のJVLinkToSQLite実行で取得し、既存O1/O2 archiveとは別の`ARCHIVE_CAPTURE_*`表へ保存する。
 実行は`execution_timeout_seconds`をタイムアウトとするrace-day-odds専用のrunnerで行い、タイムアウトは`failed/jvlink_error`とする。
+ADR-032 Amendment 2（ADR-037）により、`prediction_offset_minutes`があるときは各レースに予測用の取得を1件加える。発走のその分前（リポジトリの値5＝freeze）に`[realtime_history]`の0B41/0B42を取得し、同じ予定時刻の0B31〜0B36の取得より先に実行する。時系列はレースキーを確かめて`ARCHIVE_O1`/`ARCHIVE_O2`へ全行の重複除去で保存し、終了状態になるたびにロックを持ったまま、CLIから受け取ったpublisher（`SnapshotBuilder.update_race`）でレース別のParquetを公開する。公開の失敗は取得記録のreasonへ追記し、その日の取得は続ける。
 
 | モジュール | 責務 |
 | --- | --- |
-| workflows/race_day_odds_plan.py | 取得予定の純粋な計画、遅延判定、ADR-013と同じ規則の結果分類。 |
+| workflows/race_day_odds_plan.py | 取得予定の純粋な計画（種類`capture`/`prediction`）、遅延判定、ADR-013と同じ規則の結果分類。 |
 | workflows/race_day_odds.py | 起動時復旧（`--recover`も使う公開の`recover`）、実行XMLの起動時検証、予定時刻までの待機、ロック内の1件ずつの取得の組立（XMLの生成は`running`の確定より前）。時計とsleepは注入可能。 |
-| acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化、取得記録`ARCHIVE_CAPTURE_LOG`、DataSpec別SAVEPOINTでのarchive。 |
+| acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化（0B31/0B41が共有する`RT_O1`などは1回だけ）、取得記録`ARCHIVE_CAPTURE_LOG`、DataSpec別SAVEPOINTでのarchive（予測用の0B41/0B42は複数行の時系列として`ARCHIVE_O1`/`O2`へ）、種類ごとの終了済みの判定。 |
 | acquisition/acquisition_lock.py | 取得記録の`running`行がある間、全取得モードを拒否する。race-day-oddsの起動時復旧と`--recover`だけが解除する。 |
 | acquisition/setting_xml.py | 実行XMLの生成と、生成した実時間XMLが対象のDataSpecとレースキーを有効にしていることの検証。 |
 | progress/raw_observation.py | 指定日の`NL_RA_RACE`のキー・区分・発走時刻の読取。 |
@@ -246,8 +248,8 @@ ADR-034の参考datamartは、特徴量中間表の結合とは別の種類のda
 | make_features/generation/chronological.py | 開始順の1本の履歴配列、JST日付ごとの接頭辞の見方、基準集合の統計、調教の日付索引、対象ごとの共有context、時点の不変条件。I/Oなし。 |
 | make_features/generation/observations.py | `CalculationContext`の取得口（窓・騎手・調教師・親・調教・基準集合・事前率・日付で共有する値）。既定の実装は対象ごとの参考経路と同じ値を返す。 |
 | make_features/reference_snapshot.py | 対象1レースの正規化`normalize_reference_target`、履歴・血統・ラベルの正規化。既存の`normalize_reference_input`と共有する。 |
-| models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。ADR-036の`labeled=False`では、対象日1日について、対象日より前の行だけを履歴とし、対象には出馬表の列だけを渡し、freezeの後の市場の観測を要求し、ラベルを読まない。鮮度（`freshness`）を集計する。I/Oなし。 |
-| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。ADR-036のラベルなしの形式`reference_prediction_features`も、形式ごとの違いを`_Layout`にまとめて同じ検証で書込み・読込む（`read_reference_prediction_features`）。manifestのSHA-256で固定して一部だけ読む読込口（`read_reference_datamart_race_ids`・`read_reference_datamart_manifest`・`read_reference_datamart_label_usable_through`）。21群の再計算はしない。`models`をimportしない。 |
+| models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。ADR-036の`labeled=False`では、対象日1日について、対象日より前の行だけを履歴とし、対象には出馬表の列だけを渡し、市場の完全性を要求し、ラベルを読まない。ADR-037の`prepare_targets`は対象年を市場の前まで準備し、`PreparedTargets.calculate`が1レースずつ（任意の順序・一部）計算する。市場の完全性は、完全snapshotではfreezeより後の発表、当日の取得では開始時刻がfreeze以上であること（`observed_through`）。ラベルなしの一括の`add_year`も同じ経路を通る。鮮度（`freshness`）を集計する。I/Oなし。 |
+| make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。ADR-036のラベルなしの形式`reference_prediction_features`も、形式ごとの違い（ADR-037で形式番号2と必須の`market_source`）を`_Layout`にまとめて同じ検証で書込み・読込む（`read_reference_prediction_features`。取得の開始時刻がfreeze以上であることと、出力のレースが`market_source`の1レースだけであることも検証し、形式番号1は拒否する）。manifestのSHA-256で固定して一部だけ読む読込口（`read_reference_datamart_race_ids`・`read_reference_datamart_manifest`・`read_reference_datamart_label_usable_through`）。21群の再計算はしない。`models`をimportしない。 |
 | data/storage/directory_publisher.py | 出力と同じ親のstagingへ書き、完成後にrenameで公開し、失敗時にstagingを削除する。 |
 | data/loader/fixed_snapshot.py / reference_input.py | 表の事前のhash、年・日付の期間読込、O1/O2のfooterを1年の間使い回す読込口。 |
 
@@ -349,6 +351,8 @@ CLIは出力先がいずれかの入力と同じファイルを指す場合、�
 `--output`は存在しない新しいパスで、親が存在し、processed rootの外にあることを要求する。進捗はstderr、
 公開後の要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130とし、どちらでもstagingを残さない。
 `datamart build-reference-prediction`は同じcli/reference_datamart.pyが、学習用datamartのmanifestをSHA-256で固定して読み、`preparation_config`の設定をconfiguration/reference_datamart.pyで検証し、計算契約と特徴量定義の一致をsnapshotの読込前に確かめる。対象日1日をラベルなしで構築し、年ごとの読込は`build-reference`と共有する。出力・進捗・終了コードの規則は`build-reference`と同じである。
+ADR-037の`datamart build-reference-prediction-live`も同じモジュールが、同じ検証の後に完全snapshotのRA/SE/HC/WC/UMだけを固定し、対象日を朝に一度だけ準備する。その後、freezeの早い順に`--poll-interval-seconds`ごとにレース別のversionを`read_race_version`で読み、同じ`capture_id`の0B41・0B42がともに`archived`で開始がfreeze以上の取得があれば、そのレースを計算して`<output>/<race_id>/`へ公開する。取得の失敗は即座に、freezeから`--deadline-seconds`（180以下）を過ぎても取得が公開されないレースと、発売締切（freezeの180秒後）より後に初めて取得を見つけたレースは計算せずに保留する。レースごとの結果はstdoutへ1行のJSON、進捗と要約はstderrへ出す。準備・計算・公開の失敗は終了コード1、Ctrl+Cは130で、公開済みのレースは残し、作成中のstagingは残さない。JV-Linkの実行とraw DBへのアクセスはしない。
+`--retrieve --mode=race-day-odds`は、予測用の取得の公開のために`SnapshotBuilder.update_race`をpublisherとして渡す。
 `model evaluate-pl`はcli/pl_evaluation.pyが、configuration/pl_evaluation.pyで合成した`configs/pl_evaluation/`の
 設定と`processed_root`を読み、datamart manifestの`snapshot_id`で固定snapshotの`NL_RA_RACE`を期間・venue限定で
 読み、表hashを照合する。設定・fold年・variantを検査した後、make_datamart/tables/reference.pyの

@@ -17,6 +17,8 @@ ODDS_TABLES = {
     "0B42": ("RT_O2_ODDS_UMAREN", "ARCHIVE_O2_ODDS_UMAREN"),
 }
 ARCHIVE_TABLES = {spec: archive for spec, (_, archive) in ODDS_TABLES.items()}
+# The race-day prediction fetch (ADR-032 Amendment 2) runs exactly the time-series specs.
+PREDICTION_SPECS = frozenset(ODDS_TABLES)
 
 CAPTURE_TABLES = {
     "0B31": (("RT_O1_ODDS_TANFUKUWAKU", "ARCHIVE_CAPTURE_O1_ODDS_TANFUKUWAKU"),),

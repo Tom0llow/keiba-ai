@@ -47,6 +47,8 @@ def cli_color_mode(request: pytest.FixtureRequest, monkeypatch: pytest.MonkeyPat
         ["model", "prepare-input"],
         ["datamart"],
         ["datamart", "build-reference"],
+        ["datamart", "build-reference-prediction"],
+        ["datamart", "build-reference-prediction-live"],
     ],
 )
 def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[str]) -> None:
@@ -74,6 +76,10 @@ def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[s
             "cli.reference_datamart.FixedSnapshot",
             side_effect=AssertionError("unexpected fixed snapshot"),
         ) as fixed_snapshot,
+        patch(
+            "cli.reference_datamart.read_race_version",
+            side_effect=AssertionError("unexpected race version read"),
+        ) as race_version,
     ):
         result = runner.invoke(app, [*command, "--help"])
 
@@ -84,6 +90,7 @@ def test_help_never_reads_inputs_or_creates_runtime_dependencies(command: list[s
     config.assert_not_called()
     datamart_config.assert_not_called()
     fixed_snapshot.assert_not_called()
+    race_version.assert_not_called()
 
 
 def test_historical_basic_cli_retrieves_then_rebuilds_processed_data() -> None:
@@ -217,6 +224,7 @@ def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:
     preprocesser.update_race.return_value = {
         "ARCHIVE_O1_ODDS_TANFUKUWAKU": 10,
         "ARCHIVE_O2_ODDS_UMAREN": 7,
+        "ARCHIVE_CAPTURE_LOG": 3,
     }
     with (
         patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever),
@@ -241,7 +249,9 @@ def test_realtime_cli_retrieves_then_publishes_race_parquet() -> None:
         )
 
     assert result.exit_code == 0
-    assert "17 rows" in result.stdout
+    assert "realtime odds archived: 17 rows" in result.stdout
+    # The race's capture-log rows are published too but are not odds rows (ADR-037).
+    assert "realtime Parquet published: 17 rows" in result.stdout
     retriever.retrieve_realtime.assert_called_once_with(
         race_date=date(2026, 10, 4),
         jyo_code="05",
@@ -424,6 +434,9 @@ def test_preprocess_rebuild_can_run_without_retrieval() -> None:
     preprocesser.rebuild.assert_called_once_with()
 
 
+_BUILDER = Mock()
+
+
 def _race_day_result(failed: int) -> Mock:
     report = CaptureReport(
         "abc",
@@ -435,9 +448,10 @@ def _race_day_result(failed: int) -> Mock:
     retriever = Mock()
 
     def retrieve(
-        race_date: date, *, reporter: object, recovery_reporter: object
+        race_date: date, *, reporter: object, recovery_reporter: object, publisher: object
     ) -> RaceDayOddsRunResult:
         assert race_date == date(2026, 11, 15)
+        assert publisher is _BUILDER.update_race
         recovery_reporter(0)  # type: ignore[operator]
         reporter(report)  # type: ignore[operator]
         return RaceDayOddsRunResult((report,), summary)
@@ -449,7 +463,10 @@ def _race_day_result(failed: int) -> Mock:
 @pytest.mark.parametrize(("failed", "exit_code"), [(0, 0), (1, 1)])
 def test_race_day_odds_cli_reports_each_capture_then_summary(failed: int, exit_code: int) -> None:
     retriever = _race_day_result(failed)
-    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+    with (
+        patch("cli.jra_van_retriever.SnapshotBuilder.from_toml", return_value=_BUILDER),
+        patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever),
+    ):
         result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
 
     assert result.exit_code == exit_code
@@ -465,13 +482,18 @@ def test_race_day_odds_cli_reports_each_capture_then_summary(failed: int, exit_c
 
 
 def test_race_day_odds_cli_exits_130_on_interrupt_with_recovery_count() -> None:
-    def retrieve(race_date: date, *, reporter: object, recovery_reporter: object) -> None:
+    def retrieve(
+        race_date: date, *, reporter: object, recovery_reporter: object, publisher: object
+    ) -> None:
         recovery_reporter(6)  # type: ignore[operator]
         raise KeyboardInterrupt
 
     retriever = Mock()
     retriever.retrieve_race_day_odds.side_effect = retrieve
-    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+    with (
+        patch("cli.jra_van_retriever.SnapshotBuilder.from_toml", return_value=_BUILDER),
+        patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever),
+    ):
         result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
 
     assert result.exit_code == 130
@@ -562,13 +584,18 @@ def test_race_day_odds_recover_failure_exits_1_with_one_stderr_line(
 
 
 def test_race_day_odds_setup_error_exits_1_with_message_and_summary() -> None:
-    def retrieve(race_date: date, *, reporter: object, recovery_reporter: object) -> None:
+    def retrieve(
+        race_date: date, *, reporter: object, recovery_reporter: object, publisher: object
+    ) -> None:
         recovery_reporter(2)  # type: ignore[operator]
         raise RaceDayOddsSetupError("race-day-odds execution setting is invalid: no JVRaceKey")
 
     retriever = Mock()
     retriever.retrieve_race_day_odds.side_effect = retrieve
-    with patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever):
+    with (
+        patch("cli.jra_van_retriever.SnapshotBuilder.from_toml", return_value=_BUILDER),
+        patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever),
+    ):
         result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
 
     assert result.exit_code == 1

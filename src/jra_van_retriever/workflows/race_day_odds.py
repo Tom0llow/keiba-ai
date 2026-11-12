@@ -1,4 +1,10 @@
-"""Recover and execute planned race-day odds captures."""
+"""Recover and execute planned race-day odds captures.
+
+With ``prediction_offset_minutes`` each race also gets a 0B41/0B42 prediction fetch
+(ADR-032 Amendment 2). It archives the time series into ``ARCHIVE_O1``/``ARCHIVE_O2``
+and, still holding the acquisition lock, hands the race to a publisher so that the
+race-day feature command (ADR-037) reads its log and odds from one pinned version.
+"""
 
 from __future__ import annotations
 
@@ -29,8 +35,11 @@ from jra_van_retriever.acquisition.setting_xml import (
     JVLinkSettingBuilder,
     verify_realtime_race_key,
 )
-from jra_van_retriever.config.profiles import RaceDayOddsProfile
-from jra_van_retriever.config.validation import validate_race_day_odds_profile
+from jra_van_retriever.config.profiles import JVLinkProfile, RaceDayOddsProfile
+from jra_van_retriever.config.validation import (
+    validate_race_day_odds_profile,
+    validate_race_day_prediction_profile,
+)
 from jra_van_retriever.progress.raw_observation import read_race_day_races
 from jra_van_retriever.workflows.race_day_odds_plan import (
     CapturePlan,
@@ -38,6 +47,8 @@ from jra_van_retriever.workflows.race_day_odds_plan import (
     is_capture_late,
     plan_captures,
 )
+
+type RacePublisher = Callable[[RaceKey], object]
 
 _CAPTURE_STATUSES = ("archived", "no_data", "failed", "skipped_late", "interrupted")
 
@@ -90,8 +101,14 @@ class RaceDayOddsRetriever:
         *,
         clock: Callable[[], datetime] | None = None,
         sleeper: Callable[[float], None] = time.sleep,
+        prediction_profile: JVLinkProfile | None = None,
     ) -> None:
         validate_race_day_odds_profile(profile)
+        if profile.prediction_offset_minutes is not None:
+            if prediction_profile is None:
+                raise ValueError("race-day prediction fetch requires the realtime-history profile")
+            validate_race_day_prediction_profile(prediction_profile)
+        self._prediction_profile = prediction_profile
         self._runner = runner
         self._setting_builder = setting_builder
         self._archive = archive
@@ -110,29 +127,44 @@ class RaceDayOddsRetriever:
         *,
         reporter: Callable[[CaptureReport], None] | None = None,
         recovery_reporter: Callable[[int], None] | None = None,
+        publisher: RacePublisher | None = None,
     ) -> RaceDayOddsRunResult:
-        """Recover interrupted work, then execute every planned capture in order."""
+        """Recover interrupted work, then execute every planned capture in order.
+
+        ``publisher`` receives the race of every finished prediction fetch, whatever its
+        status, while the acquisition lock is held; its failure never stops the day.
+        """
         interrupted = self.recover()
         if recovery_reporter is not None:
             recovery_reporter(interrupted)
         rows = read_race_day_races(self._database, race_date)
-        all_plans = plan_captures(rows, race_date, self._profile.offsets_minutes)
+        all_plans = plan_captures(
+            rows,
+            race_date,
+            self._profile.offsets_minutes,
+            prediction_offset_minutes=self._profile.prediction_offset_minutes,
+        )
         # A restart (the recovery path) must not re-run or re-log finished captures.
         finished = self._archive.finished_capture_keys((f"{race_date:%Y}", f"{race_date:%m%d}"))
         plans = tuple(
             plan
             for plan in all_plans
-            if (plan.race_key.race_id, str(plan.offset_minutes)) not in finished
+            if (plan.race_key.race_id, str(plan.offset_minutes), plan.kind) not in finished
         )
         reports: list[CaptureReport] = []
         summary = dict.fromkeys(_CAPTURE_STATUSES, 0)
         summary["interrupted"] = interrupted
         with tempfile.TemporaryDirectory(prefix="keiba-ai-race-day-odds-") as temporary:
-            setting_path = Path(temporary) / "race-day-odds.xml"
-            self._verify_setting(setting_path, all_plans[0].race_key)
+            settings = {
+                "capture": Path(temporary) / "race-day-odds.xml",
+                "prediction": Path(temporary) / "race-day-prediction.xml",
+            }
+            self._verify_setting(settings["capture"], all_plans[0].race_key, "capture")
+            if self._profile.prediction_offset_minutes is not None:
+                self._verify_setting(settings["prediction"], all_plans[0].race_key, "prediction")
             for plan in plans:
                 self._wait_until(plan.planned_at)
-                step = self._capture(plan, setting_path)
+                step = self._capture(plan, settings[plan.kind], publisher)
                 reports.append(step.report)
                 for result in step.report.results.values():
                     summary[result.status] += 1
@@ -142,11 +174,12 @@ class RaceDayOddsRetriever:
                     break
         return RaceDayOddsRunResult(tuple(reports), summary)
 
-    def _verify_setting(self, setting_path: Path, race_key: RaceKey) -> None:
+    def _verify_setting(self, setting_path: Path, race_key: RaceKey, kind: str) -> None:
         """Generate and check the execution XML once before any capture is recorded."""
+        profile, specs = self._kind(kind)
         try:
-            self._setting_builder.build(self._profile, setting_path, race_key=race_key)
-            verify_realtime_race_key(setting_path, self._specs, race_key)
+            self._setting_builder.build(profile, setting_path, race_key=race_key)
+            verify_realtime_race_key(setting_path, specs, race_key)
         except (OSError, ValueError, ET.ParseError) as exc:
             raise RaceDayOddsSetupError(
                 f"race-day-odds execution setting is invalid: {exc}"
@@ -179,12 +212,24 @@ class RaceDayOddsRetriever:
             self._archive.reset_capture_staging(specs)
             return self._archive.interrupt_running_captures(self._now(), "interrupted_recovery")
 
-    def _capture(self, plan: CapturePlan, setting_path: Path) -> _CaptureStep:
+    def _kind(self, kind: str) -> tuple[JVLinkProfile, frozenset[str]]:
+        if kind == "prediction":
+            assert self._prediction_profile is not None  # checked in __init__
+            return self._prediction_profile, self._prediction_profile.realtime_data_specs
+        return self._profile, self._specs
+
+    def _capture(
+        self, plan: CapturePlan, setting_path: Path, publisher: RacePublisher | None
+    ) -> _CaptureStep:
         capture_id = uuid.uuid4().hex
         begin_committed = False
+        profile, specs = self._kind(plan.kind)
         try:
             with AcquisitionLock(self._database, self._ledger_path) as lock:
                 lock.bind()
+                if plan.kind == "prediction":
+                    # The time series must come from this fetch alone (ADR-037).
+                    self._runner.assert_not_running()
                 if is_capture_late(
                     plan.planned_at,
                     self._now(),
@@ -193,11 +238,12 @@ class RaceDayOddsRetriever:
                     self._archive.record_skipped_capture(
                         capture_id,
                         plan.race_key,
-                        self._specs,
+                        specs,
                         scheduled_start_at=plan.scheduled_start_at,
                         offset_minutes=plan.offset_minutes,
                         planned_at=plan.planned_at,
                     )
+                    self._publish(plan, capture_id, publisher)
                     return _CaptureStep(
                         CaptureReport(
                             capture_id,
@@ -205,28 +251,28 @@ class RaceDayOddsRetriever:
                             plan.offset_minutes,
                             {
                                 spec: CaptureResult("skipped_late", "late_tolerance_exceeded")
-                                for spec in sorted(self._specs)
+                                for spec in sorted(specs)
                             },
                         )
                     )
 
                 # A setting error must not leave a running capture that stops the day.
                 self._setting_builder.build(
-                    self._profile,
+                    profile,
                     setting_path,
                     race_key=plan.race_key,
                 )
                 self._archive.begin_capture(
                     capture_id,
                     plan.race_key,
-                    self._specs,
+                    specs,
                     scheduled_start_at=plan.scheduled_start_at,
                     offset_minutes=plan.offset_minutes,
                     planned_at=plan.planned_at,
                 )
                 begin_committed = True
                 artifacts = self._archive.quarantine_capture_staging(
-                    self._specs,
+                    specs,
                     self._quarantine_dir,
                     f"{capture_id}-pre-request",
                 )
@@ -235,7 +281,7 @@ class RaceDayOddsRetriever:
                     self._archive.append_capture_reason(
                         capture_id, _evidence_reason("preexisting_staging", artifacts)
                     )
-                self._archive.reset_capture_staging(self._specs)
+                self._archive.reset_capture_staging(specs)
                 started_at = self._now()
                 self._archive.mark_capture_started(capture_id, started_at)
                 try:
@@ -243,7 +289,7 @@ class RaceDayOddsRetriever:
                 except JVLinkToSQLiteError as exc:
                     execution = JVLinkExecutionResult(
                         exc.api_returncodes,
-                        fatal_specs=self._specs,
+                        fatal_specs=specs,
                         api_results=exc.api_results,
                         fatal_returncodes=exc.fatal_returncodes,
                         process_returncode=exc.returncode,
@@ -252,42 +298,70 @@ class RaceDayOddsRetriever:
                 results = self._archive.finish_capture(
                     capture_id,
                     plan.race_key,
-                    self._specs,
+                    specs,
                     execution,
                     completed_at=completed_at,
                     quarantine_directory=self._quarantine_dir,
                     quarantine_label=capture_id,
                     classifier=classify_capture,
                 )
+                self._publish(plan, capture_id, publisher)
                 return _CaptureStep(
                     CaptureReport(capture_id, plan.race_key, plan.offset_minutes, results)
                 )
         except KeyboardInterrupt:
             raise
-        except (AcquisitionBlocked, OSError, ValueError, ET.ParseError, sqlite3.Error) as exc:
+        except (
+            AcquisitionBlocked,
+            JVLinkToSQLiteError,
+            OSError,
+            ValueError,
+            ET.ParseError,
+            sqlite3.Error,
+        ) as exc:
             print(
                 f"race-day-odds capture {capture_id} failed before completion: {exc}",
                 file=sys.stderr,
             )
             results = {
-                spec: CaptureResult("failed", "capture_not_recorded")
-                for spec in sorted(self._specs)
+                spec: CaptureResult("failed", "capture_not_recorded") for spec in sorted(specs)
             }
             if begin_committed:
-                results = self._incomplete_results(capture_id)
+                results = self._incomplete_results(capture_id, specs)
             return _CaptureStep(
                 CaptureReport(capture_id, plan.race_key, plan.offset_minutes, results),
                 stop=begin_committed,
             )
 
-    def _incomplete_results(self, capture_id: str) -> dict[str, CaptureResult]:
+    def _publish(self, plan: CapturePlan, capture_id: str, publisher: RacePublisher | None) -> None:
+        """Publish a finished prediction fetch's race; a failure is logged, never fatal."""
+        if plan.kind != "prediction" or publisher is None:
+            return
+        try:
+            publisher(plan.race_key)
+        except Exception as exc:
+            # Any publication error leaves the archived rows; the feature command then
+            # holds the race at its deadline. The day's remaining captures continue.
+            reason = f"publish_failed: {exc}"
+            print(f"race-day-odds capture {capture_id} {reason}", file=sys.stderr)
+            try:
+                self._archive.append_finished_capture_reason(capture_id, reason)
+            except sqlite3.Error as log_error:
+                print(
+                    f"race-day-odds capture {capture_id} reason not recorded: {log_error}",
+                    file=sys.stderr,
+                )
+
+    def _incomplete_results(
+        self, capture_id: str, specs: frozenset[str]
+    ) -> dict[str, CaptureResult]:
         """Report committed specs as persisted and the rest as incomplete."""
         try:
             persisted = self._archive.capture_statuses(capture_id)
         except sqlite3.Error:
             persisted = {}
         results: dict[str, CaptureResult] = {}
-        for spec in sorted(self._specs):
+        for spec in sorted(specs):
             status, reason = persisted.get(spec, ("running", ""))
             if status == "running":
                 results[spec] = CaptureResult("failed", "capture_incomplete")

@@ -5,6 +5,8 @@ from __future__ import annotations
 from datetime import date, datetime
 from typing import TYPE_CHECKING, Any, cast
 
+from jra_van_retriever.contracts.odds import PREDICTION_SPECS
+
 if TYPE_CHECKING:
     from jra_van_retriever.config.profiles import (
         HistoricalOddsBatch,
@@ -143,3 +145,27 @@ def validate_race_day_odds_profile(profile: RaceDayOddsProfile) -> None:
         raise ValueError("race-day-odds late_tolerance_seconds must be a positive integer")
     if type(profile.execution_timeout_seconds) is not int or profile.execution_timeout_seconds <= 0:
         raise ValueError("race-day-odds execution_timeout_seconds must be a positive integer")
+    offset = profile.prediction_offset_minutes
+    if offset is not None and (
+        type(offset) is not int or not MIN_PREDICTION_OFFSET <= offset <= MAX_PREDICTION_OFFSET
+    ):
+        raise ValueError(
+            "race-day-odds prediction_offset_minutes must be an integer from "
+            f"{MIN_PREDICTION_OFFSET} through {MAX_PREDICTION_OFFSET}"
+        )
+
+
+# The prediction fetch must start at or after the reference freeze (five minutes before
+# the start, ADR-037) and leave time to calculate before sales close two minutes before.
+MIN_PREDICTION_OFFSET = 3
+MAX_PREDICTION_OFFSET = 5
+
+
+def validate_race_day_prediction_profile(profile: JVLinkProfile) -> None:
+    """Validate the 0B41/0B42 time-series profile of the race-day prediction fetch."""
+    if profile.normal_update or profile.setup_update or not profile.realtime_update:
+        raise ValueError("race-day prediction fetch requires only realtime odds updates")
+    if profile.normal_data_specs or profile.setup_data_specs:
+        raise ValueError("race-day prediction fetch normal/setup data specs must be empty")
+    if profile.realtime_data_specs != PREDICTION_SPECS:
+        raise ValueError("race-day prediction fetch requires exactly 0B41 and 0B42")

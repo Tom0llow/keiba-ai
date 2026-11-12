@@ -331,6 +331,7 @@ def test_repository_config_loads_race_day_odds_profile() -> None:
     assert config.race_day_odds.offsets_minutes == (30, 10, 5, 2)
     assert config.race_day_odds.late_tolerance_seconds == 60
     assert config.race_day_odds.execution_timeout_seconds == 120
+    assert config.race_day_odds.prediction_offset_minutes == 5
 
 
 def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> None:
@@ -363,6 +364,9 @@ def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> Non
         ("execution_timeout_seconds = 120", "execution_timeout_seconds = 1.5", "positive integer"),
         ("execution_timeout_seconds = 120", "execution_timeout_seconds = true", "positive integer"),
         ("execution_timeout_seconds = 120", "", "positive integer"),
+        ("prediction_offset_minutes = 5", "prediction_offset_minutes = 2", "3 through 5"),
+        ("prediction_offset_minutes = 5", "prediction_offset_minutes = 6", "3 through 5"),
+        ("prediction_offset_minutes = 5", 'prediction_offset_minutes = "5"', "positive integer"),
     ],
 )
 def test_config_rejects_invalid_race_day_odds_section(
@@ -377,4 +381,33 @@ def test_config_rejects_invalid_race_day_odds_section(
     )
 
     with pytest.raises(ValueError, match=message):
+        JVLinkConfig.from_toml(config_path)
+
+
+def test_config_without_prediction_offset_keeps_the_capture_only_plan(tmp_path: Path) -> None:
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
+    content = source.read_text(encoding="utf-8")
+    line = "prediction_offset_minutes = 5\n"
+    assert line in content
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(content.replace(line, ""), encoding="utf-8")
+
+    config = JVLinkConfig.from_toml(config_path)
+
+    assert config.race_day_odds is not None
+    assert config.race_day_odds.prediction_offset_minutes is None
+
+
+def test_prediction_offset_requires_a_0b41_0b42_realtime_history_profile(tmp_path: Path) -> None:
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
+    head, section = source.read_text(encoding="utf-8").split("\n[realtime_history]\n")
+    old = 'realtime_data_specs = ["0B41", "0B42"]'
+    assert old in section.split("\n[", 1)[0]
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(
+        head + "\n[realtime_history]\n" + section.replace(old, 'realtime_data_specs = ["0B41"]', 1),
+        encoding="utf-8",
+    )
+
+    with pytest.raises(ValueError, match="exactly 0B41 and 0B42"):
         JVLinkConfig.from_toml(config_path)
