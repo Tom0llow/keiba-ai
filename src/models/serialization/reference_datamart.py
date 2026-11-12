@@ -8,6 +8,8 @@ order, and only the projected rows of the current year are kept.
 With ``labeled=False`` (ADR-036) the same calculation runs for races that have no
 result yet: rows on or after ``target_start`` never enter the history, targets see
 only their pre-race card projections, and no label or finishing position is read.
+``prepare_targets`` (ADR-037) stops before the market so that each race can be
+calculated later, once its post-freeze market has been fetched.
 """
 
 from __future__ import annotations
@@ -69,6 +71,101 @@ _AMBIGUOUS_PEDIGREE = "ambiguous_or_missing_race_row"
 MARKET_NOT_OBSERVED_AFTER_FREEZE = "market_not_observed_after_freeze"
 # Recent history holds are reported for this many days before the result-delay boundary.
 _RECENT_HISTORY_DAYS = 7
+
+
+@dataclass(frozen=True)
+class TargetSchedule:
+    """Identify one prepared target race and the clocks its market must follow."""
+
+    race_id: str
+    scheduled_start_at: datetime
+    freeze_at: datetime
+
+
+@dataclass(frozen=True)
+class TargetResult:
+    """Hold one target's projected rows and race row, or its single hold."""
+
+    race_id: str
+    rows: tuple[dict[str, object], ...]
+    race: dict[str, object] | None
+    hold: dict[str, object] | None
+
+
+class PreparedTargets:
+    """Calculate the prepared targets of one label-free date, one race at a time.
+
+    Each race is calculated at most once, in any order and for any subset: a target
+    reads only the shared date view, its own card, and its own market rows.
+    """
+
+    def __init__(
+        self,
+        builder: ReferenceDatamartBuilder,
+        targets: Sequence[
+            tuple[date, dict[str, object], list[dict[str, object]], list[dict[str, object]]]
+        ],
+        held: Sequence[dict[str, object]],
+        views: tuple[HistoryView, WorkoutView] | None,
+    ) -> None:
+        self._builder = builder
+        self._targets = {cast(str, target[1]["race_id"]): target for target in targets}
+        self._views = views
+        self._row_hash = _RowHashes()
+        self._done: set[str] = set()
+        self.held: tuple[dict[str, object], ...] = tuple(held)
+        self.schedules: tuple[TargetSchedule, ...] = tuple(
+            TargetSchedule(
+                cast(str, manifest["race_id"]),
+                timestamp(manifest["scheduled_start_at"]),
+                timestamp(manifest["freeze_at"]),
+            )
+            for _, manifest, _, _ in targets
+        )
+
+    def calculate(
+        self,
+        race_id: str,
+        o1_rows: Sequence[dict[str, object]],
+        o2_rows: Sequence[dict[str, object]],
+        *,
+        observed_through: datetime | None,
+    ) -> TargetResult:
+        """Calculate one prepared race from its own market rows.
+
+        ``observed_through=None`` requires an O1 publication after freeze (a pinned
+        snapshot). A clock states when a fetch of the complete time series started;
+        it must not precede freeze, or the race is held as not observed.
+        """
+        target = self._targets.get(race_id)
+        if target is None:
+            raise ValueError(f"race is not a prepared target: {race_id}")
+        if race_id in self._done:
+            raise ValueError(f"prepared target was already calculated: {race_id}")
+        if observed_through is not None and observed_through.tzinfo is None:
+            raise ValueError("observed_through must be timezone-aware")
+        for row in (*o1_rows, *o2_rows):
+            if race_identity(row) != race_id:
+                raise ValueError(f"market row belongs to another race than {race_id}")
+        assert self._views is not None  # targets exist only with their date views
+        self._done.add(race_id)
+        _, manifest, target_ra, target_se = target
+        view, workout_view = self._views
+        outcome = self._builder._target(
+            manifest,
+            target_ra,
+            target_se,
+            o1_rows,
+            o2_rows,
+            view,
+            workout_view,
+            self._row_hash,
+            observed_through=observed_through,
+        )
+        if isinstance(outcome, dict):
+            return TargetResult(race_id, (), None, outcome)
+        rows, race = outcome
+        return TargetResult(race_id, tuple(rows), race, None)
 
 
 @dataclass(frozen=True)
@@ -157,6 +254,144 @@ class ReferenceDatamartBuilder:
         ``(kind, row)`` pairs for the sessions the year's targets may use, hc before wc
         and each in physical source order.
         """
+        held_rows = self._index_year(year, ra_rows, se_rows)
+        if year < self.target_start.year:
+            return ReferenceYearOutput(year, (), (), tuple(held_rows), 0)
+        if not self.labeled:
+            return self._label_free_year(
+                year, self._prepare(ra_rows, se_rows, workout_rows, held_rows), markets
+            )
+        targets = self._prepare_inputs(ra_rows, se_rows, workout_rows, held_rows)
+        rows: list[dict[str, object]] = []
+        race_rows: list[dict[str, object]] = []
+        for day, group in groupby(targets, key=lambda target: target[0]):
+            day_targets = list(group)
+            view = self._history.view(day, self._pedigrees)
+            workout_view = self._workouts.view(day)
+            o1_rows, o2_rows = markets(day)
+            o1, o2 = _by_race(o1_rows), _by_race(o2_rows)
+            row_hash = _RowHashes()
+            for _, manifest, target_ra, target_se in day_targets:
+                identity = cast(str, manifest["race_id"])
+                outcome = self._target(
+                    manifest,
+                    target_ra,
+                    target_se,
+                    o1.get(identity, []),
+                    o2.get(identity, []),
+                    view,
+                    workout_view,
+                    row_hash,
+                    observed_through=None,
+                )
+                if isinstance(outcome, dict):
+                    held_rows.append(outcome)
+                    continue
+                target_rows, race = outcome
+                rows.extend(target_rows)
+                race_rows.append(race)
+        return ReferenceYearOutput(
+            year, tuple(rows), tuple(race_rows), tuple(held_rows), len(targets)
+        )
+
+    def prepare_targets(
+        self,
+        year: int,
+        *,
+        ra_rows: Sequence[dict[str, object]],
+        se_rows: Sequence[dict[str, object]],
+        workout_rows: Sequence[tuple[str, dict[str, object]]],
+    ) -> PreparedTargets:
+        """Index the target year without reading markets; calculate races later (ADR-037).
+
+        Only a builder without labels prepares targets, and only for its target year,
+        after every history year has been supplied through ``add_year``.
+        """
+        if self.labeled:
+            raise ValueError("only a builder without labels prepares targets")
+        if year != self.target_end.year:
+            raise ValueError(
+                f"targets are prepared only for the target year {self.target_end.year}"
+            )
+        held_rows = self._index_year(year, ra_rows, se_rows)
+        return self._prepare(ra_rows, se_rows, workout_rows, held_rows)
+
+    def _label_free_year(
+        self, year: int, prepared: PreparedTargets, markets: MarketRows
+    ) -> ReferenceYearOutput:
+        """Calculate every prepared target from one pinned date of markets, in order."""
+        held_rows = list(prepared.held)
+        rows: list[dict[str, object]] = []
+        race_rows: list[dict[str, object]] = []
+        if prepared.schedules:
+            o1_rows, o2_rows = markets(self.target_start)
+            o1, o2 = _by_race(o1_rows), _by_race(o2_rows)
+            for schedule in prepared.schedules:
+                result = prepared.calculate(
+                    schedule.race_id,
+                    o1.get(schedule.race_id, []),
+                    o2.get(schedule.race_id, []),
+                    observed_through=None,
+                )
+                if result.hold is not None:
+                    held_rows.append(result.hold)
+                    continue
+                assert result.race is not None
+                rows.extend(result.rows)
+                race_rows.append(result.race)
+        return ReferenceYearOutput(
+            year, tuple(rows), tuple(race_rows), tuple(held_rows), len(prepared.schedules)
+        )
+
+    def _prepare(
+        self,
+        ra_rows: Sequence[dict[str, object]],
+        se_rows: Sequence[dict[str, object]],
+        workout_rows: Sequence[tuple[str, dict[str, object]]],
+        held_rows: list[dict[str, object]],
+    ) -> PreparedTargets:
+        targets = self._prepare_inputs(ra_rows, se_rows, workout_rows, held_rows)
+        # Register every card pedigree before the date view exists, so that the view's
+        # cached pedigree clocks never depend on which race is calculated first.
+        for _, _, _, target_se in targets:
+            for row in target_se:
+                horse = identifier(row, "KettoNum")
+                if horse is not None:
+                    self._ensure_pedigree(horse)
+        views = (
+            (
+                self._history.view(self.target_start, self._pedigrees),
+                self._workouts.view(self.target_start),
+            )
+            if targets
+            else None
+        )
+        return PreparedTargets(self, targets, held_rows, views)
+
+    def _prepare_inputs(
+        self,
+        ra_rows: Sequence[dict[str, object]],
+        se_rows: Sequence[dict[str, object]],
+        workout_rows: Sequence[tuple[str, dict[str, object]]],
+        held_rows: list[dict[str, object]],
+    ) -> list[tuple[date, dict[str, object], list[dict[str, object]], list[dict[str, object]]]]:
+        """Load the target year's workouts and return its targets in calculation order."""
+        sessions = tuple(workout(row, kind=kind) for kind, row in workout_rows)
+        for (kind, _), session in zip(workout_rows, sessions, strict=True):
+            day = session.evidence.event_at.astimezone(JST).date()
+            latest = self._latest_workouts.get(kind)
+            if day < self.target_start and (latest is None or day > latest):
+                self._latest_workouts[kind] = day
+        self._workouts.load(sessions)
+        return self._targets(ra_rows, se_rows, held_rows)
+
+    def _index_year(
+        self,
+        year: int,
+        ra_rows: Sequence[dict[str, object]],
+        se_rows: Sequence[dict[str, object]],
+    ) -> list[dict[str, object]]:
+        """Validate, normalize and index one year of history; return its history holds."""
         if year != self._next_year:
             raise ValueError(f"years must be supplied in order; expected {self._next_year}")
         self._next_year += 1
@@ -183,46 +418,7 @@ class ReferenceDatamartBuilder:
             if horse is not None:
                 self._ensure_pedigree(horse)
         self._history.append(races)
-        if year < self.target_start.year:
-            return ReferenceYearOutput(year, (), (), tuple(held_rows), 0)
-        sessions = tuple(workout(row, kind=kind) for kind, row in workout_rows)
-        for (kind, _), session in zip(workout_rows, sessions, strict=True):
-            day = session.evidence.event_at.astimezone(JST).date()
-            latest = self._latest_workouts.get(kind)
-            if day < self.target_start and (latest is None or day > latest):
-                self._latest_workouts[kind] = day
-        self._workouts.load(sessions)
-        targets = self._targets(ra_rows, se_rows, held_rows)
-        rows: list[dict[str, object]] = []
-        race_rows: list[dict[str, object]] = []
-        for day, group in groupby(targets, key=lambda target: target[0]):
-            day_targets = list(group)
-            view = self._history.view(day, self._pedigrees)
-            workout_view = self._workouts.view(day)
-            o1_rows, o2_rows = markets(day)
-            o1, o2 = _by_race(o1_rows), _by_race(o2_rows)
-            row_hash = _RowHashes()
-            for _, manifest, target_ra, target_se in day_targets:
-                identity = cast(str, manifest["race_id"])
-                outcome = self._target(
-                    manifest,
-                    target_ra,
-                    target_se,
-                    o1.get(identity, []),
-                    o2.get(identity, []),
-                    view,
-                    workout_view,
-                    row_hash,
-                )
-                if isinstance(outcome, dict):
-                    held_rows.append(outcome)
-                    continue
-                target_rows, race = outcome
-                rows.extend(target_rows)
-                race_rows.append(race)
-        return ReferenceYearOutput(
-            year, tuple(rows), tuple(race_rows), tuple(held_rows), len(targets)
-        )
+        return held_rows
 
     def manifest(
         self,
@@ -256,16 +452,21 @@ class ReferenceDatamartBuilder:
         provenance: Mapping[str, object],
         preparation_config: Mapping[str, object],
         source_datamart: Mapping[str, object],
+        market_source: Mapping[str, object],
     ) -> dict[str, object]:
-        """Return the label-free manifest bound to the training datamart (ADR-036)."""
+        """Return the label-free manifest bound to the training datamart (ADR-036).
+
+        ``market_source`` records where the target's market came from (ADR-037).
+        """
         if self.labeled:
             raise ValueError("a labeled builder writes manifest instead of prediction_manifest")
         self._check_complete(snapshot)
         return {
             "format": "reference_prediction_features",
-            "format_version": 1,
+            "format_version": 2,
             **self._common_manifest(snapshot),
             "source_datamart": dict(source_datamart),
+            "market_source": dict(market_source),
             "freshness": self.freshness(),
             "provenance": dict(provenance),
             "preparation_config": dict(preparation_config),
@@ -396,6 +597,8 @@ class ReferenceDatamartBuilder:
         view: HistoryView,
         workout_view: WorkoutView,
         row_hash: Callable[[dict[str, object]], str],
+        *,
+        observed_through: datetime | None,
     ) -> dict[str, object] | tuple[list[dict[str, object]], dict[str, object]]:
         identity = cast(str, manifest["race_id"])
         populations: list[tuple[str, ...]] = []
@@ -437,9 +640,9 @@ class ReferenceDatamartBuilder:
         ]
         for horse in card_horses:
             self._ensure_pedigree(horse)
-        if not self.labeled and not _observed_after(o1, timestamp(manifest["freeze_at"])):
-            # A snapshot taken before freeze would silently turn its latest quote into the
-            # freeze value; snapshots carry no creation clock, so require later evidence.
+        if not self.labeled and not _market_complete(
+            o1, timestamp(manifest["freeze_at"]), observed_through
+        ):
             return _hold(identity, "target_pre_freeze", MARKET_NOT_OBSERVED_AFTER_FREEZE)
         sources = ReferenceTargetSources(
             [{k: row.get(k) for k in CARD_RA_COLUMNS} for row in target_ra],
@@ -587,6 +790,21 @@ def _number(value: object, name: str) -> float | None:
     if not isfinite(number):
         raise ValueError(f"reference datamart rejects an infinite value: {name}")
     return number
+
+
+def _market_complete(
+    o1: Sequence[dict[str, object]], freeze: datetime, observed_through: datetime | None
+) -> bool:
+    """Return whether the market rows hold every publication up to freeze.
+
+    A pinned snapshot has no creation clock, so a later O1 publication proves that its
+    latest quote is not silently a pre-freeze value. A time series fetched after
+    freeze holds every earlier publication; its start clock is the evidence, because
+    0B41 publishes only every five minutes near the start (ADR-037).
+    """
+    if observed_through is not None:
+        return observed_through >= freeze
+    return _observed_after(o1, freeze)
 
 
 def _observed_after(o1: Sequence[dict[str, object]], freeze: datetime) -> bool:

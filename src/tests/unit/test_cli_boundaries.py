@@ -28,6 +28,7 @@ def test_application_registers_every_command_once_in_existing_order() -> None:
         "build",
         "build-reference",
         "build-reference-prediction",
+        "build-reference-prediction-live",
     ]
 
 

@@ -93,3 +93,7 @@ JVLinkToSQLiteは、realtimeのO1/O2を同じ条件付きのレコードスキ�
 開催日の発走前複数時点で`0B31`〜`0B36`を取得し、既存の`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`とは
 別の`ARCHIVE_CAPTURE_*`表へ保存する。3連複・3連単の子表のarchiveに限り、時点を識別するために
 親表の`headDataKubun`と`HappyoTime`を列として加える。
+
+[ADR-037](ADR-037-build-race-day-reference-features-after-freeze.md)とADR-032のAmendment 2は、予測時の
+0B41/0B42の取得をrace-day-oddsの1工程として行い、この決定と同じ`ARCHIVE_O1`/`ARCHIVE_O2`へ保存する。
+当日の参考特徴量は、その時系列をfreezeの後に取得したレース別のParquetから作る。

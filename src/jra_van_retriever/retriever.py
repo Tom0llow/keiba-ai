@@ -133,6 +133,11 @@ class JraVanRetriever:
                 paths.raw_db,
                 self._ledger_path,
                 paths.jvlink_runtime_dir,
+                prediction_profile=(
+                    jvlink.realtime_history
+                    if jvlink.race_day_odds.prediction_offset_minutes is not None
+                    else None
+                ),
             )
         self._weekly = (
             WeeklyHistoricalOddsRetriever(
@@ -241,12 +246,19 @@ class JraVanRetriever:
         *,
         reporter: Callable[[CaptureReport], None] | None = None,
         recovery_reporter: Callable[[int], None] | None = None,
+        publisher: Callable[[RaceKey], object] | None = None,
     ) -> RaceDayOddsRunResult:
-        """Capture all configured pre-race odds observations for one date."""
+        """Capture all configured pre-race odds observations for one date.
+
+        ``publisher`` publishes each race after its prediction fetch (ADR-037).
+        """
         if self._race_day_odds is None:
             raise ValueError("[race_day_odds] is required for race-day-odds")
         return self._race_day_odds.retrieve(
-            race_date, reporter=reporter, recovery_reporter=recovery_reporter
+            race_date,
+            reporter=reporter,
+            recovery_reporter=recovery_reporter,
+            publisher=publisher,
         )
 
     def recover_race_day_odds(self) -> int:

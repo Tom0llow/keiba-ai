@@ -1,5 +1,6 @@
 """Tests for raw SQLite preprocessing and processed Parquet loading."""
 
+import os
 import sqlite3
 from collections.abc import Iterable
 from contextlib import closing
@@ -12,7 +13,7 @@ import pytest
 from configuration.data_paths import DataPaths
 from data.loader.processed_data_loader import DataLoader
 from data.saver.write_parquet import write_parquet_batches
-from data.storage import snapshot_builder
+from data.storage import snapshot_builder, snapshot_publisher
 from data.storage.snapshot_builder import DataPreprocesser
 from data.storage.snapshot_store import SnapshotStore
 from domain.race_key import RaceKey
@@ -110,6 +111,76 @@ def test_realtime_update_publishes_only_target_race_parquet(tmp_path: Path) -> N
     assert o2.num_rows == 1
     assert o1.column("idRaceNum").to_pylist() == ["11"]
     assert o2.column("idRaceNum").to_pylist() == ["11"]
+
+
+def test_realtime_update_also_publishes_the_race_capture_log_rows(tmp_path: Path) -> None:
+    paths = _paths(tmp_path)
+    _create_source(paths.raw_db)
+    race_key = RaceKey(date(2026, 10, 4), "05", "04", "08", "11")
+    with closing(sqlite3.connect(paths.raw_db)) as database, database:
+        database.execute(
+            "CREATE TABLE ARCHIVE_CAPTURE_LOG (capture_id TEXT, idYear TEXT, idMonthDay TEXT, "
+            "idJyoCD TEXT, idKaiji TEXT, idNichiji TEXT, idRaceNum TEXT, data_spec TEXT)"
+        )
+        for race in ("11", "12"):
+            database.execute(
+                "INSERT INTO ARCHIVE_CAPTURE_LOG VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                ("a" * 32, "2026", "1004", "05", "04", "08", race, "0B41"),
+            )
+
+    counts = DataPreprocesser(paths).update_race(race_key)
+
+    assert counts == {
+        "ARCHIVE_O1_ODDS_TANFUKUWAKU": 1,
+        "ARCHIVE_O2_ODDS_UMAREN": 1,
+        "ARCHIVE_CAPTURE_LOG": 1,
+    }
+    log = DataLoader(paths).read_realtime_table(race_key, "ARCHIVE_CAPTURE_LOG")
+    assert log.column("idRaceNum").to_pylist() == ["11"]
+    assert log.schema.field("data_spec").type == pa.string()
+
+
+def test_pointer_replacement_retries_while_a_reader_holds_current(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pointer = tmp_path / "CURRENT"
+    pointer.write_text("old\n", encoding="utf-8")
+    real_replace = os.replace
+    attempts: list[int] = []
+
+    def blocked_twice(source: Path, destination: Path) -> None:
+        attempts.append(1)
+        if len(attempts) <= 2:
+            raise PermissionError("[WinError 5] Access is denied")
+        real_replace(source, destination)
+
+    monkeypatch.setattr("data.storage.snapshot_publisher.os.replace", blocked_twice)
+    monkeypatch.setattr("data.storage.snapshot_publisher.time.sleep", lambda seconds: None)
+
+    snapshot_publisher.publish_pointer(pointer, "new")
+
+    assert pointer.read_text(encoding="utf-8") == "new\n"
+    assert len(attempts) == 3
+    assert [path.name for path in tmp_path.iterdir()] == ["CURRENT"]
+
+
+def test_pointer_replacement_gives_up_and_keeps_the_previous_value(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    pointer = tmp_path / "CURRENT"
+    pointer.write_text("old\n", encoding="utf-8")
+
+    def always_blocked(source: Path, destination: Path) -> None:
+        raise PermissionError("[WinError 5] Access is denied")
+
+    monkeypatch.setattr("data.storage.snapshot_publisher.os.replace", always_blocked)
+    monkeypatch.setattr("data.storage.snapshot_publisher.time.sleep", lambda seconds: None)
+
+    with pytest.raises(PermissionError):
+        snapshot_publisher.publish_pointer(pointer, "new")
+
+    assert pointer.read_text(encoding="utf-8") == "old\n"
+    assert [path.name for path in tmp_path.iterdir()] == ["CURRENT"]
 
 
 def test_realtime_update_keeps_previous_version_when_second_export_fails(tmp_path: Path) -> None:

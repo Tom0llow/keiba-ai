@@ -13,7 +13,7 @@ from contextlib import closing
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Protocol
+from typing import Protocol, cast
 
 from domain.race_key import RaceKey
 from jra_van_retriever.acquisition.jvlink_runner import JVLinkExecutionResult
@@ -21,6 +21,7 @@ from jra_van_retriever.contracts.odds import ARCHIVE_CAPTURE_LOG as ARCHIVE_CAPT
 from jra_van_retriever.contracts.odds import CAPTURE_TABLES as CAPTURE_TABLES
 from jra_van_retriever.contracts.odds import KEY_COLUMNS as KEY_COLUMNS
 from jra_van_retriever.contracts.odds import ODDS_TABLES as ODDS_TABLES
+from jra_van_retriever.contracts.odds import PREDICTION_SPECS
 
 
 class _ClassificationLike(Protocol):
@@ -150,9 +151,12 @@ class OddsArchive:
     def quarantine_capture_staging(
         self, specs: frozenset[str], directory: Path, label: str
     ) -> list[dict[str, object]]:
-        """Preserve capture parent and child staging with verified evidence."""
-        tables = [table for spec in sorted(specs) for table, _ in CAPTURE_TABLES[spec]]
-        return _quarantine_tables(self._database, tables, directory, label)
+        """Preserve capture parent and child staging with verified evidence.
+
+        Prediction DataSpecs (0B41/0B42) share ``RT_O1``/``RT_O2`` with 0B31/0B32; each
+        staging table is preserved once.
+        """
+        return _quarantine_tables(self._database, _staging_tables(specs), directory, label)
 
     def reset_staging(self, specs: frozenset[str]) -> None:
         """Clear only requested staging after its quarantine evidence is committed."""
@@ -165,10 +169,9 @@ class OddsArchive:
     def reset_capture_staging(self, specs: frozenset[str]) -> None:
         """Clear requested capture parent and child staging tables."""
         with closing(sqlite3.connect(self._database)) as database, database:
-            for spec in specs:
-                for source, _ in CAPTURE_TABLES[spec]:
-                    if _table_exists(database, source):
-                        database.execute(f'DELETE FROM "{source}"')
+            for source in _staging_tables(specs):
+                if _table_exists(database, source):
+                    database.execute(f'DELETE FROM "{source}"')
 
     def begin_capture(
         self,
@@ -232,6 +235,17 @@ class OddsArchive:
             )
             if cursor.rowcount == 0:
                 raise sqlite3.IntegrityError("running capture log rows are missing")
+
+    def append_finished_capture_reason(self, capture_id: str, reason: str) -> None:
+        """Attach later evidence, such as a publication failure, to a finished capture."""
+        with closing(sqlite3.connect(self._database)) as database, database:
+            cursor = database.execute(
+                f'UPDATE "{ARCHIVE_CAPTURE_LOG}" SET reason = {_APPEND_REASON} '
+                "WHERE capture_id = ? AND status <> 'running'",
+                (reason, reason, capture_id),
+            )
+            if cursor.rowcount == 0:
+                raise sqlite3.IntegrityError("finished capture log rows are missing")
 
     def mark_capture_started(self, capture_id: str, started_at: datetime) -> None:
         """Record the UTC clock immediately before invoking JVLinkToSQLite."""
@@ -307,20 +321,27 @@ class OddsArchive:
             ).fetchall()
         return frozenset(str(row[0]) for row in rows)
 
-    def finished_capture_keys(self, key_prefix: tuple[str, str]) -> frozenset[tuple[str, str]]:
-        """Return (race_id, offset_minutes) pairs with a terminal log row on one race date."""
+    def finished_capture_keys(self, key_prefix: tuple[str, str]) -> frozenset[tuple[str, str, str]]:
+        """Return (race_id, offset_minutes, kind) with a terminal log row on one race date.
+
+        ``kind`` is ``prediction`` for 0B41/0B42 rows and ``capture`` otherwise, so a
+        prediction fetch and a capture at the same offset are finished independently.
+        """
         if not self._database.is_file():
             return frozenset()
         with closing(sqlite3.connect(self._database)) as database:
             if not _table_exists(database, ARCHIVE_CAPTURE_LOG):
                 return frozenset()
             columns = " || ".join(_quote(column) for column in KEY_COLUMNS)
+            specs = ", ".join(f"'{spec}'" for spec in sorted(PREDICTION_SPECS))
             rows = database.execute(
-                f'SELECT DISTINCT {columns}, offset_minutes FROM "{ARCHIVE_CAPTURE_LOG}" '
+                f"SELECT DISTINCT {columns}, offset_minutes, "
+                f"CASE WHEN data_spec IN ({specs}) THEN 'prediction' ELSE 'capture' END "
+                f'FROM "{ARCHIVE_CAPTURE_LOG}" '
                 "WHERE idYear = ? AND idMonthDay = ? AND status <> 'running'",
                 key_prefix,
             ).fetchall()
-        return frozenset((str(race_id), str(offset)) for race_id, offset in rows)
+        return frozenset((str(race_id), str(offset), str(kind)) for race_id, offset, kind in rows)
 
     def interrupt_running_captures(self, completed_at: datetime, reason: str) -> int:
         """Finalize every unresolved capture after its staging evidence is safe."""
@@ -355,6 +376,8 @@ class OddsArchive:
                 attempt = (
                     _observe_capture_attempt(database, key, spec)
                     if execution is not None and spec in execution.fatal_specs
+                    else _archive_prediction_spec(database, key, spec)
+                    if spec in ODDS_TABLES
                     else _archive_capture_spec(database, key, spec)
                 )
                 classification = classifier(
@@ -487,6 +510,75 @@ class OddsArchive:
                     True, inserted, after, "requested_archive_committed"
                 )
         return results
+
+
+def _archive_prediction_spec(
+    database: sqlite3.Connection, key: RaceKey, spec: str
+) -> _CaptureArchiveAttempt:
+    """Archive one race's 0B41/0B42 time series into ``ARCHIVE_O1``/``ARCHIVE_O2``.
+
+    A time series has many publications, so the single-row and ``happyo_conflict``
+    rules of the capture archive do not apply; rows are deduplicated as full rows
+    against the race's archived rows (ADR-007). The log keeps the latest intermediate
+    publication of the staged rows.
+    """
+    source, destination = ODDS_TABLES[spec]
+    if not _table_exists(database, source):
+        return _failed_capture_attempt("staging_table_missing")
+    schema = _table_schema(database, source)
+    names = [name for name, _ in schema]
+    if not set(KEY_COLUMNS) | {"headDataKubun", "HappyoTime"} <= set(names):
+        return _failed_capture_attempt("staging_schema_invalid", has_staging_rows=True)
+    expected_key = _race_key_values(key)
+    rows = [tuple(row) for row in database.execute(f'SELECT * FROM "{source}"')]
+    if not rows:
+        return _CaptureArchiveAttempt(False, None, 0, 0, 0, 0, None, None, False)
+    key_indexes = tuple(names.index(column) for column in KEY_COLUMNS)
+    observed_rows = sum(tuple(row[i] for i in key_indexes) == expected_key for row in rows)
+    kubun_index, happyo_index = names.index("headDataKubun"), names.index("HappyoTime")
+    intermediate = [
+        cast(str, row[happyo_index])
+        for row in rows
+        if row[kubun_index] == "1" and isinstance(row[happyo_index], str)
+    ]
+    head_data_kubun = "1" if intermediate else None
+    happyo_time = max(intermediate) if intermediate else None
+    if observed_rows != len(rows):
+        return _failed_capture_attempt(
+            "staging_race_mismatch", observed_rows=observed_rows, has_staging_rows=True
+        )
+    if _table_exists(database, destination) and _table_schema(database, destination) != schema:
+        return _failed_capture_attempt(
+            "archive_schema_mismatch",
+            observed_rows=observed_rows,
+            head_data_kubun=head_data_kubun,
+            happyo_time=happyo_time,
+            has_staging_rows=True,
+        )
+    if not _table_exists(database, destination):
+        database.execute(f'CREATE TABLE "{destination}" AS SELECT * FROM "{source}" WHERE 0')
+    index_columns = ", ".join(_quote(column) for column in KEY_COLUMNS)
+    database.execute(
+        f'CREATE INDEX IF NOT EXISTS "{destination}_race_key" ON "{destination}" ({index_columns})'
+    )
+    key_condition = " AND ".join(f"{_quote(column)} = ?" for column in KEY_COLUMNS)
+    before = database.total_changes
+    database.execute(
+        f'INSERT INTO "{destination}" SELECT * FROM "{source}" '
+        f'EXCEPT SELECT * FROM "{destination}" WHERE {key_condition}',
+        expected_key,
+    )
+    return _CaptureArchiveAttempt(
+        True,
+        None,
+        observed_rows,
+        database.total_changes - before,
+        0,
+        0,
+        head_data_kubun,
+        happyo_time,
+        True,
+    )
 
 
 def _archive_capture_spec(
@@ -693,7 +785,7 @@ def _observe_capture_attempt(
     database: sqlite3.Connection, key: RaceKey, spec: str
 ) -> _CaptureArchiveAttempt:
     """Count target-race staging rows for a DataSpec that JV-Link reported as failed."""
-    pairs = CAPTURE_TABLES[spec]
+    pairs = _spec_tables(spec)
     expected_key = _race_key_values(key)
     key_condition = " AND ".join(f"{_quote(column)} = ?" for column in KEY_COLUMNS)
     totals: dict[str, int] = {}
@@ -814,9 +906,26 @@ def _finish_capture_log(
 
 
 def _reset_capture_spec(database: sqlite3.Connection, spec: str) -> None:
-    for source, _ in CAPTURE_TABLES[spec]:
+    for source, _ in _spec_tables(spec):
         if _table_exists(database, source):
             database.execute(f'DELETE FROM "{source}"')
+
+
+def _spec_tables(spec: str) -> tuple[tuple[str, str], ...]:
+    """Return the (staging, archive) pairs of one capture or prediction DataSpec."""
+    if spec in ODDS_TABLES:
+        return (ODDS_TABLES[spec],)
+    return CAPTURE_TABLES[spec]
+
+
+def _staging_tables(specs: frozenset[str]) -> list[str]:
+    """Return each staging table of the DataSpecs once, in DataSpec order."""
+    tables: list[str] = []
+    for spec in sorted(specs):
+        for source, _ in _spec_tables(spec):
+            if source not in tables:
+                tables.append(source)
+    return tables
 
 
 def _quarantine_tables(

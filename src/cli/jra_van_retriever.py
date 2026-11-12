@@ -333,7 +333,9 @@ def retrieve_realtime(
     )
     tables = SnapshotBuilder.from_toml(data_config).update_race(race_key)
     typer.echo(f"realtime odds archived: {inserted} rows")
-    typer.echo(f"realtime Parquet published: {sum(tables.values())} rows")
+    # Only the odds tables count; the race's capture log may be published too (ADR-037).
+    odds = ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN")
+    typer.echo(f"realtime Parquet published: {sum(tables.get(name, 0) for name in odds)} rows")
 
 
 def retrieve_race_day_odds(
@@ -365,8 +367,10 @@ def retrieve_race_day_odds(
         partial_summary["interrupted"] += count
 
     try:
+        # Each prediction fetch publishes its race's odds and log for the feature command.
+        publisher = SnapshotBuilder.from_toml(data_config).update_race
         result = _retriever(data_config, jvlink_config).retrieve_race_day_odds(
-            race_date, reporter=report, recovery_reporter=recovered
+            race_date, reporter=report, recovery_reporter=recovered, publisher=publisher
         )
     except KeyboardInterrupt:
         typer.echo(json.dumps(partial_summary, separators=(",", ":")))

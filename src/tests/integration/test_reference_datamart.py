@@ -5,20 +5,33 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+import sqlite3
+import xml.etree.ElementTree as ET
 from collections import Counter
 from collections.abc import Callable
 from dataclasses import replace
-from datetime import date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
 from typing import cast
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 from typer.testing import CliRunner
 
+from configuration.data_paths import DataPaths
 from data.loader.file_hash import file_sha256
+from data.loader.fixed_snapshot import FixedSnapshot
+from data.storage.snapshot_builder import SnapshotBuilder
+from jra_van_retriever.acquisition.jvlink_runner import (
+    JVLinkExecutionResult,
+    JVLinkToSQLiteError,
+)
+from jra_van_retriever.acquisition.odds_archive import OddsArchive
+from jra_van_retriever.acquisition.setting_xml import JVLinkSettingBuilder
+from jra_van_retriever.config.profiles import JVLinkProfile, RaceDayOddsProfile
+from jra_van_retriever.workflows.race_day_odds import RaceDayOddsRetriever
 from main import app
 from make_datamart.tables.reference import (
     ReferenceDatamartWriter,
@@ -37,13 +50,15 @@ from make_features.generation.chronological import (
     SharedCalculationContext,
     shared_context,
 )
-from make_features.real_market import JST
+from make_features.real_market import JST, publication
 from make_features.reference_raw import (
     CARD_RA_COLUMNS,
     CARD_SE_COLUMNS,
     HC_COLUMNS,
     HISTORY_RA_COLUMNS,
     HISTORY_SE_COLUMNS,
+    MARKET_O1_COLUMNS,
+    MARKET_O2_COLUMNS,
     WC_COLUMNS,
     result_boundary,
 )
@@ -51,6 +66,8 @@ from make_features.reference_snapshot import reference_pedigree
 from models.dataset.calculated import closed_numeric_columns
 from models.serialization.reference import prepare_reference_payload
 from models.serialization.reference_datamart import (
+    MARKET_NOT_OBSERVED_AFTER_FREEZE,
+    PreparedTargets,
     ReferenceDatamartBuilder,
     ReferenceYearOutput,
 )
@@ -59,9 +76,11 @@ from tests.reference_fixtures import (
     ROOT,
     add_post_freeze_markets,
     datamart_from_raw,
+    day_markets,
     markets,
     parquet_snapshot,
     pre_race,
+    prepared_from_raw,
     race_rows,
     rich_raw_input,
 )
@@ -833,6 +852,125 @@ def test_a_label_free_builder_covers_exactly_one_target_date() -> None:
         )
 
 
+# ADR-037: prepare the date once, then calculate each race from its own market.
+
+
+def _one_shot(
+    raw: dict[str, object], day: date
+) -> tuple[dict[str, list[Row]], dict[str, Row], dict[str, Row]]:
+    _, outputs = _label_free(raw, day)
+    rows: dict[str, list[Row]] = {}
+    for output in outputs:
+        for row in output.rows:
+            rows.setdefault(cast(str, row["race_id"]), []).append(row)
+    holds = {
+        cast(str, item["race_id"]): item
+        for output in outputs
+        for item in output.held
+        if item["role"] == "target"
+    }
+    return rows, _races(outputs), holds
+
+
+def _race_markets(raw: dict[str, object], day: date, race_id: str) -> tuple[list[Row], list[Row]]:
+    o1, o2 = day_markets(raw)(day)
+    return (
+        [row for row in o1 if _race_id(row) == race_id],
+        [row for row in o2 if _race_id(row) == race_id],
+    )
+
+
+@pytest.mark.parametrize("day", RICH_TARGET_DAYS)
+@pytest.mark.parametrize("order", ["reversed", "last_only"])
+def test_prepared_races_in_any_order_or_subset_equal_the_one_shot_build(
+    day: date, order: str
+) -> None:
+    raw, late = _rich_with_late_markets()
+    rows, races, holds = _one_shot(raw, day)
+    _, prepared = prepared_from_raw(raw, registry=_registry(), day=day)
+    schedules = list(reversed(prepared.schedules))
+    if order == "last_only":
+        schedules = schedules[:1]
+    if day == RICH_TARGET_DAYS[-1]:
+        # The debut-runner race with ambiguous pedigrees is prepared on this date.
+        assert late in {s.race_id for s in prepared.schedules}
+    assert {
+        h["race_id"]: h for h in prepared.held if h["role"] == "target"
+    }.items() <= holds.items()
+    for schedule in schedules:
+        result = prepared.calculate(
+            schedule.race_id,
+            *_race_markets(raw, day, schedule.race_id),
+            observed_through=None,
+        )
+        assert result.race_id == schedule.race_id
+        if result.hold is not None:
+            assert result.hold == holds[schedule.race_id]
+            assert result.rows == ()
+            assert result.race is None
+            continue
+        assert result.race == races[schedule.race_id]
+        assert list(result.rows) == rows[schedule.race_id]
+        assert result.race["freeze_at"] == schedule.freeze_at
+        assert result.race["scheduled_start_at"] == schedule.scheduled_start_at
+
+
+def test_prepare_targets_and_calculate_reject_misuse() -> None:
+    raw, _ = _rich_with_late_markets()
+    labeled, _ = _build(raw)
+    with pytest.raises(ValueError, match="only a builder without labels"):
+        labeled.prepare_targets(END.year, ra_rows=[], se_rows=[], workout_rows=[])
+    day = RICH_TARGET_DAYS[0]
+    builder, prepared = prepared_from_raw(raw, registry=_registry(), day=day)
+    with pytest.raises(ValueError, match="only for the target year"):
+        builder.prepare_targets(day.year - 1, ra_rows=[], se_rows=[], workout_rows=[])
+    with pytest.raises(ValueError, match="not a prepared target"):
+        prepared.calculate(_race(day, "11"), [], [], observed_through=None)
+    first, second = prepared.schedules[0].race_id, prepared.schedules[1].race_id
+    o1, o2 = _race_markets(raw, day, first)
+    with pytest.raises(ValueError, match="another race"):
+        prepared.calculate(
+            first, o1 + _race_markets(raw, day, second)[0], o2, observed_through=None
+        )
+    with pytest.raises(ValueError, match="timezone-aware"):
+        prepared.calculate(first, o1, o2, observed_through=datetime(2026, 12, 20, 15, 0))
+    prepared.calculate(first, o1, o2, observed_through=None)
+    with pytest.raises(ValueError, match="already calculated"):
+        prepared.calculate(first, o1, o2, observed_through=None)
+
+
+@pytest.mark.parametrize("day", RICH_TARGET_DAYS)
+def test_a_fetch_started_after_freeze_replaces_the_later_publication_evidence(day: date) -> None:
+    raw, _ = _rich_with_late_markets()
+    rows, races, _ = _one_shot(raw, day)
+    _, prepared = prepared_from_raw(raw, registry=_registry(), day=day)
+    for schedule in prepared.schedules:
+        if schedule.race_id not in races:
+            continue
+        o1, o2 = _race_markets(raw, day, schedule.race_id)
+        # A time series fetched at freeze holds no publication after it.
+        o1 = [row for row in o1 if publication(row) <= schedule.freeze_at]
+        o2 = [row for row in o2 if publication(row) <= schedule.freeze_at]
+        early = prepared.calculate(
+            schedule.race_id, o1, o2, observed_through=schedule.freeze_at - timedelta(seconds=1)
+        )
+        assert early.hold is not None
+        assert (early.hold["stage"], early.hold["reason"]) == (
+            "target_pre_freeze",
+            MARKET_NOT_OBSERVED_AFTER_FREEZE,
+        )
+    _, prepared = prepared_from_raw(raw, registry=_registry(), day=day)
+    for schedule in prepared.schedules:
+        if schedule.race_id not in races:
+            continue
+        o1, o2 = _race_markets(raw, day, schedule.race_id)
+        o1 = [row for row in o1 if publication(row) <= schedule.freeze_at]
+        o2 = [row for row in o2 if publication(row) <= schedule.freeze_at]
+        result = prepared.calculate(schedule.race_id, o1, o2, observed_through=schedule.freeze_at)
+        assert result.race == races[schedule.race_id]
+        assert list(result.rows) == rows[schedule.race_id]
+
+
 @pytest.mark.parametrize("day", RICH_TARGET_DAYS)
 def test_label_free_features_never_read_target_date_results(day: date) -> None:
     raw, _ = _rich_with_late_markets()
@@ -967,12 +1105,22 @@ def test_manifest_kinds_follow_the_builder_mode() -> None:
         free.manifest(snapshot=snapshot, provenance={}, preparation_config={})
     with pytest.raises(ValueError, match="manifest instead"):
         labeled.prediction_manifest(
-            snapshot=snapshot, provenance={}, preparation_config={}, source_datamart={}
+            snapshot=snapshot,
+            provenance={},
+            preparation_config={},
+            source_datamart={},
+            market_source={"kind": "complete_snapshot"},
         )
     manifest = free.prediction_manifest(
-        snapshot=snapshot, provenance={}, preparation_config={}, source_datamart={"a": 1}
+        snapshot=snapshot,
+        provenance={},
+        preparation_config={},
+        source_datamart={"a": 1},
+        market_source={"kind": "complete_snapshot"},
     )
     assert manifest["format"] == "reference_prediction_features"
+    assert manifest["format_version"] == 2
+    assert manifest["market_source"] == {"kind": "complete_snapshot"}
     assert "label" not in manifest
     assert manifest["source_datamart"] == {"a": 1}
     assert manifest["freshness"] == free.freshness()
@@ -1012,6 +1160,7 @@ def _write_prediction(tmp_path: Path) -> tuple[Path, str, ReferenceDatamartBuild
         provenance={"fixture": True},
         preparation_config={"fixture": True},
         source_datamart=_source_binding(cast(str, builder.contract.as_metadata()["sha256"])),
+        market_source={"kind": "complete_snapshot"},
     )
     return path, writer.finish(manifest, held), builder
 
@@ -1030,9 +1179,12 @@ def test_written_prediction_features_round_trip_without_label_columns(tmp_path: 
     )
     manifest = loaded.manifest
     assert manifest["format"] == "reference_prediction_features"
+    assert manifest["format_version"] == 2
+    assert manifest["market_source"] == {"kind": "complete_snapshot"}
     assert "label" not in manifest
     held = json.loads((path / "held_races.json").read_text(encoding="utf-8"))
     assert held["format"] == "reference_prediction_features_held_races"
+    assert held["format_version"] == 2
     assert {item["stage"] for item in held["held_races"]} <= {
         "history_result",
         "target_pre_freeze",
@@ -1041,6 +1193,7 @@ def test_written_prediction_features_round_trip_without_label_columns(tmp_path: 
     schema = pq.read_schema(path / "year=2027" / "part-0.parquet")
     identity = json.loads(schema.metadata[b"keiba_ai.reference_datamart"])
     assert identity["format"] == "reference_prediction_features"
+    assert identity["format_version"] == 2
     assert schema.metadata[b"keiba_ai.table_kind"] == b"reference_prediction_rows"
 
 
@@ -1071,6 +1224,163 @@ def test_each_reader_rejects_the_other_format(tmp_path: Path) -> None:
         read_reference_prediction_features(datamart, expected_columns=builder.columns)
     with pytest.raises(ValueError, match=r"fields|format"):
         read_reference_datamart(prediction, expected_columns=builder.columns)
+
+
+def _write_one_race(
+    tmp_path: Path, *, held: bool = False
+) -> tuple[Path, ReferenceDatamartBuilder, dict[str, object]]:
+    """Publish one prepared race as the live command does, with a race-day fetch source.
+
+    ``held=True`` publishes the debut-runner race, which calculation holds.
+    """
+    raw, late = _rich_with_late_markets()
+    day = RICH_TARGET_DAYS[-1]
+    builder, prepared = prepared_from_raw(raw, registry=_registry(), day=day)
+    schedule = next(s for s in prepared.schedules if (s.race_id == late) == held)
+    o1, o2 = _race_markets(raw, day, schedule.race_id)
+    result = prepared.calculate(
+        schedule.race_id, o1, o2, observed_through=schedule.freeze_at + timedelta(seconds=5)
+    )
+    assert (result.race is None) == held
+    source: dict[str, object] = {
+        "kind": "race_day_prediction_fetch",
+        "race_id": schedule.race_id,
+        "scheduled_start_at": schedule.scheduled_start_at.isoformat(),
+        "freeze_at": schedule.freeze_at.isoformat(),
+        "capture_id": "c" * 32,
+        "data_specs": ["0B41", "0B42"],
+        "started_at": (schedule.freeze_at + timedelta(seconds=5)).astimezone(UTC).isoformat(),
+        "snapshot_id": "d" * 32,
+        "tables": {
+            "ARCHIVE_O1_ODDS_TANFUKUWAKU": "1" * 64,
+            "ARCHIVE_O2_ODDS_UMAREN": "2" * 64,
+            "ARCHIVE_CAPTURE_LOG": "3" * 64,
+        },
+    }
+    path = tmp_path / "race"
+    path.mkdir()
+    writer = ReferenceDatamartWriter(
+        path,
+        columns=builder.columns,
+        available_at_groups=builder.available_at_groups,
+        contract=builder.contract.as_metadata(),
+        labeled=False,
+    )
+    writer.write_year(day.year, result.rows, [] if result.race is None else [result.race])
+    manifest = builder.prediction_manifest(
+        snapshot=cast(dict[str, object], raw["snapshot"]),
+        provenance={"fixture": True},
+        preparation_config={"fixture": True},
+        source_datamart=_source_binding(cast(str, builder.contract.as_metadata()["sha256"])),
+        market_source=source,
+    )
+    hold = [] if result.hold is None else [result.hold]
+    writer.finish(manifest, [*prepared.held, *hold])
+    return path, builder, source
+
+
+def test_one_race_with_a_race_day_fetch_source_round_trips(tmp_path: Path) -> None:
+    path, builder, source = _write_one_race(tmp_path)
+    loaded = read_reference_prediction_features(path, expected_columns=builder.columns)
+    assert loaded.manifest["market_source"] == source
+    assert loaded.races.column("race_id").to_pylist() == [source["race_id"]]
+
+
+def test_one_held_race_with_a_race_day_fetch_source_round_trips(tmp_path: Path) -> None:
+    path, builder, source = _write_one_race(tmp_path, held=True)
+    loaded = read_reference_prediction_features(path, expected_columns=builder.columns)
+    held = json.loads((path / "held_races.json").read_text(encoding="utf-8"))["held_races"]
+    assert loaded.races.num_rows == 0
+    assert [item["race_id"] for item in held if item["role"] == "target"] == [source["race_id"]]
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    manifest["market_source"]["race_id"] = "2027010301010109"
+    (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="differ from their market source"):
+        read_reference_prediction_features(path, expected_columns=builder.columns)
+
+
+def _set(name: str, value: object) -> Callable[[dict[str, object]], None]:
+    def change(source: dict[str, object]) -> None:
+        source[name] = value
+
+    return change
+
+
+def _drop(name: str) -> Callable[[dict[str, object]], None]:
+    def change(source: dict[str, object]) -> None:
+        del source[name]
+
+    return change
+
+
+def _other_race(source: dict[str, object]) -> None:
+    source["race_id"] = cast(str, source["race_id"])[:-2] + "11"
+
+
+def _started_before_freeze(source: dict[str, object]) -> None:
+    freeze = datetime.fromisoformat(cast(str, source["freeze_at"]))
+    source["started_at"] = (freeze - timedelta(seconds=1)).isoformat()
+
+
+def _clocks_shifted(source: dict[str, object]) -> None:
+    for name in ("scheduled_start_at", "freeze_at", "started_at"):
+        clock = datetime.fromisoformat(cast(str, source[name]))
+        source[name] = (clock + timedelta(minutes=1)).isoformat()
+
+
+def _three_tables_with_one_missing(source: dict[str, object]) -> None:
+    tables = dict(cast(dict[str, object], source["tables"]))
+    del tables["ARCHIVE_CAPTURE_LOG"]
+    source["tables"] = tables
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (_set("kind", "pinned_snapshot"), "market source is invalid"),
+        (_set("extra", 1), "market source is invalid"),
+        (_drop("capture_id"), "market source is invalid"),
+        (_set("capture_id", "c" * 31), "market source is invalid"),
+        (_set("snapshot_id", 1), "market source is invalid"),
+        (_set("data_specs", ["0B31", "0B32"]), "market source is invalid"),
+        (_three_tables_with_one_missing, "market source is invalid"),
+        (_set("started_at", "2027-01-03T15:00:00"), "clock is invalid"),
+        (_other_race, "differ from their market source"),
+        (_started_before_freeze, "started before freeze_at"),
+        (_clocks_shifted, "race clocks differ"),
+        (_set("freeze_at", "2027-01-03T14:56:00+09:00"), "freeze boundary differs"),
+    ],
+)
+def test_prediction_reader_rejects_an_invalid_market_source(
+    tmp_path: Path, change: Callable[[dict[str, object]], None], message: str
+) -> None:
+    path, builder, _ = _write_one_race(tmp_path)
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    change(manifest["market_source"])
+    (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match=message):
+        read_reference_prediction_features(path, expected_columns=builder.columns)
+
+
+def test_prediction_reader_rejects_a_complete_snapshot_source_with_extra_keys(
+    tmp_path: Path,
+) -> None:
+    path, _, builder = _write_prediction(tmp_path)
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    manifest["market_source"]["race_id"] = "2027010301010109"
+    (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="market source is invalid"):
+        read_reference_prediction_features(path, expected_columns=builder.columns)
+
+
+def test_prediction_reader_rejects_format_version_1_outputs(tmp_path: Path) -> None:
+    path, _, builder = _write_prediction(tmp_path)
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    manifest["format_version"] = 1
+    del manifest["market_source"]
+    (path / "manifest.json").write_text(json.dumps(manifest), encoding="utf-8")
+    with pytest.raises(ValueError, match="format_version 1 has no market source"):
+        read_reference_prediction_features(path, expected_columns=builder.columns)
 
 
 def _shift_to_next_day(rows: list[Row]) -> None:
@@ -1580,3 +1890,349 @@ def test_pedigree_evidence_usable_after_freeze_fails_the_whole_build() -> None:
         pytest.raises(ChronologicalInvariantError, match="pedigree"),
     ):
         _build(rich_raw_input())
+
+
+# ADR-037: race-day-odds publishes each race after its prediction fetch; the live
+# command calculates that race from the pinned version as soon as it appears.
+
+LIVE_SPECS = frozenset({"0B31", "0B32", "0B33", "0B34", "0B35", "0B36", "0B41", "0B42"})
+LIVE_TABLES = ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN", "ARCHIVE_CAPTURE_LOG")
+
+
+class _RaceDayClock:
+    def __init__(self, now: datetime) -> None:
+        self.now = now
+
+    def __call__(self) -> datetime:
+        return self.now
+
+    def sleep(self, seconds: float) -> None:
+        self.now += timedelta(seconds=seconds)
+
+
+class _SeriesRunner:
+    """Stage the fixture's 0B41/0B42 rows published by the fetch time; fail captures."""
+
+    def __init__(self, raw: dict[str, object], database: Path, clock: _RaceDayClock) -> None:
+        self.tables = cast(dict[str, list[Row]], raw["tables"])
+        self.database = database
+        self.clock = clock
+        self.assert_not_running = Mock()
+
+    def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
+        race = next(
+            spec.findtext("JVRaceKey/RaceNum") or ""
+            for spec in ET.parse(setting).getroot().iter("JVDataSpecSetting")
+            if spec.findtext("IsEnabled") == "true"
+        )
+        if setting.name != "race-day-prediction.xml":
+            raise JVLinkToSQLiteError("captures are not part of this test", returncode=1)
+        fetched = self.clock.now
+        with sqlite3.connect(self.database) as connection:
+            for name, table, columns in (
+                ("o1", "RT_O1_ODDS_TANFUKUWAKU", MARKET_O1_COLUMNS),
+                ("o2", "RT_O2_ODDS_UMAREN", MARKET_O2_COLUMNS),
+            ):
+                placeholders = ", ".join("?" for _ in columns)
+                for row in self.tables[name]:
+                    if (
+                        row["idRaceNum"] == race
+                        and row["idMonthDay"] == END.strftime("%m%d")
+                        and publication(row) <= fetched
+                    ):
+                        connection.execute(
+                            f'INSERT INTO "{table}" VALUES ({placeholders})',
+                            [row[column] for column in columns],
+                        )
+        self.clock.now += timedelta(seconds=3)
+        return JVLinkExecutionResult({}, process_returncode=0)
+
+
+def _quote(name: str) -> str:
+    return '"' + name.replace('"', '""') + '"'
+
+
+def _race_day_raw(raw: dict[str, object], database: Path) -> None:
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    stamp = (str(END.year), END.strftime("%m%d"))
+    keys = ("idYear", "idMonthDay", "idJyoCD", "idKaiji", "idNichiji", "idRaceNum")
+    races = {
+        _race_id(row): row
+        for row in tables["history_ra"] + tables["label_ra"]
+        if (row["idYear"], row["idMonthDay"]) == stamp
+    }
+    database.parent.mkdir(parents=True, exist_ok=True)
+    with sqlite3.connect(database) as connection:
+        declared = ", ".join(_quote(c) + " TEXT" for c in (*keys, "headDataKubun", "HassoTime"))
+        connection.execute(f"CREATE TABLE NL_RA_RACE ({declared})")
+        for row in races.values():
+            connection.execute(
+                "INSERT INTO NL_RA_RACE VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
+                (*(row[k] for k in keys), "2", row["HassoTime"]),
+            )
+        for table, columns in (
+            ("RT_O1_ODDS_TANFUKUWAKU", MARKET_O1_COLUMNS),
+            ("RT_O2_ODDS_UMAREN", MARKET_O2_COLUMNS),
+        ):
+            declared = ", ".join(_quote(c) + " TEXT" for c in columns)
+            connection.execute(f'CREATE TABLE "{table}" ({declared})')
+
+
+def _race_day_seed(path: Path) -> None:
+    key = (
+        "<JVRaceKey><KaisaiDate>2026-01-01T00:00:00</KaisaiDate><JyoCD>01</JyoCD>"
+        "<Kaiji>01</Kaiji><Nichiji>01</Nichiji><RaceNum>01</RaceNum></JVRaceKey>"
+    )
+    specs = "".join(
+        f"<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>{spec}</DataSpec>{key}"
+        "</JVDataSpecSetting>"
+        for spec in sorted(LIVE_SPECS)
+    )
+    path.write_text(
+        '<?xml version="1.0" encoding="utf-8"?><JVLinkToSQLiteSetting><Details>'
+        "<JVNormalUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        "</DataSpecSettings></JVNormalUpdateSetting>"
+        "<JVSetupDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        "</DataSpecSettings></JVSetupDataUpdateSetting>"
+        "<JVRealTimeDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        f"{specs}</DataSpecSettings></JVRealTimeDataUpdateSetting>"
+        "</Details></JVLinkToSQLiteSetting>",
+        encoding="utf-8",
+    )
+
+
+def _run_race_day_odds(tmp_path: Path, raw: dict[str, object], processed: Path) -> None:
+    """Run the real race-day-odds loop on END; each prediction fetch publishes its race."""
+    paths = DataPaths(tmp_path / "raw" / "race.db", processed, tmp_path / "runtime")
+    _race_day_raw(raw, paths.raw_db)
+    _race_day_seed(tmp_path / "seed.xml")
+    # 14:00 JST, before the first freeze at 14:55 JST.
+    clock = _RaceDayClock(datetime(2027, 1, 3, 5, 0, tzinfo=UTC))
+    common: dict[str, object] = {
+        "normal_update": False,
+        "setup_update": False,
+        "realtime_update": True,
+        "normal_data_specs": frozenset(),
+        "setup_data_specs": frozenset(),
+    }
+    retriever = RaceDayOddsRetriever(
+        _SeriesRunner(raw, paths.raw_db, clock),  # type: ignore[arg-type]
+        JVLinkSettingBuilder(tmp_path / "seed.xml"),
+        OddsArchive(paths.raw_db),
+        RaceDayOddsProfile(
+            **common,  # type: ignore[arg-type]
+            realtime_data_specs=LIVE_SPECS - {"0B41", "0B42"},
+            offsets_minutes=(2,),
+            prediction_offset_minutes=5,
+        ),
+        paths.raw_db,
+        paths.jvlink_runtime_dir / "historical-odds-progress.db",
+        paths.jvlink_runtime_dir,
+        clock=clock,
+        sleeper=clock.sleep,
+        prediction_profile=JVLinkProfile(
+            **common,  # type: ignore[arg-type]
+            realtime_data_specs=frozenset({"0B41", "0B42"}),
+        ),
+    )
+    retriever.retrieve(END, publisher=SnapshotBuilder(paths).update_race)
+
+
+def _live_cli(datamart: Path, digest: str, processed: Path, output: Path, *extra: str) -> list[str]:
+    command = _predict_cli(datamart, digest, processed, output, END, *extra)
+    command[1] = "build-reference-prediction-live"
+    return command
+
+
+def test_live_cli_publishes_each_race_from_its_race_day_fetch_like_the_one_shot_build(
+    tmp_path: Path,
+) -> None:
+    raw, late = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    _run_race_day_odds(tmp_path, raw, processed)
+    one_shot = tmp_path / "one-shot"
+    first = CliRunner().invoke(app, _predict_cli(datamart, digest, processed, one_shot))
+    assert first.exit_code == 0, first.output
+    live = tmp_path / "live"
+    clock = _RaceDayClock(datetime(2027, 1, 3, 5, 50, tzinfo=UTC))
+    with (
+        patch("cli.reference_datamart._clock", clock),
+        patch("cli.reference_datamart._sleep", clock.sleep),
+    ):
+        result = CliRunner().invoke(app, _live_cli(datamart, digest, processed, live))
+
+    assert result.exit_code == 0, result.output
+    lines = [json.loads(line) for line in result.stdout.splitlines()]
+    assert [line["race_id"] for line in lines] == [
+        "2027010301010109",
+        "2027010301010110",
+        late,
+    ]
+    keys = {"race_id", "status", "stage", "reason", "output", "manifest_sha256", "rows"}
+    assert all(set(line) == keys for line in lines)
+    builder, _ = _label_free(raw, END)
+    expected = read_reference_prediction_features(one_shot, expected_columns=builder.columns)
+    expected_rows = {(r["race_id"], r["horse_id"]): r for r in expected.rows.to_pylist()}
+    held_file = json.loads((one_shot / "held_races.json").read_text(encoding="utf-8"))
+    expected_holds = {
+        item["race_id"]: item for item in held_file["held_races"] if item["role"] == "target"
+    }
+    compared = 0
+    for line in lines:
+        assert line["status"] == "published"
+        loaded = read_reference_prediction_features(
+            Path(line["output"]),
+            expected_columns=builder.columns,
+            expected_manifest_sha256=line["manifest_sha256"],
+        )
+        source = cast(dict[str, object], loaded.manifest["market_source"])
+        assert (source["kind"], source["race_id"]) == ("race_day_prediction_fetch", line["race_id"])
+        version = (
+            processed / "realtime" / line["race_id"] / "versions" / cast(str, source["snapshot_id"])
+        )
+        assert source["tables"] == {
+            name: file_sha256(version / f"{name}.parquet") for name in LIVE_TABLES
+        }
+        assert datetime.fromisoformat(cast(str, source["started_at"])) == datetime.fromisoformat(
+            cast(str, source["freeze_at"])
+        )
+        assert loaded.rows.num_rows == line["rows"]
+        for row in loaded.rows.to_pylist():
+            assert _comparable(row, builder) == _comparable(
+                expected_rows[(row["race_id"], row["horse_id"])], builder
+            )
+            compared += 1
+        if line["stage"] is not None:
+            hold = expected_holds[line["race_id"]]
+            assert (line["stage"], line["reason"]) == (hold["stage"], hold["reason"])
+    assert compared == expected.rows.num_rows
+    assert "race_day_features date=2027-01-03 targets=3 published=3 held=0" in result.stderr
+    progress = [line for line in result.stderr.splitlines() if line.startswith("phase=race ")]
+    assert [line.split()[1] for line in progress] == [f"race={line['race_id']}" for line in lines]
+    assert all(
+        all(
+            f" {name}=" in line for name in ("read_seconds", "calculate_seconds", "publish_seconds")
+        )
+        for line in progress
+    )
+
+
+@pytest.mark.parametrize(
+    ("extra", "message"),
+    [
+        (("--poll-interval-seconds", "0"), "--poll-interval-seconds must be a positive integer"),
+        (("--deadline-seconds", "181"), "--deadline-seconds must be from 1 through 180"),
+        (("--deadline-seconds", "0"), "--deadline-seconds must be from 1 through 180"),
+    ],
+)
+def test_live_cli_rejects_its_timing_before_reading_anything(
+    tmp_path: Path, extra: tuple[str, ...], message: str
+) -> None:
+    output = tmp_path / "live"
+    with (
+        patch(
+            "cli.reference_datamart.read_reference_datamart_manifest",
+            side_effect=AssertionError("unexpected datamart read"),
+        ),
+        patch(
+            "cli.reference_datamart.FixedSnapshot",
+            side_effect=AssertionError("unexpected snapshot read"),
+        ),
+    ):
+        result = CliRunner().invoke(
+            app, _live_cli(tmp_path / "d", "0" * 64, tmp_path / "p", output, *extra)
+        )
+    assert result.exit_code == 1
+    assert result.stderr == f"datamart build-reference-prediction-live failed: {message}\n"
+    assert not output.exists()
+
+
+def test_live_cli_failures_keep_only_finished_race_outputs(tmp_path: Path) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    _run_race_day_odds(tmp_path, raw, processed)
+    original = PreparedTargets.calculate
+    calls: list[str] = []
+
+    def second_breaks(
+        self: PreparedTargets, race_id: str, *args: object, **kwargs: object
+    ) -> object:
+        calls.append(race_id)
+        if len(calls) == 2:
+            raise ChronologicalInvariantError("history prefix crosses its date boundary")
+        return original(self, race_id, *args, **kwargs)  # type: ignore[arg-type]
+
+    clock = _RaceDayClock(datetime(2027, 1, 3, 5, 50, tzinfo=UTC))
+    output = tmp_path / "live"
+    with (
+        patch("cli.reference_datamart._clock", clock),
+        patch("cli.reference_datamart._sleep", clock.sleep),
+        patch.object(PreparedTargets, "calculate", second_breaks),
+    ):
+        result = CliRunner().invoke(app, _live_cli(datamart, digest, processed, output))
+    assert result.exit_code == 1
+    assert "datamart build-reference-prediction-live failed: history prefix" in result.stderr
+    assert [path.name for path in output.iterdir()] == ["2027010301010109"]
+
+    def interrupt(seconds: float) -> None:
+        raise KeyboardInterrupt
+
+    output = tmp_path / "interrupted"
+    clock = _RaceDayClock(datetime(2027, 1, 3, 5, 50, tzinfo=UTC))
+    with (
+        patch("cli.reference_datamart._clock", clock),
+        patch("cli.reference_datamart._sleep", interrupt),
+    ):
+        result = CliRunner().invoke(app, _live_cli(datamart, digest, processed, output))
+    assert result.exit_code == 130
+    assert "datamart build-reference-prediction-live failed: interrupted" in result.stderr
+    assert list(output.iterdir()) == []
+    assert [p.name for p in tmp_path.iterdir() if ".staging-" in p.name] == []
+
+
+@pytest.mark.parametrize(
+    ("error", "exit_code", "message"),
+    [(OSError("disk full"), 1, "disk full"), (KeyboardInterrupt(), 130, "interrupted")],
+)
+def test_live_cli_writer_failure_on_a_race_leaves_no_staging(
+    tmp_path: Path, error: BaseException, exit_code: int, message: str
+) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    _run_race_day_odds(tmp_path, raw, processed)
+    original = ReferenceDatamartWriter.finish
+    calls: list[int] = []
+
+    def second_fails(
+        self: ReferenceDatamartWriter, manifest: dict[str, object], held: list[Row]
+    ) -> str:
+        calls.append(1)
+        if len(calls) == 2:
+            raise error
+        return original(self, manifest, held)
+
+    clock = _RaceDayClock(datetime(2027, 1, 3, 5, 50, tzinfo=UTC))
+    output = tmp_path / "live"
+    with (
+        patch("cli.reference_datamart._clock", clock),
+        patch("cli.reference_datamart._sleep", clock.sleep),
+        patch.object(ReferenceDatamartWriter, "finish", second_fails),
+    ):
+        result = CliRunner().invoke(app, _live_cli(datamart, digest, processed, output))
+    assert result.exit_code == exit_code
+    assert f"datamart build-reference-prediction-live failed: {message}" in result.stderr
+    # The second race was being written; only the first race is published.
+    assert [path.name for path in output.iterdir()] == ["2027010301010109"]
+    assert len(result.stdout.splitlines()) == 1
+
+
+def test_live_cli_preparation_failure_creates_no_output(tmp_path: Path) -> None:
+    raw, _ = _rich_with_late_markets()
+    processed, datamart, digest = _train(tmp_path, raw)
+    output = tmp_path / "live"
+    with patch.object(FixedSnapshot, "pin", side_effect=ValueError("pin failed")):
+        result = CliRunner().invoke(app, _live_cli(datamart, digest, processed, output))
+    assert result.exit_code == 1
+    assert result.stderr.endswith("datamart build-reference-prediction-live failed: pin failed\n")
+    assert result.stdout == ""
+    assert not output.exists()

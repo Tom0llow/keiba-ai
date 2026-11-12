@@ -13,6 +13,7 @@ from cli.real_market import model_prepare_real_input
 from cli.reference_datamart import (
     datamart_build_reference,
     datamart_build_reference_prediction,
+    datamart_build_reference_prediction_live,
 )
 from cli.reference_input import model_prepare_reference_input
 
@@ -48,6 +49,7 @@ model_app.command("evaluate-pl")(model_evaluate_pl)
 datamart_app.command("build")(datamart_build)
 datamart_app.command("build-reference")(datamart_build_reference)
 datamart_app.command("build-reference-prediction")(datamart_build_reference_prediction)
+datamart_app.command("build-reference-prediction-live")(datamart_build_reference_prediction_live)
 
 if __name__ == "__main__":
     app()

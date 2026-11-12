@@ -15,7 +15,7 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 | raw | `data/raw/race.db`。39表の取得・アーカイブ・staging表を含む。 |
 | processed | `data/processed/snapshots/098ce3f4b5d7480282269218d80cef05/`。rawの全ユーザー表を同名で1対1に保存。`CURRENT`が公開対象を選ぶ。 |
 | realtime processed | `data/processed/realtime/<race-id>/`。今回の評価対象外。 |
-| datamart | `src/make_datamart/`とCLIは実装済み。`datamart build`の入力は正規化済み特徴量中間Parquet。ADR-034の`datamart build-reference`は、固定snapshotのRA/SE/O1/O2/HC/WC/UMから参考特徴量datamartを作る（[構築と計測](../experiments/reference-feature-datamart.md)）。ADR-036の`datamart build-reference-prediction`は、学習用datamartに固定して、結果のない対象日1日のラベルなしの特徴量を作る（[構築と計測](../experiments/reference-prediction-features.md)）。 |
+| datamart | `src/make_datamart/`とCLIは実装済み。`datamart build`の入力は正規化済み特徴量中間Parquet。ADR-034の`datamart build-reference`は、固定snapshotのRA/SE/O1/O2/HC/WC/UMから参考特徴量datamartを作る（[構築と計測](../experiments/reference-feature-datamart.md)）。ADR-036の`datamart build-reference-prediction`は、学習用datamartに固定して、結果のない対象日1日のラベルなしの特徴量を作る（[構築と計測](../experiments/reference-prediction-features.md)）。ADR-037で予測の形式はformat_version 2になり、manifestに市場の出典`market_source`を持つ。`datamart build-reference-prediction-live`は、同じ形式の1レース分の出力をレースごとに作る。 |
 
 `configs/data.toml`が入力と出力のルートを定める。`src/main.py preprocess rebuild`は、rawの全ユーザー表を一貫したread-only snapshotからバッチ出力し、全表の検証後に`CURRENT`を切り替える。
 列名・列順を維持し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として保存する。空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
@@ -82,11 +82,14 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 | [ARCHIVE_CAPTURE_O5_OddsSanrenInfo](ARCHIVE_CAPTURE_O5_OddsSanrenInfo.md) | `0B35`の子表＋親の`headDataKubun`/`HappyoTime` |
 | `ARCHIVE_CAPTURE_O6_ODDS_SANRENTAN` | `RT_O6_ODDS_SANRENTAN`と同じ列（`0B36`の親表） |
 | [ARCHIVE_CAPTURE_O6_OddsSanrentanInfo](ARCHIVE_CAPTURE_O6_OddsSanrentanInfo.md) | `0B36`の子表＋親の`headDataKubun`/`HappyoTime` |
-| [ARCHIVE_CAPTURE_LOG](ARCHIVE_CAPTURE_LOG.md) | 取得×DataSpecごとの取得記録 |
+| [ARCHIVE_CAPTURE_LOG](ARCHIVE_CAPTURE_LOG.md) | 取得×DataSpecごとの取得記録。ADR-032 Amendment 2の予測用の取得（0B41/0B42）の行も含む |
 
 `RT_O3_ODDS_WIDE`〜`RT_O6_OddsSanrentanInfo`のstaging表は、2026-11-08の事前確認でraw DBに作成された。
 上の表一覧の39表は2026-10-20時点の照合であり、これらのstaging表を含まない。
 単一表・親表のarchiveの列の意味は、対応する`NL_O1_ODDS_TANFUKUWAKU`〜`NL_O6_ODDS_SANRENTAN`の定義を参照する。
+
+予測用の取得（0B41/0B42）の時系列は、`ARCHIVE_CAPTURE_*`ではなく既存の`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`へ保存する。その取得記録では、`HappyoTime`は保存したstagingの行のうち`headDataKubun="1"`の`HappyoTime`の最大値、`headDataKubun`はその行があれば`"1"`である。
+レース別のParquet（`data/processed/realtime/<race-id>/versions/<id>/`）は、`ARCHIVE_O1_ODDS_TANFUKUWAKU`・`ARCHIVE_O2_ODDS_UMAREN`と、raw DBに取得記録があれば同じレースの`ARCHIVE_CAPTURE_LOG`の行を持つ（全列nullable string）。
 
 ## 物理スキーマの照合
 

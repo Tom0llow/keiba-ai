@@ -148,10 +148,19 @@ realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]
 offsets_minutes = [30, 10, 5, 2]
 late_tolerance_seconds = 60
 execution_timeout_seconds = 120
+prediction_offset_minutes = 5
 ```
 
 `execution_timeout_seconds`は、1回の取得でJVLinkToSQLiteを待つ上限の秒数で、必須である。超えた取得は
 `failed/jvlink_error`と記録して次の取得へ進む。120秒は実測の前の値なので、運用で所要時間を確かめて見直す。
+
+`prediction_offset_minutes`（任意、3〜5）があると、各レースの発走のその分前に、当日の特徴量のための0B41/0B42の
+時系列も取得する（ADR-032 Amendment 2、[ADR-037](docs/decisions/ADR-037-build-race-day-reference-features-after-freeze.md)）。
+5は参考特徴量のfreeze（発走5分前）と同じ時刻である。3〜5以外の値は、設定の読込で拒否する。取得はfreeze以降に始まり、
+発売締切（発走2分前）までに計算を終える必要があるためである。
+この取得は`[realtime_history]`（0B41/0B42ちょうど）を使い、同じ予定時刻の0B31〜0B36の取得より先に実行する。
+時系列は`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`へ保存し、そのレースのO1/O2と取得記録を
+レース別のParquetへ公開する。その結果、historical-oddsはこのレースを取得済みとみなす（#66）。
 
 race-day-oddsの実行中に、`latest`や`preprocess rebuild`による完全なParquet出力を重ねない。raw DBは
 ロールバックジャーナル方式のため、長い読取の間は取得の書込みが`database is locked`で失敗し、
@@ -234,7 +243,11 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   あれば取得を始めずに、stderrへ`race-day-odds setup failed: ...`、stdoutへ要約を出して終了コード1で終わる。
   seedのファイル自体がない場合は、従来どおり起動時に例外で終わる（`--recover`も同じ）。
   取得の途中で止まった場合は、取得記録の`running`が残り、他の取得モードは復旧するまで拒否される。
-  このコマンドはParquetを公開しないので、`preprocess rebuild`などの完全な再構築で出力する。
+  `ARCHIVE_CAPTURE_*`は完全なParquetには公開しないので、`preprocess rebuild`などの完全な再構築で出力する。
+  `prediction_offset_minutes`の予測用の取得は、終了するたびにそのレースのParquet（`data/processed/realtime/<race-id>/`）を
+  公開し、行に`-<offset>m 0B41=<status> 0B42=<status>`を出す。公開に失敗しても取得は続け、取得記録のreasonに
+  `publish_failed`を追記する。race-day-oddsの実行中は、対象日のレースに`--mode=realtime`を実行しない
+  （0B31の行が`ARCHIVE_O1`に混ざり、当日の特徴量の市場が変わりうる）。
 - `--retrieve --mode=race-day-odds --recover`: 取得はせず、`running`の取得のstagingを退避・初期化して
   `interrupted`にし、`{"interrupted":N}`を出力する。開催のない日でも使える。`--date`とは併用できない。
   常駐中のrace-day-oddsを止めてから実行する。ロックを取れない場合やJVLinkToSQLiteが動いている場合は、
@@ -279,11 +292,13 @@ data/processed/realtime/<race-id>/
 └─ versions/
    └─ <version-id>/
       ├─ ARCHIVE_O1_ODDS_TANFUKUWAKU.parquet
-      └─ ARCHIVE_O2_ODDS_UMAREN.parquet
+      ├─ ARCHIVE_O2_ODDS_UMAREN.parquet
+      └─ ARCHIVE_CAPTURE_LOG.parquet   # raw DBに取得記録があるときだけ（ADR-037）
 ```
 
-realtimeの前処理は、累積のraw archiveを対象のレースだけに絞り込み、O1/O2の2ファイルを1つの
-版として公開してから、レースごとの`CURRENT`ポインタを切り替える。推論の前に、過去の
+realtimeの前処理は、累積のraw archiveを対象のレースだけに絞り込み、O1/O2の2ファイル（raw DBに取得記録が
+あれば、そのレースの`ARCHIVE_CAPTURE_LOG`も）を1つの版として公開してから、レースごとの`CURRENT`ポインタを
+切り替える。推論の前に、過去の
 Parquetをすべて再構築することはしない。
 
 古いsnapshotとrealtimeの版は、別の保持方針を導入するまで、ロールバックと再現性のために
@@ -546,8 +561,40 @@ uv run python src/main.py datamart build-reference-prediction --reference-datama
   行数0の出力を公開して終了コード0とする。
 - freeze以前のO1で取消が示された出走馬がいるレースは、学習と同じく`target_pre_freeze`で保留される（#46）。
   当日は取消が起きやすいため、対象から外れるレースが多くなりうる。
-- 当日の市場の接続（#37）と、調教・血統の当日の取得（#61）はまだない。そのため、当日の発走前の予測にはまだ使えない。
+- 出力のmanifestの`market_source`は`{"kind": "complete_snapshot"}`である（format_version 2）。format_version 1の出力は
+  読込APIが拒否するので、このコマンドで作り直す。
+- 当日の発走前の予測には、次の`build-reference-prediction-live`を使う。調教・血統の当日の取得（#61）はまだない。
 - 実データでは1日分で約3.5分・約4.6GBかかる。race-day-oddsの常駐と同じ機械で重ねると、取得が遅れることがある。
+
+`datamart build-reference-prediction-live`は、同じ検証の後に対象日を朝に一度だけ準備し、race-day-oddsの予測用の
+取得（`prediction_offset_minutes`）がレース別のParquetを公開するのを待って、レースごとに特徴量を公開する（ADR-037）。
+
+```powershell
+uv run python src/main.py datamart build-reference-prediction-live --reference-datamart <学習用datamart> --reference-datamart-manifest-sha256 <manifestのSHA-256> --date 2026-11-15 --processed-root data/processed --output output/race-day-20261115
+```
+
+- 当日の朝に`latest`と完全snapshotの公開（`preprocess rebuild`）を済ませ、race-day-oddsを起動してから実行する。
+  完全snapshotは`NL_RA_RACE`・`NL_SE_RACE_UMA`・`NL_HC_HANRO`・`NL_WC_WOOD`・`NL_UM_UMA`だけを固定する。
+- freezeの早い順に、`--poll-interval-seconds`（既定5秒）ごとにレース別のParquetを読む。同じ`capture_id`の0B41・0B42が
+  ともに`archived`で、開始がfreeze以降の取得があれば、そのレースを計算して`<output>/<race_id>/`へ公開する。
+  各レースの出力は`reference_prediction_features`（format_version 2）の1レース分で、`market_source`に取得と読んだファイルの
+  SHA-256を記録する。
+- 予測用の取得が失敗・`skipped_late`などで終わったレースはすぐに、freezeから`--deadline-seconds`（既定150秒、180以下）を
+  過ぎても取得が公開されないレースは計算せずに保留する。これらは出力を公開しない。締切を過ぎた後でも、発売締切
+  （freezeの180秒後）までの読込で取得が見つかれば、そのレースは計算する。発売締切より後に初めて見つかった取得は
+  計算しない（起動が遅れた場合・再起動した場合も同じ）。
+- 出力を公開しない保留の`reason`は次のとおりで、`stage`は`target_pre_freeze`である。
+  - `race_day_fetch_<status>: <取得記録のreason>`: 予測用の取得が`archived`以外で終わった（例: `race_day_fetch_failed: jvlink_error`）。
+  - `race_day_fetch_not_published`: 締切までに条件を満たす取得が公開されなかった。
+  - `ambiguous_race_day_fetch`: 条件を満たす取得が2つ以上あった。
+  - `race_day_sales_closed`: 条件を満たす取得を、発売締切（freezeの180秒後）より後に初めて見つけた。
+  - 市場の前に保留した対象は、ビルダーの保留の`stage`と`reason`をそのまま出す。
+- stdoutには、レースごとに1行のJSON（`race_id`・`status`（`published`/`held`）・`stage`・`reason`・`output`・
+  `manifest_sha256`・`rows`）を出す。計算で保留になったレースも出力を公開し、`status`は`published`、`stage`と`reason`に
+  保留の内容が入る。stderrには、準備の進捗・レースごとの所要秒数・最後の要約（stdoutの行数と同じ`targets`・`published`・`held`）を出す。
+- 準備・計算・公開の失敗は終了コード1、Ctrl+Cは130とする。公開済みのレースの出力は残る。`--output`は新しいパスなので、
+  途中で再起動すると出力先が分かれる。
+- 既定の時間は実測の前の値である。最初の開催日に、取得記録の`HappyoTime`が発走6分前の発表であることと、所要時間を確かめる（#54）。
 
 結果と計測は[当日の未確定レースの参考特徴量の構築と計測](docs/experiments/reference-prediction-features.md)を参照する。
 

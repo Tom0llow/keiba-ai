@@ -21,6 +21,8 @@ from data.storage.snapshot_store import SnapshotStore
 from domain.race_key import RaceKey
 
 _REALTIME_TABLES = ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN")
+# The race-day prediction fetch's log travels with its odds (ADR-037), when it exists.
+_CAPTURE_LOG = "ARCHIVE_CAPTURE_LOG"
 _RACE_FILTER = (
     "idYear = ? AND idMonthDay = ? AND idJyoCD = ? AND "
     "idKaiji = ? AND idNichiji = ? AND idRaceNum = ?"
@@ -48,7 +50,11 @@ class SnapshotBuilder:
         return self.rebuild()
 
     def update_race(self, race_key: RaceKey) -> dict[str, int]:
-        """Publish prediction-time tables for one target race."""
+        """Publish prediction-time tables for one target race.
+
+        The race's O1/O2 archive rows are published with its capture-log rows, when the
+        raw database has a capture log, from one read transaction.
+        """
         return self._publish(race_key)
 
     def _publish(self, race_key: RaceKey | None = None) -> dict[str, int]:
@@ -71,8 +77,11 @@ class SnapshotBuilder:
         try:
             counts: dict[str, int] = {}
             with self._reader.snapshot() as connection:
+                tables = self._reader.list_tables(connection)
                 selected = (
-                    self._reader.list_tables(connection) if race_key is None else _REALTIME_TABLES
+                    tables
+                    if race_key is None
+                    else [*_REALTIME_TABLES, *([_CAPTURE_LOG] if _CAPTURE_LOG in tables else [])]
                 )
                 for name in selected:
                     schema = sqlite_arrow_schema(name, self._reader.columns(connection, name))

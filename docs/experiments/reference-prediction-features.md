@@ -21,7 +21,9 @@ uv run python src/main.py datamart build-reference-prediction --reference-datama
 
 ## 出力
 
-学習用datamartと同じディレクトリ構造で、format `reference_prediction_features`・format_version 1である。
+学習用datamartと同じディレクトリ構造で、format `reference_prediction_features`・format_version 2である
+（[ADR-037](../decisions/ADR-037-build-race-day-reference-features-after-freeze.md)で1から上げ、manifestに市場の出典
+`market_source`を加えた。この一括の構築では`{"kind": "complete_snapshot"}`）。
 
 - 行にもレースにも、`finish_position`やラベルの列はない。
 - manifestの`source_datamart`は、学習用datamartとの結び付きを記録する。#52・#53はこれで、モデルを学習したdatamartと、
@@ -85,3 +87,55 @@ uv run python src/main.py datamart build-reference-prediction --reference-datama
   当日の形は、fixtureのテストで確かめている。
 - 当日の実行は、#54の最初の開催日で行う。
 - 当日の完全snapshotでは、`[latest]`が調教・血統を取得しないため、`freshness`の値が悪くなる見込みである（#61）。
+
+## 当日のレースごとの構築（ADR-037）
+
+`datamart build-reference-prediction-live`は、対象日を一度だけ準備し、race-day-oddsがfreezeの時刻に取得した0B41/0B42の
+時系列から、レースごとに特徴量を作る。当日の実データはまだないため、過去の日付で次の代替の計測をした。
+
+### 0B41の発表の間隔
+
+2025-11-30・12-27・12-28の中央72レースすべてで、発走11分前より後の`headDataKubun="1"`の発表は、発走11分前・6分前・1分前
+だけだった。freeze（発走5分前）の値は常に発走6分前の発表で、freezeより後の最初の発表は発走1分前（発売締切の後）である。
+そのため、当日の取得では「freezeより後の発表がある」ではなく「取得の開始がfreeze以降である」ことを完全性の根拠にした。
+
+### 計測（2025-12-28、2026-11-12）
+
+コミットしない計測用のスクリプトで、常駐CLIと同じ関数を使って次を行った。
+
+1. 対象日を準備した（`prepare_targets`まで）。
+2. 各レースについて、固定snapshotの`ARCHIVE_O1`/`O2`から、そのレースのfreeze以前の発表だけを渡した。
+   これは、freezeの時刻に開始した取得を模している。
+3. 計算・1レース分の出力の公開・読込検証を行った。
+
+学習用datamart・snapshot・機械は上と同じである。
+
+| 項目 | 値 |
+| --- | --- |
+| 準備（完全snapshotのRA/SE/HC/WC/UMの固定から`prepare_targets`まで） | 63.5秒（1回目は60.7秒） |
+| 準備の後の作業セット（そこまでのピークも同じ） | 1.35GB |
+| 対象 | 24レース（市場の前の保留0件、計算の保留0件） |
+| 1レースあたりの計算・公開・読込検証 | 中央値0.55秒、最大0.80秒（1回目は中央値0.52秒、最大0.72秒） |
+| 1レースあたりのレース別Parquetの公開（`update_race`、race-day-odds側） | 中央値0.10秒、最大0.19秒 |
+| 1レースあたりのレース別Parquetの読込とhash（`read_race_version`、常駐CLI側） | 中央値0.03秒、最大0.04秒 |
+| 行 | 356 |
+
+- レース別Parquetの公開と読込は、実際のraw DBから2025-12-28の24レースを`update_race`で作業用のprocessed rootへ公開し、`read_race_version`で読んで測った（raw DBは読取専用の接続でだけ開いた）。1レースのO1/O2は中央値381行、最大982行で、発走後の発表も含むため、当日のfreeze直後の取得より行数は多い。
+  したがって、freezeの後の1レースの処理（公開・読込・計算・公開・読込検証）は合計で約1秒であり、残りの時間の大半はJV-Linkの取得と#53の予測に使える。
+- 作業セットはWindowsの`GetProcessMemoryInfo`で測った。プロセス全体のピークは3.66GBだったが、これは計測用のスクリプトが
+  比較のために1日分の`ARCHIVE_O1`/`O2`と学習用datamart全体を読んだ分を含み、常駐CLIの値ではない。
+- ADR-037の変更の後のコードで、一括の`build-reference-prediction`も同じ条件で再実行した（2026-11-12）。
+  - 出力のmanifest SHA-256は`8a44e3d63e8b4f349f06ef3cb6efe4e167bc773cda885d5aeaa3098de05ddd08`、format_version 2、
+    `market_source`は`{"kind": "complete_snapshot"}`で、24レース・356行・保留0件だった。
+  - 学習用datamartと共通の316行・18,644値で、不一致は0件だった。上の表（2026-11-11）のmanifest SHA-256は
+    format_version 1の出力で、現在の読込APIは読まない。
+  - 所要時間は91.8秒だった。2026-11-11の207.7秒と差があるのは、OSのファイルキャッシュの状態が異なるためと考えられ、
+    直接は比べられない。
+- 一括の構築（207.7秒）より準備が短いのは、`ARCHIVE_O1`/`O2`（約3GB）をhashせず、市場を読まないためである。
+- 学習用datamartと共通の316行・18,644値で、不一致は0件だった（上の一括の構築と同じ結果）。
+  常駐CLIの出力にだけあった3レースも、上と同じく学習用datamartで`target_outcome`だったレースである。
+
+### 制約
+
+- 当日の0B41/0B42の取得の所要時間と、発走6分前の発表がfreezeまでに届くかは、最初の開催日に確かめる（#54）。
+- 計算の時間には、#53の予測の時間を含まない。

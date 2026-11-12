@@ -2,7 +2,8 @@
 
 The labeled datamart (ADR-034) and the label-free prediction features (ADR-036) share
 one directory layout and one validator; ``_Layout`` holds every difference so that no
-check is switched on or off piecemeal.
+check is switched on or off piecemeal. Prediction features record where their market
+came from (``market_source``, format_version 2, ADR-037).
 """
 
 from __future__ import annotations
@@ -85,6 +86,24 @@ _FRESHNESS_KEYS = frozenset(
     }
 )
 _HEX64 = re.compile(r"[0-9a-f]{64}")
+_HEX32 = re.compile(r"[0-9a-f]{32}")
+_FETCH_KEYS = frozenset(
+    {
+        "kind",
+        "race_id",
+        "scheduled_start_at",
+        "freeze_at",
+        "capture_id",
+        "data_specs",
+        "started_at",
+        "snapshot_id",
+        "tables",
+    }
+)
+_FETCH_DATA_SPECS = ["0B41", "0B42"]
+_FETCH_TABLES = frozenset(
+    {"ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN", "ARCHIVE_CAPTURE_LOG"}
+)
 
 
 @dataclass(frozen=True)
@@ -93,6 +112,7 @@ class _Layout:
 
     labeled: bool
     format: str
+    format_version: int
     held_format: str
     manifest_keys: frozenset[str]
     stages: frozenset[str]
@@ -105,6 +125,7 @@ class _Layout:
 _DATAMART = _Layout(
     labeled=True,
     format="reference_feature_datamart",
+    format_version=1,
     held_format="reference_feature_datamart_held_races",
     manifest_keys=frozenset(_MANIFEST_KEYS),
     stages=frozenset({"history_result", "target_pre_freeze", "target_outcome", "calculation"}),
@@ -115,8 +136,11 @@ _DATAMART = _Layout(
 _PREDICTION = _Layout(
     labeled=False,
     format="reference_prediction_features",
+    format_version=2,
     held_format="reference_prediction_features_held_races",
-    manifest_keys=frozenset((_MANIFEST_KEYS - {"label"}) | {"source_datamart", "freshness"}),
+    manifest_keys=frozenset(
+        (_MANIFEST_KEYS - {"label"}) | {"source_datamart", "freshness", "market_source"}
+    ),
     stages=frozenset({"history_result", "target_pre_freeze", "calculation"}),
     rows_kind=b"reference_prediction_rows",
     races_kind=b"reference_prediction_races",
@@ -206,7 +230,7 @@ class ReferenceDatamartWriter:
             held_path,
             {
                 "format": self._layout.held_format,
-                "format_version": 1,
+                "format_version": self._layout.format_version,
                 "held_races": [dict(item) for item in held],
             },
             overwrite=False,
@@ -255,7 +279,9 @@ def read_reference_prediction_features(
 
     Every label-independent datamart check applies. In addition, every race lies on the
     single target date, the history ends by that date's start, no label column exists,
-    and the training-datamart binding is well formed.
+    the training-datamart binding is well formed, and the market source (ADR-037) is
+    either the pinned snapshot or one race-day fetch that started at or after freeze.
+    format_version 1 outputs carry no market source and are rejected.
     """
     return _read(
         path,
@@ -338,9 +364,9 @@ def _read(
     if expected_manifest_sha256 is not None and manifest_sha256 != expected_manifest_sha256:
         raise ValueError("reference datamart manifest SHA-256 differs from the expected identity")
     manifest = _parse_manifest(manifest_bytes)
+    _check_format(manifest, layout)
     if set(manifest) != layout.manifest_keys:
         raise ValueError("reference datamart manifest fields differ from the format contract")
-    _check_format(manifest, layout)
     columns = tuple(expected_columns)
     if not columns or len({column.name for column in columns}) != len(columns):
         raise ValueError("expected reference datamart columns must be nonempty and unique")
@@ -369,7 +395,7 @@ def _read(
     if {column.group for column in columns} - set(cast(list[str], groups)):
         raise ValueError("reference datamart available_at groups miss a closed column group")
     start, end = _target_period(manifest["target_period"])
-    _validate_held(root, manifest["held_races"], layout, None if layout.labeled else start)
+    held = _validate_held(root, manifest["held_races"], layout, None if layout.labeled else start)
     delay: int | None = None
     if layout.labeled:
         delay = _declared_delay(manifest)
@@ -399,6 +425,13 @@ def _read(
         race_tables.append(races)
     rows = pa.concat_tables(row_tables) if row_tables else pa.Table.from_pylist([])
     races = pa.concat_tables(race_tables) if race_tables else pa.Table.from_pylist([])
+    if not layout.labeled:
+        _validate_market_source(
+            manifest["market_source"],
+            day=f"{start:%Y%m%d}",
+            races=cast(list[dict[str, object]], races.to_pylist()),
+            target_holds={cast(str, item["race_id"]) for item in held if item["role"] == "target"},
+        )
     return ReferenceDatamartRead(manifest_sha256, manifest, rows, races)
 
 
@@ -421,10 +454,19 @@ def _pinned_manifest(root: Path, expected_manifest_sha256: str) -> dict[str, obj
 
 def _check_format(manifest: Mapping[str, object], layout: _Layout) -> None:
     if (
-        manifest["format"] != layout.format
-        or manifest["format_version"] != 1
-        or manifest["implementation"] != "snapshot_reference_21_groups_v1"
-        or manifest["verification"] != "build_time_audit_no_read_recomputation_v1"
+        not layout.labeled
+        and manifest.get("format") == layout.format
+        and manifest.get("format_version") == 1
+    ):
+        raise ValueError(
+            "reference prediction features format_version 1 has no market source; "
+            "regenerate them (ADR-037)"
+        )
+    if (
+        manifest.get("format") != layout.format
+        or manifest.get("format_version") != layout.format_version
+        or manifest.get("implementation") != "snapshot_reference_21_groups_v1"
+        or manifest.get("verification") != "build_time_audit_no_read_recomputation_v1"
     ):
         raise ValueError("unsupported reference datamart format or implementation")
 
@@ -495,7 +537,7 @@ def _validate_freshness(value: object) -> None:
 
 def _metadata(year: int, contract_sha256: str, layout: _Layout) -> dict[bytes, bytes]:
     identity: dict[str, object] = {
-        "format_version": 1,
+        "format_version": layout.format_version,
         "year": year,
         "contract_sha256": contract_sha256,
     }
@@ -588,8 +630,10 @@ def _races_schema(metadata: Mapping[bytes, bytes], layout: _Layout) -> pa.Schema
     )
 
 
-def _validate_held(root: Path, value: object, layout: _Layout, target_day: datetime | None) -> None:
-    """Check held races; ``target_day`` is the single label-free target date, if any."""
+def _validate_held(
+    root: Path, value: object, layout: _Layout, target_day: datetime | None
+) -> list[dict[str, object]]:
+    """Check and return held races; ``target_day`` is the single label-free target date."""
     if not isinstance(value, dict) or set(value) != {
         "file",
         "sha256",
@@ -609,7 +653,7 @@ def _validate_held(root: Path, value: object, layout: _Layout, target_day: datet
         not isinstance(payload, dict)
         or set(payload) != {"format", "format_version", "held_races"}
         or payload["format"] != layout.held_format
-        or payload["format_version"] != 1
+        or payload["format_version"] != layout.format_version
         or not isinstance(payload["held_races"], list)
     ):
         raise ValueError("reference datamart held-race format is invalid")
@@ -644,6 +688,66 @@ def _validate_held(root: Path, value: object, layout: _Layout, target_day: datet
         or dict(sorted(stages.items())) != value["by_stage"]
     ):
         raise ValueError("reference datamart held-race role or stage counts differ")
+    return cast(list[dict[str, object]], held)
+
+
+def _validate_market_source(
+    value: object, *, day: str, races: Sequence[Mapping[str, object]], target_holds: set[str]
+) -> None:
+    """Check where the market came from; a fetch must start at or after freeze (ADR-037).
+
+    The start clock is completeness evidence: 0B41 fetched after freeze holds every
+    publication up to it. Leakage is prevented separately when the features are built.
+    """
+    if not isinstance(value, dict):
+        raise ValueError("reference prediction market source is invalid")
+    if value.get("kind") == "complete_snapshot":
+        if set(value) != {"kind"}:
+            raise ValueError("reference prediction market source is invalid")
+        return
+    if value.get("kind") != "race_day_prediction_fetch" or set(value) != _FETCH_KEYS:
+        raise ValueError("reference prediction market source is invalid")
+    race_id = value["race_id"]
+    tables = value["tables"]
+    if (
+        not isinstance(race_id, str)
+        or re.fullmatch(r"[0-9]{16}", race_id) is None
+        or race_id[:8] != day
+        or not isinstance(value["capture_id"], str)
+        or _HEX32.fullmatch(value["capture_id"]) is None
+        or not isinstance(value["snapshot_id"], str)
+        or _HEX32.fullmatch(value["snapshot_id"]) is None
+        or value["data_specs"] != _FETCH_DATA_SPECS
+        or not isinstance(tables, dict)
+        or set(tables) != _FETCH_TABLES
+        or any(
+            not isinstance(digest, str) or _HEX64.fullmatch(digest) is None
+            for digest in tables.values()
+        )
+    ):
+        raise ValueError("reference prediction market source is invalid")
+    scheduled, freeze, started = (
+        _aware(value[name]) for name in ("scheduled_start_at", "freeze_at", "started_at")
+    )
+    if scheduled - freeze != timedelta(seconds=300):
+        raise ValueError("reference prediction market source freeze boundary differs")
+    if started < freeze:
+        raise ValueError("reference prediction market fetch started before freeze_at")
+    if {_race_identity(race) for race in races} | target_holds != {race_id}:
+        raise ValueError("reference prediction races differ from their market source")
+    for race in races:
+        if race["scheduled_start_at"] != scheduled or race["freeze_at"] != freeze:
+            raise ValueError("reference prediction race clocks differ from their market source")
+
+
+def _aware(value: object) -> datetime:
+    try:
+        parsed = datetime.fromisoformat(cast(str, value))
+    except (TypeError, ValueError) as exc:
+        raise ValueError("reference prediction market source clock is invalid") from exc
+    if parsed.tzinfo is None:
+        raise ValueError("reference prediction market source clock is invalid")
+    return parsed
 
 
 def _label_free_hold(item: Mapping[str, object], day: str) -> bool:

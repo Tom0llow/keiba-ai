@@ -22,6 +22,7 @@ from jra_van_retriever.config.validation import (
     _require_string_set,
     _require_table,
     validate_race_day_odds_profile,
+    validate_race_day_prediction_profile,
 )
 
 
@@ -48,6 +49,8 @@ class RaceDayOddsProfile(JVLinkProfile):
     offsets_minutes: tuple[int, ...] = (30, 10, 5, 2)
     late_tolerance_seconds: int = 60
     execution_timeout_seconds: int = 120
+    # Minutes before the start of the 0B41/0B42 prediction fetch (ADR-032 Amendment 2).
+    prediction_offset_minutes: int | None = None
 
 
 @dataclass(frozen=True)
@@ -92,7 +95,7 @@ class JVLinkConfig:
         config = load_toml(resolved)
 
         jvlink = _require_table(config, "jvlink")
-        return cls(
+        loaded = cls(
             executable=resolve_path(
                 resolved, jvlink.get("executable"), field="[jvlink].executable"
             ),
@@ -108,6 +111,13 @@ class JVLinkConfig:
             historical_odds_batch=_load_batch(config),
             race_day_odds=_load_race_day_odds(config),
         )
+        if (
+            loaded.race_day_odds is not None
+            and loaded.race_day_odds.prediction_offset_minutes is not None
+        ):
+            # The prediction fetch runs the realtime-history profile (0B41/0B42 only).
+            validate_race_day_prediction_profile(loaded.realtime_history)
+        return loaded
 
 
 def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
@@ -174,6 +184,11 @@ def _load_race_day_odds(config: dict[str, Any]) -> RaceDayOddsProfile | None:
         ),
         execution_timeout_seconds=_require_positive_int(
             section, "execution_timeout_seconds", "race_day_odds"
+        ),
+        prediction_offset_minutes=(
+            _require_positive_int(section, "prediction_offset_minutes", "race_day_odds")
+            if "prediction_offset_minutes" in section
+            else None
         ),
     )
     validate_race_day_odds_profile(profile)

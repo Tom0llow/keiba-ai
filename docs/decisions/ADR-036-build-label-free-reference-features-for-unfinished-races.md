@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #51、Refs #37・#52・#53・#54・#46・#61
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-037（Decision 3のformat_versionと、Option Bを採用しない判断のみ）
 
 ---
 
@@ -242,3 +242,4 @@ Reason not selected:
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-11 | Accepted | 結果のない対象日1日について、学習用datamartに固定したラベルなしの参考特徴量を構築することを決定 |
+| 2026-11-12 | Accepted | ADR-037が、予測の保存形式をformat_version 2（`market_source`を追加）に上げ、履歴を一度だけたどってレースごとに市場を加える構築を採用した。その他の決定は有効 |
