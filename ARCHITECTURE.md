@@ -321,7 +321,7 @@ ADR-035のtop-3 Plackett–Luce（PL）の評価経路は、参考datamartから
 | backends/lightgbm.py | `fit_native_pl_booster`: callable objectiveとvalidのfeval・early stoppingによる`lightgbm.train`。予約parameters（評価と最終学習で共通。`use_missing`・`zero_as_missing`を含む）と`gbdt`以外を拒否する。`load_pl_booster`: hashを確かめたnativeのテキストから、列名を照合してPLのboosterを読む。`split_missing_types`: boosterのdumpから、列ごとの分岐の欠損の扱いを返す。 |
 | experiments/pl_evaluation.py | variant×foldの学習・温度推定・testの確率と指標、市場（連勝式はHarville展開）との比較、report・予測表の組立。I/Oなし。 |
 | experiments/pl_training.py | ADR-038の最終学習（foldと同じ学習と温度の関数）、variantの列、trainの列ごとの欠損の有無、成果物の記録の組立。I/Oなし。 |
-| artifacts/pl_model.py | 成果物`pl_top3_model`（`model.txt`と`manifest.json`）の書込みと厳密な検証付きの読込。ラベルなしの予測（列の照合、学習で欠損のなかった列の欠損の拒否、温度付きの確率）、予測の特徴量との結び付きとラベルの境界の検査。成果物の小さなバイトI/Oを自分で持ち、`data`・CLIをimportしない。 |
+| artifacts/pl_model.py | 成果物`pl_top3_model`（`model.txt`と`manifest.json`）の書込みと厳密な検証付きの読込。ラベルなしの予測（列の照合、±infの拒否、学習で欠損のなかった列の欠損の拒否、温度付きの確率）、予測の特徴量との結び付きとラベルの境界の検査。成果物の小さなバイトI/Oを自分で持ち、`data`・CLIをimportしない。 |
 
 testの着順は採点だけに使い、学習・early stopping・温度推定・確率の生成には使わない。
 

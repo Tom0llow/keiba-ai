@@ -5,7 +5,9 @@ from __future__ import annotations
 import hashlib
 import json
 from collections.abc import Callable
+from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
+from importlib.metadata import version
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -126,8 +128,10 @@ def test_the_manifest_records_the_binding_boundaries_and_versions(
     model = manifest["model"]
     assert model["objective"] == "top3_plackett_luce"
     assert model["best_iteration"] == final.fit.best_iteration
-    assert model["lightgbm_version"]
+    assert model["lightgbm_version"] == version("lightgbm")
     assert model["numpy_version"] == np.__version__
+    assert manifest["provenance"] == {"source_sha256": "d" * 64}
+    assert manifest["config"] == {}
     assert manifest["features"]["nullable_in_training"] == [False, False, True]
     training = manifest["training"]
     assert training["label_usable_through"] == final.audit.label_usable_through.isoformat()
@@ -395,6 +399,38 @@ def test_scores_reject_other_columns_and_missing_values_training_never_had(
         model.probabilities(np.zeros(8), [3, 3])
 
 
+@pytest.mark.parametrize(
+    ("column", "value"),
+    [(0, np.inf), (0, -np.inf), (2, np.inf), (2, -np.inf)],
+)
+def test_scores_reject_infinite_values_by_column(
+    tmp_path: Path, trained: tuple[RaceArrays, FinalPLFit], column: int, value: float
+) -> None:
+    # Training rejects infinite values; the market feature accepts NaN but not infinity.
+    arrays, final = trained
+    model = _model(tmp_path, final)
+    matrix = arrays.columns(final.feature_names).features[:8].copy()
+    matrix[1, column] = value
+
+    with pytest.raises(ValueError, match="infinite values") as raised:
+        model.predict_scores(matrix, final.feature_names)
+    assert str(raised.value).endswith(f"{[final.feature_names[column]]!r}")
+
+
+def test_scores_name_every_column_with_infinite_values(
+    tmp_path: Path, trained: tuple[RaceArrays, FinalPLFit]
+) -> None:
+    arrays, final = trained
+    model = _model(tmp_path, final)
+    matrix = arrays.columns(final.feature_names).features[:8].copy()
+    matrix[0, 0] = np.inf
+    matrix[3, 2] = -np.inf
+
+    with pytest.raises(ValueError, match="infinite values") as raised:
+        model.predict_scores(matrix, final.feature_names)
+    assert str(raised.value).endswith(f"{['signal', 'market_feature']!r}")
+
+
 def _prediction_manifest(**changes: object) -> dict[str, object]:
     source = {key: value for key, value in _source().items() if key != "columns"}
     source.update(changes)
@@ -472,3 +508,33 @@ def test_the_writer_requires_an_empty_staging_directory(
 
     with pytest.raises(ValueError, match="empty directory"):
         write_pl_model(directory, record, final.fit.booster)
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda record: replace(record, temperature=100.0), "within its bounds"),
+        (
+            lambda record: replace(
+                record, label_usable_through=record.label_usable_through.replace(tzinfo=None)
+            ),
+            "timezone-aware",
+        ),
+        (lambda record: replace(record, config={"x": float("nan")}), "not strict JSON"),
+        (lambda record: replace(record, provenance={"p": Path("x")}), "not strict JSON"),
+    ],
+)
+def test_the_writer_rejects_an_invalid_record_before_writing_any_file(
+    tmp_path: Path,
+    trained: tuple[RaceArrays, FinalPLFit],
+    change: Callable[[PLModelRecord], PLModelRecord],
+    message: str,
+) -> None:
+    _, final = trained
+    directory = tmp_path / "model"
+    directory.mkdir()
+    record = change(_record(final))
+
+    with pytest.raises(ValueError, match=message):
+        write_pl_model(directory, record, final.fit.booster)
+    assert list(directory.iterdir()) == []

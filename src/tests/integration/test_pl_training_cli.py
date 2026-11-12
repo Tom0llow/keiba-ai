@@ -6,6 +6,7 @@ import json
 import subprocess
 import sys
 from datetime import UTC, datetime, timedelta
+from importlib.metadata import version
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -23,6 +24,7 @@ from make_features.catalog.registry import create_feature_registry
 from make_features.real_market import MARKET_COLUMN
 from make_features.reference_raw import result_boundary
 from models.artifacts.pl_model import read_pl_model
+from models.experiments.provenance import experiment_provenance
 from tests.reference_fixtures import RICH_TARGET_DAYS, ROOT, datamart_from_raw, rich_raw_input
 
 YEARS = (2024, 2025, 2026)
@@ -165,6 +167,9 @@ def test_train_pl_publishes_a_model_readable_by_its_manifest_identity(
     assert training["valid_races"] == 30
     assert model.feature_names == tuple(column["name"] for column in datamart_manifest["columns"])
     assert "datamart_path" not in manifest["config"]
+    # The sources do not change during the test, so the recorded identity is reproducible.
+    assert manifest["provenance"] == experiment_provenance()
+    assert manifest["model"]["lightgbm_version"] == version("lightgbm")
     # Neither the native nor the POSIX form of the datamart location is persisted.
     raw = (output / "manifest.json").read_text(encoding="ascii")
     for form in (str(path), path.as_posix(), json.dumps(str(path))[1:-1]):
