@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #34, Refs #33, Refs #48, Refs #49
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-038（Decision 3の「モデルは永続化しない」のみ）
 
 ---
 
@@ -302,3 +302,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-09 | Accepted | top-3 PLの微分・年単位fold・ラベル境界・温度校正・市場との比較の手順を決定 |
 | 2026-11-10 | Accepted | Amendment 1: 固定snapshotの`NL_RA_RACE`による平地重賞（GradeCD A・B・C × TrackCD 10〜24）の部分集合評価を追加 |
+| 2026-11-12 | Accepted | ADR-038が、同じ学習の手順で最終モデルを学習し、成果物として保存することを決めた。評価（`model evaluate-pl`）は引き続きモデルを永続化しない |

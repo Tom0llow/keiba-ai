@@ -308,7 +308,7 @@ training.jsonとMLflowへその値と学習結果出典・保証区分を保存�
 ADR-035のtop-3 Plackett–Luce（PL）の評価経路は、参考datamartから年単位の拡大型foldで着順確率を学習・校正し、
 同時点の市場確率と比較する。固定snapshotの`NL_RA_RACE`から、GradeCD A/B/CかつTrackCD 10〜24の
 `jra_flat_graded_stakes_v1`部分集合も判定し、foldごと・pooledで別集計する。既存のLambdaRankの学習・予測・
-保存形式とは独立で、PLモデルは永続化しない。
+保存形式とは独立である。評価はPLモデルを永続化しない。ADR-038の`model train-pl`が、同じ手順で最終モデルを学習し、成果物として保存する。
 
 | 所有者 | 責務 |
 | --- | --- |
@@ -317,9 +317,11 @@ ADR-035のtop-3 Plackett–Luce（PL）の評価経路は、参考datamartから
 | evaluation/probability_metrics.py | レース単位の確率指標、市場完全レースの$q_i$、確率帯・オッズ帯の校正表（馬の等重み）、レース単位の対応ありbootstrap。 |
 | dataset/race_arrays.py / serialization/race_arrays.py | numpyの`RaceArrays`の不変条件と部分集合、datamartの`pa.Table`からの列単位の変換。 |
 | serialization/race_subsets.py | 固定snapshotの`NL_RA_RACE`のGradeCD・TrackCDから評価部分集合のrace_id集合を作る純粋な分類。 |
-| evaluation/yearly_folds.py | train〜Y−2・valid Y−1・test Yのfold、次のsplitの最初のfreeze以後に結果が使えるレースの除外と監査。 |
-| backends/lightgbm.py | `fit_native_pl_booster`: callable objectiveとvalidのfeval・early stoppingによる`lightgbm.train`。予約parametersと`gbdt`以外を拒否する。 |
+| evaluation/yearly_folds.py | train〜Y−2・valid Y−1・test Yのfold、次のsplitの最初のfreeze以後に結果が使えるレースの除外と監査。ADR-038の`plan_final_fit`はtestのない最終学習の分割（train〜V−1・valid V）と、モデルのラベルの利用境界を作る。 |
+| backends/lightgbm.py | `fit_native_pl_booster`: callable objectiveとvalidのfeval・early stoppingによる`lightgbm.train`。予約parameters（評価と最終学習で共通。`use_missing`・`zero_as_missing`を含む）と`gbdt`以外を拒否する。`load_pl_booster`: hashを確かめたnativeのテキストから、列名を照合してPLのboosterを読む。`split_missing_types`: boosterのdumpから、列ごとの分岐の欠損の扱いを返す。 |
 | experiments/pl_evaluation.py | variant×foldの学習・温度推定・testの確率と指標、市場（連勝式はHarville展開）との比較、report・予測表の組立。I/Oなし。 |
+| experiments/pl_training.py | ADR-038の最終学習（foldと同じ学習と温度の関数）、variantの列、trainの列ごとの欠損の有無、成果物の記録の組立。I/Oなし。 |
+| artifacts/pl_model.py | 成果物`pl_top3_model`（`model.txt`と`manifest.json`）の書込みと厳密な検証付きの読込。ラベルなしの予測（列の照合、学習で欠損のなかった列の欠損の拒否、温度付きの確率）、予測の特徴量との結び付きとラベルの境界の検査。成果物の小さなバイトI/Oを自分で持ち、`data`・CLIをimportしない。 |
 
 testの着順は採点だけに使い、学習・early stopping・温度推定・確率の生成には使わない。
 
@@ -360,6 +362,7 @@ ADR-037の`datamart build-reference-prediction-live`も同じモジュールが�
 snapshotに無いtestレースを拒否し、datamartに無い平地重賞の件数をtest年ごとに記録する。その後、manifestのSHA-256で固定した参考datamartを`read_reference_datamart`で検証して読み、
 ADR-035の評価を実行する。`report.json`と`predictions.parquet`を`publish_directory`で新しいディレクトリへ公開する。
 helpとimportは設定・datamart・snapshot・LightGBMを読まない。進捗・要約・終了コードは`datamart build-reference`と同じ規則である。
+ADR-038の`model train-pl`はcli/pl_training.pyが、configuration/pl_training.pyで合成した`configs/pl_training/`の設定を読む。出力・設定・固定したdatamartのmanifest・列とvariant・年・LightGBMの予約キーを全体の読込より先に検査し、出典を記録してからdatamartを読み、最終学習を行う。stagingに書いた成果物を読み直してvalidのスコアの一致を確かめてから、`publish_directory`で公開する。stdoutには要約1行（manifestのSHA-256を含む）を出す。helpとimportは設定・学習・成果物のモジュールとLightGBMを読まない。
 
 ## 進化時の制約
 

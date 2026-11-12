@@ -613,3 +613,20 @@ uv run python src/main.py model evaluate-pl --config-name measure --override pro
 パス、`datamart build-reference`が出したmanifestのSHA-256は`--override`で渡す。手順・出力形式・結果は
 [着順確率モデルの評価](docs/experiments/pl-probability-model.md)と
 [ADR-035](docs/decisions/ADR-035-evaluate-top3-plackett-luce-probabilities-on-yearly-folds.md)を参照する。
+
+## top-3 PLの最終モデルを学習して保存する
+
+`model train-pl`は、評価と同じ手順（validでearly stoppingと温度を決める）で最終モデルを学習し、成果物
+`pl_top3_model`として新しいディレクトリへ公開する（[ADR-038](docs/decisions/ADR-038-train-and-persist-the-final-top3-pl-model.md)）。
+
+```powershell
+uv run python src/main.py model train-pl --config-name final --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-final-model-2006-2025
+```
+
+- `configs/pl_training/train.yaml`はすべて必須値`???`で、`final.yaml`が運用の値を持つ。train 2006〜2024年・valid 2025年・
+  variant`all_columns`（市場の単勝オッズ列を含む）で、LightGBMの引数などは評価の`measure.yaml`と同じである。
+- 成果物は`model.txt`と`manifest.json`の2ファイルで、stdoutの要約のmanifestのSHA-256で識別する。読込は、hash・形式・列・
+  反復数・温度・ラベルの境界・LightGBMのversionを検証する。LightGBMを更新したら、モデルを学習し直す。
+- 予測は、ラベルなしの行列と列名から行う。学習で欠損のなかった列（市場の単勝オッズ列など）に欠損があれば、呼出し全体を拒否する（欠けたレースを除くか保留にするのは呼出し側）。
+  予測の特徴量は、モデルと同じ学習用datamartから作られ、freezeがモデルのラベルの境界より後でなければならない。
+- PLのモデルはMLflowで管理しない（ADR-027に対する例外）。結果は[最終モデルの学習](docs/experiments/pl-final-model.md)を参照する。

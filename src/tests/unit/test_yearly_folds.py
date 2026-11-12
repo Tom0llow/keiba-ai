@@ -8,7 +8,7 @@ import numpy as np
 import pytest
 
 from models.dataset.race_arrays import RaceArrays
-from models.evaluation.yearly_folds import plan_yearly_folds
+from models.evaluation.yearly_folds import plan_final_fit, plan_yearly_folds
 
 
 def test_yearly_folds_purge_labels_at_or_after_the_next_split_freeze() -> None:
@@ -55,6 +55,50 @@ def test_yearly_folds_reject_invalid_years_and_empty_splits() -> None:
         plan_yearly_folds(arrays, train_start_year=2019, test_years=[2023])
     with pytest.raises(ValueError, match="train after label purge"):
         plan_yearly_folds(arrays.subset([1, 2, 3, 4]), train_start_year=2021, test_years=[2023])
+
+
+def test_final_fit_purges_train_labels_at_the_valid_freeze_and_keeps_every_valid_race() -> None:
+    arrays = _yearly_arrays()
+
+    plan = plan_final_fit(arrays, train_start_year=2020, valid_year=2022)
+    fit = plan.materialize(arrays)
+
+    assert fit.train.race_ids == ("race-2020",)
+    # No test year exists, so the valid race whose label is usable later is kept.
+    assert fit.valid.race_ids == ("race-2022-keep", "race-2022-purged")
+    assert (plan.train_races, plan.valid_races) == ((0,), (2, 3))
+    assert fit.audit.purged_train_races == 1
+    assert fit.audit.valid_first_freeze_at == _utc(2022, 1, 1)
+    assert fit.audit.train_max_label_usable_after == _utc(2021, 12, 31)
+    assert fit.audit.valid_max_label_usable_after == _utc(2023, 1, 1)
+    assert fit.audit.label_usable_through == _utc(2023, 1, 1)
+    assert (fit.train_start_year, fit.valid_year) == (2020, 2022)
+
+
+def test_final_fit_through_the_last_year_uses_every_earlier_year_for_training() -> None:
+    arrays = _yearly_arrays()
+
+    fit = plan_final_fit(arrays, train_start_year=2020, valid_year=2023).materialize(arrays)
+
+    # The 2022 race whose label is usable at the 2023 freeze is purged from train.
+    assert fit.train.race_ids == ("race-2020", "race-2021-purged", "race-2022-keep")
+    assert fit.valid.race_ids == ("race-2023",)
+    assert fit.audit.label_usable_through == _utc(2023, 12, 1)
+
+
+def test_final_fit_rejects_invalid_years_and_empty_splits() -> None:
+    arrays = _yearly_arrays()
+
+    with pytest.raises(ValueError, match="valid_year 2024 is not present"):
+        plan_final_fit(arrays, train_start_year=2020, valid_year=2024)
+    with pytest.raises(ValueError, match="train_start_year 2019 is not present"):
+        plan_final_fit(arrays, train_start_year=2019, valid_year=2022)
+    with pytest.raises(ValueError, match="at most valid_year - 1"):
+        plan_final_fit(arrays, train_start_year=2022, valid_year=2022)
+    with pytest.raises(ValueError, match="integer years"):
+        plan_final_fit(arrays, train_start_year=2020, valid_year=True)
+    with pytest.raises(ValueError, match="train after label purge"):
+        plan_final_fit(arrays.subset([1, 2, 3]), train_start_year=2021, valid_year=2022)
 
 
 def _yearly_arrays() -> RaceArrays:
