@@ -53,13 +53,17 @@ ADR-035の`model evaluate-pl`は、年単位のfoldでtop-3 PLの学習・温度
    - 読込`read_pl_model`は、manifestのSHA-256・ファイルの集合・形式と入れ子のキー・定数・LightGBMの予約キー・反復数と温度の範囲・
      列とdatamartの定義の対応・時刻とラベルの境界の整合を検証する。さらに、`model.txt`のSHA-256を確かめたバイト列から
      boosterを読み、列名と反復数を照合する。
+   - 書込みは、ファイルを書く前に、recordから作るmanifestを読込と同じ規則で検証してASCIIのJSONへ変換する。読込がmanifestを拒否するrecordでは、ディレクトリを空のまま残す。
+     recordとboosterの反復数・列名の照合は、書いた成果物を読み直す呼出し側（CLI）が持つ。
+     書込みの途中の失敗で残ったファイルの後始末と公開は、呼出し側（CLIのstaging）が持つ（#71）。
    - 書込みと読込は、`nullable_in_training`が真の列のすべての分岐が、欠損の枝（missing type `NaN`）を持つことを確かめる。
      満たさなければ拒否する（`bin_construct_sample_cnt`を学習の行数以上にして学習し直す）。
    - 実行中のLightGBMのversionが学習時と異なれば、読込を拒否する。依存を更新したら、モデルを学習し直す。
 4. **ラベルなしの予測のAPI。** `PLModel`は次の関数を持つ。
    - `predict_scores(features, feature_names)`: 列名と列順の一致を要求する。学習で欠損のなかった列に欠損があれば、
      呼出し全体を拒否する（市場の単勝オッズ列が欠けたレースを除くか保留にするのは、呼出し側の#53である）。
-   - この検査は、NaNをLightGBMの欠損として扱う既定の動作を前提とする。そのため、`use_missing`と`zero_as_missing`を
+     ±infを含む列があれば、欠損を許す列でも、列名を示して呼出し全体を拒否する（学習の入力も±infを拒否する。#71）。
+   - 欠損の検査は、NaNをLightGBMの欠損として扱う既定の動作を前提とする。そのため、`use_missing`と`zero_as_missing`を
      PLの予約キーとする（評価の`evaluate-pl`にも同じく効く）。validの年に、trainで欠損のなかった列の欠損があれば学習を拒否する。
    - `probabilities(scores, group_sizes)`: 温度を掛けた勝率・2着以内・3着以内を返す。
    - `require_compatible_features(prediction_manifest)`: 予測の特徴量の`source_datamart`と列の定義が、モデルのものと一致することを要求する。
@@ -243,3 +247,4 @@ Reason not selected:
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-12 | Accepted | top-3 PLの最終モデルの学習・成果物・ラベルなしの予測のAPIを決定。ADR-035のDecision 3の非永続化だけを置き換える |
+| 2026-11-12 | Accepted | #71: `predict_scores`の±infの拒否と、書込みの前のmanifestの検証を追記。成果物の形式は変えない |

@@ -162,14 +162,21 @@ class PLModel:
 
         Raises:
             ValueError: If the names or order differ from the model, the matrix shape is
-                wrong, or a column without missing values in training has one here
-                (LightGBM would score it as zero without an error).
+                wrong, a column holds an infinite value (training rejects them), or a
+                column without missing values in training has one here (LightGBM would
+                score it as zero without an error), or LightGBM returns invalid scores.
         """
         if tuple(feature_names) != self.feature_names:
             raise ValueError("feature names or their order differ from the PL model")
         matrix = np.asarray(features, dtype=np.float64)
         if matrix.ndim != 2 or matrix.shape[1] != len(self.feature_names):
             raise ValueError("PL features must be a two-dimensional matrix of the model columns")
+        infinite = np.isinf(matrix).any(axis=0)
+        unbounded = [
+            name for name, found in zip(self.feature_names, infinite, strict=True) if found
+        ]
+        if unbounded:
+            raise ValueError(f"PL features contain infinite values: {unbounded!r}")
         missing = np.isnan(matrix).any(axis=0)
         rejected = [
             name
@@ -237,8 +244,20 @@ class PLModel:
 def write_pl_model(directory: Path, record: PLModelRecord, booster: PLBooster) -> str:
     """Write the artifact into an existing empty directory and return its manifest SHA-256.
 
-    The caller publishes the directory. The manifest is validated with the same rules
-    the reader applies before it is written.
+    Before any file is written, the manifest built from ``record`` is validated with
+    the reader's manifest rules and serialized as strict JSON, so a record whose
+    manifest the reader would reject leaves the directory empty. The writer does not
+    compare the record with the booster beyond the missing-value branches; the
+    caller reads the written artifact back to check that. An I/O failure while
+    writing can leave part of the artifact behind; the caller owns the directory,
+    removes it on failure and publishes it on success (the CLI uses a staging
+    directory for both).
+
+    Raises:
+        ValueError: If the directory is missing or not empty, the booster dump is
+            malformed or does not match the record's columns, a column missing in
+            training splits without a missing-value branch, or the manifest built from
+            the record (including its clocks) is invalid or not strict JSON.
     """
     if not directory.is_dir() or any(directory.iterdir()):
         raise ValueError("PL model staging must be an existing empty directory")
@@ -247,14 +266,15 @@ def write_pl_model(directory: Path, record: PLModelRecord, booster: PLBooster) -
         record.feature_names,
         record.nullable_in_training,
     )
+    # The model digest is unknown until model.txt exists; a well-formed placeholder
+    # lets every record-derived field be validated and serialized first.
+    _manifest_payload(_manifest(record, "0" * 64))
     model_path = directory / MODEL_FILE
     booster.save_model(str(model_path), num_iteration=record.best_iteration)
     _fsync(model_path)
-    manifest = _manifest(record, hashlib.sha256(model_path.read_bytes()).hexdigest())
-    _validate_manifest(manifest)
-    payload = (
-        json.dumps(manifest, sort_keys=True, ensure_ascii=True, allow_nan=False) + "\n"
-    ).encode("ascii")
+    payload = _manifest_payload(
+        _manifest(record, hashlib.sha256(model_path.read_bytes()).hexdigest())
+    )
     with (directory / MANIFEST_FILE).open("xb") as stream:
         stream.write(payload)
         stream.flush()
@@ -366,6 +386,16 @@ def _manifest(record: PLModelRecord, model_sha256: str) -> dict[str, object]:
         "provenance": dict(record.provenance),
         "config": dict(record.config),
     }
+
+
+def _manifest_payload(manifest: Mapping[str, object]) -> bytes:
+    """Validate the manifest and return its ASCII JSON bytes (sorted keys, no NaN)."""
+    _validate_manifest(manifest)
+    try:
+        text = json.dumps(manifest, sort_keys=True, ensure_ascii=True, allow_nan=False)
+    except (TypeError, ValueError) as exc:
+        raise ValueError(f"PL model manifest is not strict JSON: {exc}") from exc
+    return (text + "\n").encode("ascii")
 
 
 def _validate_manifest(manifest: Mapping[str, object]) -> None:
