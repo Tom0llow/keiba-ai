@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import date, datetime, timedelta
 from itertools import combinations
 from pathlib import Path
@@ -292,9 +293,17 @@ def datamart_from_raw(
 
 
 def prepared_from_raw(
-    raw: dict[str, object], *, registry: FeatureRegistry, day: date
+    raw: dict[str, object],
+    *,
+    registry: FeatureRegistry,
+    day: date,
+    edit: Callable[[list[dict[str, object]], list[dict[str, object]]], None] | None = None,
 ) -> tuple[ReferenceDatamartBuilder, PreparedTargets]:
-    """Feed history years through ``add_year`` and prepare the one label-free date."""
+    """Feed history years through ``add_year`` and prepare the one label-free date.
+
+    ``edit`` receives the target year's de-duplicated RA and SE row lists and may
+    change them in place before ``prepare_targets`` reads them.
+    """
     tables = cast(dict[str, list[dict[str, object]]], raw["tables"])
     builder = ReferenceDatamartBuilder(
         settings=cast(dict[str, object], raw["calculation_settings"]),
@@ -309,7 +318,10 @@ def prepared_from_raw(
     for year in builder.years:
         if year < day.year:
             builder.add_year(year, **_year_inputs(raw, builder, year), markets=day_markets(raw))
-    return builder, builder.prepare_targets(day.year, **_year_inputs(raw, builder, day.year))
+    inputs = _year_inputs(raw, builder, day.year)
+    if edit is not None:
+        edit(inputs["ra_rows"], inputs["se_rows"])
+    return builder, builder.prepare_targets(day.year, **inputs)
 
 
 def day_markets(raw: dict[str, object]) -> MarketRows:

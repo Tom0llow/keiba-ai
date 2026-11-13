@@ -50,7 +50,7 @@ from make_features.generation.chronological import (
     SharedCalculationContext,
     shared_context,
 )
-from make_features.real_market import JST, publication
+from make_features.real_market import JST, canonical_hash, publication
 from make_features.reference_raw import (
     CARD_RA_COLUMNS,
     CARD_SE_COLUMNS,
@@ -62,7 +62,7 @@ from make_features.reference_raw import (
     WC_COLUMNS,
     result_boundary,
 )
-from make_features.reference_snapshot import reference_pedigree
+from make_features.reference_snapshot import CARD_MAPPING_MISMATCH, reference_pedigree
 from models.dataset.calculated import closed_numeric_columns
 from models.serialization.reference import prepare_reference_payload
 from models.serialization.reference_datamart import (
@@ -70,6 +70,7 @@ from models.serialization.reference_datamart import (
     PreparedTargets,
     ReferenceDatamartBuilder,
     ReferenceYearOutput,
+    label_free_target_cards,
 )
 from tests.reference_fixtures import (
     RICH_TARGET_DAYS,
@@ -2236,3 +2237,153 @@ def test_live_cli_preparation_failure_creates_no_output(tmp_path: Path) -> None:
     assert result.stderr.endswith("datamart build-reference-prediction-live failed: pin failed\n")
     assert result.stdout == ""
     assert not output.exists()
+
+
+def _target_day_rows(raw: dict[str, object], day: date) -> tuple[list[Row], list[Row]]:
+    """Return one date's stored RA and SE rows once each, as the snapshot holds them."""
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    stamp = (str(day.year), day.strftime("%m%d"))
+    result: list[list[Row]] = []
+    for names in (("history_ra", "label_ra"), ("history_se", "label_se")):
+        seen: dict[int, Row] = {}
+        for name in names:
+            for row in tables[name]:
+                if (row["idYear"], row["idMonthDay"]) == stamp:
+                    seen[id(row)] = row
+        result.append(list(seen.values()))
+    return result[0], result[1]
+
+
+@pytest.mark.parametrize("day", RICH_TARGET_DAYS)
+def test_shared_card_normalization_reproduces_the_feature_build(day: date) -> None:
+    raw, _ = _rich_with_late_markets()
+    _, races, holds = _one_shot(raw, day)
+    _, prepared = prepared_from_raw(raw, registry=_registry(), day=day)
+    ra_rows, se_rows = _target_day_rows(raw, day)
+    cards, card_holds = label_free_target_cards(
+        ra_rows, se_rows, day=day, freeze_offset_seconds=300
+    )
+    prepared_holds = [item for item in prepared.held if item["role"] == "target"]
+    assert list(card_holds) == prepared_holds
+    assert [(card.race_id, card.scheduled_start_at, card.freeze_at) for card in cards] == sorted(
+        (schedule.race_id, schedule.scheduled_start_at, schedule.freeze_at)
+        for schedule in prepared.schedules
+    )
+    published = [card for card in cards if card.race_id in races]
+    assert published
+    for card in published:
+        assert (
+            canonical_hash(dict(card.horse_mapping)) == races[card.race_id]["horse_mapping_sha256"]
+        )
+        assert list(card.horse_mapping) == sorted(card.horse_mapping)
+    # Every race the build published or held after preparation has a card.
+    assert set(races) | (set(holds) - {cast(str, h["race_id"]) for h in card_holds}) <= {
+        card.race_id for card in cards
+    }
+
+
+def _first_runner(rows: list[Row], race_id: str) -> int:
+    return next(i for i, row in enumerate(rows) if _race_id(row) == race_id)
+
+
+def _duplicate_ra(ra: list[Row], se: list[Row], race_id: str) -> None:
+    ra.append(dict(ra[_first_runner(ra, race_id)]))
+
+
+def _conflicting_ra(column: str, value: str) -> Callable[[list[Row], list[Row], str], None]:
+    def edit(ra: list[Row], se: list[Row], race_id: str) -> None:
+        ra.append({**ra[_first_runner(ra, race_id)], column: value})
+
+    return edit
+
+
+def _duplicate_se(ra: list[Row], se: list[Row], race_id: str) -> None:
+    se.append(dict(se[_first_runner(se, race_id)]))
+
+
+def _repeat_se(column: str) -> Callable[[list[Row], list[Row], str], None]:
+    def edit(ra: list[Row], se: list[Row], race_id: str) -> None:
+        first = _first_runner(se, race_id)
+        se[first + 1] = {**se[first + 1], column: se[first][column]}
+
+    return edit
+
+
+def _missing_horse(ra: list[Row], se: list[Row], race_id: str) -> None:
+    first = _first_runner(se, race_id)
+    se[first] = {**se[first], "KettoNum": None}
+
+
+@pytest.mark.parametrize(
+    ("edit", "stage", "reason"),
+    [
+        (_duplicate_ra, None, None),
+        (_conflicting_ra("Kyori", "2000"), "prepare", "ambiguous_or_missing_race_row"),
+        (_conflicting_ra("HassoTime", "1505"), "prepare", "ambiguous_or_missing_race_row"),
+        (_conflicting_ra("GradeCD", "A"), None, None),
+        (_duplicate_se, "calculate", CARD_MAPPING_MISMATCH),
+        (_repeat_se("Umaban"), "calculate", CARD_MAPPING_MISMATCH),
+        (_repeat_se("KettoNum"), "calculate", CARD_MAPPING_MISMATCH),
+        (_missing_horse, "calculate", "card requires permanent KettoNum and Umaban mapping"),
+    ],
+)
+def test_shared_card_normalization_holds_a_race_as_the_feature_build_does(
+    edit: Callable[[list[Row], list[Row], str], None], stage: str | None, reason: str | None
+) -> None:
+    raw, _ = _rich_with_late_markets()
+    day = RICH_TARGET_DAYS[0]
+    _, races, _ = _one_shot(raw, day)
+    race_id = sorted(races)[0]
+    seen: list[tuple[list[Row], list[Row]]] = []
+
+    def capture(ra: list[Row], se: list[Row]) -> None:
+        edit(ra, se, race_id)
+        seen.append((ra, se))
+
+    _, prepared = prepared_from_raw(raw, registry=_registry(), day=day, edit=capture)
+    ((ra_rows, se_rows),) = seen
+    cards, card_holds = label_free_target_cards(
+        ra_rows, se_rows, day=day, freeze_offset_seconds=300
+    )
+    if stage is None:
+        # Identical rows count once; columns outside the card never reach the card.
+        (card,) = (card for card in cards if card.race_id == race_id)
+        assert canonical_hash(dict(card.horse_mapping)) == races[race_id]["horse_mapping_sha256"]
+        assert race_id in {schedule.race_id for schedule in prepared.schedules}
+        return
+    expected = {
+        "race_id": race_id,
+        "role": "target",
+        "stage": "target_pre_freeze",
+        "reason": reason,
+        "whole_race": True,
+    }
+    assert race_id not in {card.race_id for card in cards}
+    assert [item for item in card_holds if item["race_id"] == race_id] == [expected]
+    if stage == "prepare":
+        assert expected in prepared.held
+        assert race_id not in {schedule.race_id for schedule in prepared.schedules}
+        return
+    result = prepared.calculate(race_id, *_race_markets(raw, day, race_id), observed_through=None)
+    assert result.hold == expected
+
+
+def test_readers_return_the_validated_held_races(tmp_path: Path) -> None:
+    for name in ("a", "b", "c"):
+        (tmp_path / name).mkdir()
+    datamart, _, builder = _write(tmp_path / "a")
+    prediction, _, _ = _write_prediction(tmp_path / "b")
+    one_race, _, source = _write_one_race(tmp_path / "c", held=True)
+    for path, read in (
+        (datamart, read_reference_datamart),
+        (prediction, read_reference_prediction_features),
+        (one_race, read_reference_prediction_features),
+    ):
+        stored = json.loads((path / "held_races.json").read_text(encoding="utf-8"))
+        loaded = read(path, expected_columns=builder.columns)
+        assert [dict(item) for item in loaded.held] == stored["held_races"]
+        assert loaded.held
+    loaded = read_reference_prediction_features(one_race, expected_columns=builder.columns)
+    assert [item["race_id"] for item in loaded.held if item["role"] == "target"] == [
+        source["race_id"]
+    ]

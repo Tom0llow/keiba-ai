@@ -55,6 +55,7 @@ from make_features.reference_raw import (
 from make_features.reference_rules import validate_reference_rules
 from make_features.reference_snapshot import (
     ReferenceTargetSources,
+    card_entrants,
     normalize_reference_history,
     normalize_reference_target,
     reference_label,
@@ -546,24 +547,11 @@ class ReferenceDatamartBuilder:
         se_rows: Sequence[dict[str, object]],
         held: list[dict[str, object]],
     ) -> list[tuple[date, dict[str, object], list[dict[str, object]], list[dict[str, object]]]]:
-        first = self.target_start.strftime("%Y%m%d")
-        last = self.target_end.strftime("%Y%m%d")
-        ra_by_race: dict[str, list[dict[str, object]]] = {}
-        for row in ra_rows:
-            identity = race_identity(row)
-            if first <= identity[:8] <= last:
-                # Without labels a target carries only its pre-race card columns, so result
-                # columns cannot reach de-duplication, normalization or any calculator.
-                ra_by_race.setdefault(identity, []).append(
-                    row if self.labeled else {k: row.get(k) for k in CARD_RA_COLUMNS}
-                )
-        se_by_race: dict[str, list[dict[str, object]]] = {}
-        for row in se_rows:
-            identity = race_identity(row)
-            if identity in ra_by_race:
-                se_by_race.setdefault(identity, []).append(
-                    row if self.labeled else {k: row.get(k) for k in CARD_SE_COLUMNS}
-                )
+        ra_by_race, se_by_race = target_rows(
+            ra_rows, se_rows, first=self.target_start, last=self.target_end, labeled=self.labeled
+        )
+        for entrants in se_by_race.values():
+            for row in entrants:
                 horse = identifier(row, "KettoNum")
                 if horse is not None:
                     self._card_horses.add(horse)
@@ -571,16 +559,11 @@ class ReferenceDatamartBuilder:
         offset = cast(int, self.rules["freeze_offset_seconds"])
         for identity, candidates in sorted(ra_by_race.items()):
             try:
-                (manifest,) = reference_manifests(candidates, freeze_offset_seconds=offset)
+                manifest = target_manifest(candidates, freeze_offset_seconds=offset)
             except ValueError as exc:
                 held.append(_hold(identity, "target_pre_freeze", str(exc)))
                 continue
             day = datetime.strptime(identity[:8], "%Y%m%d").date()
-            if timestamp(manifest["freeze_at"]).astimezone(JST).date() != day:
-                held.append(
-                    _hold(identity, "target_pre_freeze", "freeze falls on a different JST date")
-                )
-                continue
             targets.append((day, manifest, candidates, se_by_race.get(identity, [])))
         return sorted(
             targets,
@@ -823,6 +806,100 @@ def _by_race(rows: Sequence[dict[str, object]]) -> dict[str, list[dict[str, obje
     for row in rows:
         result.setdefault(race_identity(row), []).append(row)
     return result
+
+
+def target_rows(
+    ra_rows: Sequence[dict[str, object]],
+    se_rows: Sequence[dict[str, object]],
+    *,
+    first: date,
+    last: date,
+    labeled: bool,
+) -> tuple[dict[str, list[dict[str, object]]], dict[str, list[dict[str, object]]]]:
+    """Group the target period's race and runner rows by race ID, in input order.
+
+    Runner rows are kept only for races that have a race row. Without labels each row
+    is projected to its pre-race card columns, so result columns cannot reach
+    de-duplication, normalization or any calculator.
+    """
+    start, end = first.strftime("%Y%m%d"), last.strftime("%Y%m%d")
+    ra_by_race: dict[str, list[dict[str, object]]] = {}
+    for row in ra_rows:
+        identity = race_identity(row)
+        if start <= identity[:8] <= end:
+            ra_by_race.setdefault(identity, []).append(
+                row if labeled else {k: row.get(k) for k in CARD_RA_COLUMNS}
+            )
+    se_by_race: dict[str, list[dict[str, object]]] = {}
+    for row in se_rows:
+        identity = race_identity(row)
+        if identity in ra_by_race:
+            se_by_race.setdefault(identity, []).append(
+                row if labeled else {k: row.get(k) for k in CARD_SE_COLUMNS}
+            )
+    return ra_by_race, se_by_race
+
+
+def target_manifest(
+    candidates: Sequence[dict[str, object]], *, freeze_offset_seconds: int
+) -> dict[str, object]:
+    """Return one target race's stored schedule from its race rows.
+
+    Identical rows count once. Differing rows, an invalid ``HassoTime`` or a freeze on
+    another JST date than the date in the race ID raise ``ValueError``, which holds the
+    race before freeze.
+    """
+    (manifest,) = reference_manifests(candidates, freeze_offset_seconds=freeze_offset_seconds)
+    day = datetime.strptime(cast(str, manifest["race_id"])[:8], "%Y%m%d").date()
+    if timestamp(manifest["freeze_at"]).astimezone(JST).date() != day:
+        raise ValueError("freeze falls on a different JST date")
+    return manifest
+
+
+@dataclass(frozen=True)
+class TargetCard:
+    """One label-free target's stored schedule and horse-number mapping (ADR-039)."""
+
+    race_id: str
+    scheduled_start_at: datetime
+    freeze_at: datetime
+    horse_mapping: Mapping[str, str]
+
+
+def label_free_target_cards(
+    ra_rows: Sequence[dict[str, object]],
+    se_rows: Sequence[dict[str, object]],
+    *,
+    day: date,
+    freeze_offset_seconds: int,
+) -> tuple[tuple[TargetCard, ...], tuple[dict[str, object], ...]]:
+    """Return one date's target schedules and mappings, or their card holds.
+
+    This applies the feature build's own card normalization (``target_rows``,
+    ``target_manifest`` and ``card_entrants``) to the stored race and runner rows, so a
+    mapping's ``canonical_hash`` equals the published ``horse_mapping_sha256``. Holds use
+    the build's ``target_pre_freeze`` stage and reasons. Holds that need markets,
+    history or the calculation are not reproduced. Cards are ordered by race ID.
+    """
+    ra_by_race, se_by_race = target_rows(ra_rows, se_rows, first=day, last=day, labeled=False)
+    cards: list[TargetCard] = []
+    held: list[dict[str, object]] = []
+    for identity, candidates in sorted(ra_by_race.items()):
+        try:
+            manifest = target_manifest(candidates, freeze_offset_seconds=freeze_offset_seconds)
+            _, _, mapping = card_entrants(se_by_race.get(identity, []))
+        except ValueError as exc:
+            held.append(_hold(identity, "target_pre_freeze", str(exc)))
+            continue
+        cards.append(
+            TargetCard(
+                identity,
+                timestamp(manifest["scheduled_start_at"]),
+                timestamp(manifest["freeze_at"]),
+                mapping,
+            )
+        )
+    return tuple(cards), tuple(held)
 
 
 def _hold(race_id: str, stage: str, reason: str) -> dict[str, object]:

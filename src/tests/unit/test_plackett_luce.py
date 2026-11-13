@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from itertools import permutations
+from itertools import combinations, permutations
 from math import exp, log
 
 import numpy as np
@@ -12,6 +12,7 @@ from models.probability.plackett_luce import (
     RaceLayout,
     top3_combination_log_probabilities,
     top3_marginal_probabilities,
+    top3_order_probabilities,
     top3_plackett_luce,
 )
 
@@ -40,6 +41,25 @@ def _order_probability(scores: np.ndarray, order: tuple[int, ...]) -> float:
         probability *= numerator / denominator
         remaining.remove(horse)
     return probability
+
+
+def _assert_order_probability_totals(
+    exacta: np.ndarray,
+    trifecta: np.ndarray,
+    quinella: np.ndarray,
+    wide: np.ndarray,
+    trio: np.ndarray,
+) -> None:
+    """Assert the total-probability identities for one race."""
+    field_size = len(exacta)
+    upper_indices = np.triu_indices(field_size, k=1)
+    trio_indices = tuple(zip(*combinations(range(field_size), 3), strict=True))
+
+    assert exacta.sum() == pytest.approx(1.0, abs=1e-12)
+    assert trifecta.sum() == pytest.approx(1.0, abs=1e-12)
+    assert quinella[upper_indices].sum() == pytest.approx(1.0, abs=1e-12)
+    assert wide[upper_indices].sum() == pytest.approx(3.0, abs=1e-12)
+    assert trio[trio_indices].sum() == pytest.approx(1.0, abs=1e-12)
 
 
 def test_top3_nll_matches_scalar_reference_and_is_race_independent() -> None:
@@ -224,6 +244,117 @@ def test_marginals_and_combination_probabilities_match_enumeration_in_padded_rac
         assert exp(combinations.trio[race]) == pytest.approx(
             sum(v for order, v in order_probabilities.items() if set(order) == set(actual))
         )
+
+
+def test_order_probabilities_match_marginals_and_actual_combination_probabilities() -> None:
+    scores = np.array([1.2, -0.4, 0.8, 2.0, -1.0], dtype=np.float64)
+    positions = np.array([2, 5, 3, 1, 4], dtype=np.int64)
+    layout = RaceLayout((len(scores),))
+
+    result = top3_order_probabilities(scores)
+
+    _assert_order_probability_totals(
+        result.exacta,
+        result.trifecta,
+        result.quinella,
+        result.wide,
+        result.trio,
+    )
+    assert result.quinella == pytest.approx(result.quinella.T, rel=1e-12)
+    assert result.wide == pytest.approx(result.wide.T, rel=1e-12)
+    assert np.diag(result.exacta) == pytest.approx(0.0)
+    assert np.diag(result.quinella) == pytest.approx(0.0)
+    assert np.diag(result.wide) == pytest.approx(0.0)
+    for first_horse, second_horse, third_horse in combinations(range(len(scores)), 3):
+        trio_values = (
+            result.trio[first_horse, second_horse, third_horse],
+            result.trio[first_horse, third_horse, second_horse],
+            result.trio[second_horse, first_horse, third_horse],
+            result.trio[second_horse, third_horse, first_horse],
+            result.trio[third_horse, first_horse, second_horse],
+            result.trio[third_horse, second_horse, first_horse],
+        )
+        assert trio_values == pytest.approx([trio_values[0]] * len(trio_values), rel=1e-12)
+    for indices in np.ndindex(result.trifecta.shape):
+        if len(set(indices)) < 3:
+            assert result.trifecta[indices] == 0.0
+            assert result.trio[indices] == 0.0
+
+    marginals = top3_marginal_probabilities(scores, layout)
+    win = result.trifecta.sum(axis=(1, 2))
+    top2 = win + result.trifecta.sum(axis=(0, 2))
+    top3 = top2 + result.trifecta.sum(axis=(0, 1))
+    assert win == pytest.approx(marginals.win, rel=1e-12, abs=1e-12)
+    assert top2 == pytest.approx(marginals.top2, rel=1e-12, abs=1e-12)
+    assert top3 == pytest.approx(marginals.top3, rel=1e-12, abs=1e-12)
+
+    actual = tuple(np.argsort(positions)[:3])
+    combination_logs = top3_combination_log_probabilities(scores, positions, layout)
+    assert result.exacta[actual[:2]] == pytest.approx(exp(combination_logs.exacta[0]), rel=1e-12)
+    assert result.quinella[actual[:2]] == pytest.approx(
+        exp(combination_logs.quinella[0]), rel=1e-12
+    )
+    assert result.trifecta[actual] == pytest.approx(exp(combination_logs.trifecta[0]), rel=1e-12)
+    assert result.trio[actual] == pytest.approx(exp(combination_logs.trio[0]), rel=1e-12)
+
+
+def test_order_probabilities_respect_temperature_and_score_shift() -> None:
+    scores = np.array([1.2, -0.4, 0.8, 2.0, -1.0], dtype=np.float64)
+
+    probabilities = top3_order_probabilities(scores)
+    shifted = top3_order_probabilities(scores + 17.5)
+    tempered = top3_order_probabilities(scores, temperature=2.0)
+    scaled = top3_order_probabilities(scores / 2.0)
+
+    for name in ("exacta", "trifecta", "quinella", "wide", "trio"):
+        original = getattr(probabilities, name)
+        assert getattr(shifted, name) == pytest.approx(original, rel=1e-12, abs=1e-12)
+        assert getattr(tempered, name) == pytest.approx(getattr(scaled, name), rel=1e-12, abs=1e-12)
+    assert not np.allclose(tempered.exacta, probabilities.exacta)
+
+
+def test_order_probabilities_reject_field_sizes_smaller_than_three() -> None:
+    with pytest.raises(ValueError, match="at least 3"):
+        top3_order_probabilities(np.array([0.0, 1.0]))
+
+
+@pytest.mark.parametrize(
+    ("scores", "dominant"),
+    [
+        ([700.0, -700.0, 0.0, 700.0, -700.0], False),
+        # One horse wins with float64 probability exactly 1, so naive later stages divide by 0.
+        ([700.0, -700.0, 0.0, -700.0, -700.0], True),
+    ],
+)
+def test_order_probabilities_stay_finite_for_extreme_scores(
+    scores: list[float], dominant: bool
+) -> None:
+    result = top3_order_probabilities(np.array(scores, dtype=np.float64), temperature=0.05)
+
+    if dominant:
+        layout = RaceLayout.from_group_sizes([len(scores)])
+        win = top3_marginal_probabilities(
+            np.array(scores, dtype=np.float64), layout, temperature=0.05
+        ).win
+        assert win[0] == 1.0
+        assert result.exacta[0].sum() == pytest.approx(1.0, abs=1e-12)
+
+    for values in (
+        result.exacta,
+        result.trifecta,
+        result.quinella,
+        result.wide,
+        result.trio,
+    ):
+        assert np.all(np.isfinite(values))
+        assert np.all(values >= 0.0)
+    _assert_order_probability_totals(
+        result.exacta,
+        result.trifecta,
+        result.quinella,
+        result.wide,
+        result.trio,
+    )
 
 
 def test_chunk_size_and_temperature_scaling_do_not_change_results() -> None:

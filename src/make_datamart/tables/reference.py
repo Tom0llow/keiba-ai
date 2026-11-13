@@ -150,12 +150,17 @@ _PREDICTION = _Layout(
 
 @dataclass(frozen=True)
 class ReferenceDatamartRead:
-    """Return the validated identifier and tables without recalculating features."""
+    """Return the validated identifier, tables and held races without recalculating features.
+
+    ``held`` holds the entries of ``held_races.json`` in file order, after the same
+    validation as the manifest (ADR-039).
+    """
 
     manifest_sha256: str
     manifest: Mapping[str, object]
     rows: pa.Table
     races: pa.Table
+    held: tuple[Mapping[str, object], ...]
 
 
 class ReferenceDatamartWriter:
@@ -432,7 +437,9 @@ def _read(
             races=cast(list[dict[str, object]], races.to_pylist()),
             target_holds={cast(str, item["race_id"]) for item in held if item["role"] == "target"},
         )
-    return ReferenceDatamartRead(manifest_sha256, manifest, rows, races)
+    return ReferenceDatamartRead(
+        manifest_sha256, manifest, rows, races, tuple(dict(item) for item in held)
+    )
 
 
 def _parse_manifest(manifest_bytes: bytes) -> dict[str, object]:
