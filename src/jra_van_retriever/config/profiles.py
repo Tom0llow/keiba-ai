@@ -39,6 +39,7 @@ class JVLinkProfile:
     start_datetime: datetime | None = None
     race_start_date: date | None = None
     start_datetimes: dict[str, datetime] | None = None
+    normal_start_floors: dict[str, datetime] | None = None
     skip_existing: bool = False
 
 
@@ -139,22 +140,36 @@ def _load_batch(config: dict[str, Any]) -> HistoricalOddsBatch | None:
 
 def _load_profile(config: dict[str, Any], name: str) -> JVLinkProfile:
     section = _require_table(config, name)
+    normal_update = _require_bool(section, "normal_update", name)
+    normal_data_specs = _require_string_set(section, "normal_data_specs", name)
     setup_data_specs = _require_string_set(section, "setup_data_specs", name)
     start_datetime = _optional_datetime(section, "start_datetime", name)
     start_datetimes = _optional_datetimes(section, "start_datetimes", name)
+    normal_start_floors: dict[str, datetime] | None = None
+    if "normal_start_floors" in section:
+        if name != "latest":
+            raise ValueError("normal_start_floors is supported only by [latest]")
+        if not normal_update:
+            raise ValueError("[latest].normal_start_floors requires normal_update=true")
+        normal_start_floors = _optional_datetimes(
+            section, "normal_start_floors", name, require_local=True
+        )
+        if not set(normal_start_floors) <= set(normal_data_specs):
+            raise ValueError("[latest].normal_start_floors must contain only normal_data_specs")
     if start_datetime is not None and start_datetimes:
         raise ValueError(f"[{name}] must define only one of start_datetime or start_datetimes")
     if start_datetimes and set(start_datetimes) != set(setup_data_specs):
         raise ValueError(f"[{name}].start_datetimes must contain exactly the setup_data_specs")
     return JVLinkProfile(
-        normal_update=_require_bool(section, "normal_update", name),
+        normal_update=normal_update,
         setup_update=_require_bool(section, "setup_update", name),
         realtime_update=_require_bool(section, "realtime_update", name),
-        normal_data_specs=_require_string_set(section, "normal_data_specs", name),
+        normal_data_specs=normal_data_specs,
         setup_data_specs=setup_data_specs,
         realtime_data_specs=_require_string_set(section, "realtime_data_specs", name),
         start_datetime=start_datetime,
         start_datetimes=start_datetimes or None,
+        normal_start_floors=normal_start_floors,
         race_start_date=_optional_date(section, "race_start_date", name),
         skip_existing=(
             _require_bool(section, "skip_existing", name) if "skip_existing" in section else False

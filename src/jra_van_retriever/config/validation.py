@@ -87,7 +87,7 @@ def _optional_datetime(section: dict[str, Any], key: str, section_name: str) -> 
 
 
 def _optional_datetimes(
-    section: dict[str, Any], key: str, section_name: str
+    section: dict[str, Any], key: str, section_name: str, *, require_local: bool = False
 ) -> dict[str, datetime]:
     value = section.get(key)
     if value is None:
@@ -99,7 +99,9 @@ def _optional_datetimes(
     for data_spec, start_datetime in value.items():
         if not isinstance(data_spec, str) or not data_spec:
             raise ValueError(f"[{section_name}].{key} must use non-empty data spec IDs")
-        if not isinstance(start_datetime, datetime):
+        if not isinstance(start_datetime, datetime) or (
+            require_local and start_datetime.tzinfo is not None
+        ):
             raise ValueError(f"[{section_name}].{key}.{data_spec} must be a TOML local datetime")
         result[data_spec] = start_datetime
     return result

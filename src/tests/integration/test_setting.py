@@ -28,6 +28,18 @@ def _write_seed(path: Path) -> None:
       <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>RACE</DataSpec>
         <JVKaisaiDateTimeKey><KaisaiDateTime>2026-01-01T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
       </JVDataSpecSetting>
+      <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>SLOP</DataSpec>
+        <JVKaisaiDateTimeKey><KaisaiDateTime>2026-09-30T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
+      </JVDataSpecSetting>
+      <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>WOOD</DataSpec>
+        <JVKaisaiDateTimeKey><KaisaiDateTime>2026-10-01T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
+      </JVDataSpecSetting>
+      <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>DIFN</DataSpec>
+        <JVKaisaiDateTimeKey><KaisaiDateTime>2026-10-02T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
+      </JVDataSpecSetting>
+      <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>BLDN</DataSpec>
+        <JVKaisaiDateTimeKey><KaisaiDateTime>2026-09-01T00:00:00</KaisaiDateTime></JVKaisaiDateTimeKey>
+      </JVDataSpecSetting>
     </DataSpecSettings></JVNormalUpdateSetting>
     <JVSetupDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>
       <JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>RACE</DataSpec>
@@ -160,6 +172,148 @@ def _spec(root: ET.Element, data_spec: str) -> ET.Element:
     raise AssertionError(data_spec)
 
 
+def _section_spec(root: ET.Element, section: str, data_spec: str) -> ET.Element:
+    settings = _child(root, f"Details/{section}/DataSpecSettings")
+    for node in settings.findall("JVDataSpecSetting"):
+        if node.findtext("DataSpec") == data_spec:
+            return node
+    raise AssertionError(data_spec)
+
+
+def _normal_position(root: ET.Element, data_spec: str) -> str | None:
+    return _section_spec(root, "JVNormalUpdateSetting", data_spec).findtext(
+        "JVKaisaiDateTimeKey/KaisaiDateTime"
+    )
+
+
+NORMAL_DATA_SPECS = frozenset({"RACE", "SLOP", "WOOD", "DIFN"})
+
+
+def _latest_normal_profile(floors: dict[str, datetime]) -> JVLinkProfile:
+    return JVLinkProfile(
+        normal_update=True,
+        setup_update=False,
+        realtime_update=False,
+        normal_data_specs=NORMAL_DATA_SPECS,
+        setup_data_specs=frozenset(),
+        realtime_data_specs=frozenset(),
+        normal_start_floors=floors,
+    )
+
+
+def test_builder_raises_normal_start_positions_to_the_configured_floors(tmp_path: Path) -> None:
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    profile = _latest_normal_profile(
+        {
+            "SLOP": datetime(2026, 10, 1),
+            "WOOD": datetime(2026, 10, 1),
+            "DIFN": datetime(2026, 10, 1),
+            "BLDN": datetime(2026, 10, 1),
+        }
+    )
+
+    destination = tmp_path / "latest.xml"
+    JVLinkSettingBuilder(seed).build(profile, destination)
+
+    root = ET.parse(destination).getroot()
+    assert _normal_position(root, "RACE") == "2026-01-01T00:00:00"
+    assert _normal_position(root, "SLOP") == "2026-10-01T00:00:00"
+    assert _normal_position(root, "WOOD") == "2026-10-01T00:00:00"
+    assert _normal_position(root, "DIFN") == "2026-10-02T00:00:00"
+    assert _normal_position(root, "BLDN") == "2026-09-01T00:00:00"
+    assert _section_spec(root, "JVNormalUpdateSetting", "BLDN").findtext("IsEnabled") == "false"
+    assert (
+        _section_spec(root, "JVSetupDataUpdateSetting", "WOOD").findtext(
+            "JVKaisaiDateTimeKey/KaisaiDateTime"
+        )
+        == "2015-01-01T00:00:00"
+    )
+    assert (
+        _section_spec(root, "JVRealTimeDataUpdateSetting", "0B11").findtext(
+            "JVKaisaiDateKey/KaisaiDate"
+        )
+        == "2026-01-01T00:00:00"
+    )
+
+
+def test_builder_keeps_normal_start_floors_idempotent_and_preserves_later_positions(
+    tmp_path: Path,
+) -> None:
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    profile = _latest_normal_profile({"SLOP": datetime(2026, 10, 1)})
+    runtime = tmp_path / "runtime" / "latest.xml"
+    builder = JVLinkSettingBuilder(seed)
+
+    builder.build(profile, runtime)
+    first_build = runtime.read_bytes()
+    builder.build(profile, runtime, source=runtime)
+
+    assert runtime.read_bytes() == first_build
+
+    tree = ET.parse(runtime)
+    root = tree.getroot()
+    _child(
+        _child(
+            _section_spec(root, "JVNormalUpdateSetting", "SLOP"),
+            "JVKaisaiDateTimeKey",
+        ),
+        "KaisaiDateTime",
+    ).text = "2026-10-02T00:00:00"
+    tree.write(runtime, encoding="utf-8", xml_declaration=True)
+
+    builder.build(profile, runtime, source=runtime)
+
+    assert _normal_position(ET.parse(runtime).getroot(), "SLOP") == "2026-10-02T00:00:00"
+
+
+@pytest.mark.parametrize(
+    ("case", "message"),
+    [
+        ("missing", "KaisaiDateTime"),
+        ("date_only", "local ISO 8601 datetime"),
+        ("invalid", "local ISO 8601 datetime"),
+        ("timezone", "local ISO 8601 datetime"),
+    ],
+)
+def test_builder_rejects_invalid_normal_start_positions_without_writing(
+    tmp_path: Path, case: str, message: str
+) -> None:
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    tree = ET.parse(seed)
+    position = _child(
+        _section_spec(tree.getroot(), "JVNormalUpdateSetting", "SLOP"),
+        "JVKaisaiDateTimeKey/KaisaiDateTime",
+    )
+    if case == "missing":
+        _child(
+            _section_spec(tree.getroot(), "JVNormalUpdateSetting", "SLOP"),
+            "JVKaisaiDateTimeKey",
+        ).remove(position)
+    elif case == "date_only":
+        position.text = "2026-09-30"
+    elif case == "invalid":
+        position.text = "not-a-datetime"
+    else:
+        position.text = "2026-09-30T00:00:00+09:00"
+    tree.write(seed, encoding="utf-8", xml_declaration=True)
+
+    builder = JVLinkSettingBuilder(seed)
+    profile = _latest_normal_profile({"SLOP": datetime(2026, 10, 1)})
+    destination = tmp_path / "latest.xml"
+
+    with pytest.raises(ValueError, match=message):
+        builder.build(profile, destination)
+    assert not destination.exists()
+
+    original = seed.read_bytes()
+    with pytest.raises(ValueError, match=message):
+        builder.build(profile, seed)
+    assert seed.read_bytes() == original
+
+
 def test_builder_applies_data_spec_specific_setup_start_datetimes(tmp_path: Path) -> None:
     seed = tmp_path / "setting.xml"
     _write_seed(seed)
@@ -198,6 +352,137 @@ def test_config_loads_data_spec_specific_historical_start_datetimes() -> None:
     assert config.historical.start_datetimes is not None
     assert config.historical.start_datetimes["RACE"].isoformat() == "1986-01-01T00:00:00"
     assert config.historical.start_datetimes["WOOD"].isoformat() == "2021-07-27T00:00:00"
+
+
+def _write_config_with_profile_addition(
+    tmp_path: Path,
+    addition: str,
+    *,
+    latest_normal_data_specs: str | None = None,
+    latest_normal_update: bool | None = None,
+) -> Path:
+    """Write the repository config with its whole [latest] section replaced.
+
+    The test owns every [latest] value, so changes to the repository's own latest
+    profile (including its floors) cannot change what the test checks.
+    """
+    source = Path(__file__).parents[3] / "configs" / "jvlink.toml"
+    content = source.read_text(encoding="utf-8")
+    start = content.index("[latest]\n")
+    end = content.index("[realtime_history]\n")
+    update = "true" if latest_normal_update is None else str(latest_normal_update).lower()
+    specs = latest_normal_data_specs or 'normal_data_specs = ["RACE"]'
+    latest = (
+        "[latest]\n"
+        f"normal_update = {update}\n"
+        "setup_update = false\n"
+        "realtime_update = true\n"
+        f"{specs}\n"
+        "setup_data_specs = []\n"
+        'realtime_data_specs = ["0B12"]\n'
+        f"{addition}\n\n"
+    )
+    config_path = tmp_path / "jvlink.toml"
+    config_path.write_text(content[:start] + latest + content[end:], encoding="utf-8")
+    return config_path
+
+
+def test_config_loads_latest_normal_start_floors(tmp_path: Path) -> None:
+    config = JVLinkConfig.from_toml(
+        _write_config_with_profile_addition(
+            tmp_path,
+            "[latest.normal_start_floors]\nSLOP = 2026-10-01T00:00:00\nWOOD = 2026-10-01T00:00:00",
+            latest_normal_data_specs='normal_data_specs = ["RACE", "SLOP", "WOOD"]',
+        )
+    )
+
+    assert config.latest.normal_start_floors == {
+        "SLOP": datetime(2026, 10, 1),
+        "WOOD": datetime(2026, 10, 1),
+    }
+    assert config.historical.normal_start_floors is None
+    assert config.historical_odds.normal_start_floors is None
+    assert config.realtime_history.normal_start_floors is None
+    assert config.realtime_current.normal_start_floors is None
+    assert config.race_day_odds is not None
+    assert config.race_day_odds.normal_start_floors is None
+
+
+@pytest.mark.parametrize(
+    ("addition", "latest_normal_data_specs", "latest_normal_update"),
+    [
+        ("normal_start_floors = []", None, None),
+        (
+            '[latest.normal_start_floors]\n"" = 2026-10-01T00:00:00',
+            None,
+            None,
+        ),
+        (
+            "[latest.normal_start_floors]\nUNKNOWN = 2026-10-01T00:00:00",
+            None,
+            None,
+        ),
+        (
+            "[latest.normal_start_floors]\nRACE = 2026-10-01T00:00:00+09:00",
+            None,
+            None,
+        ),
+        (
+            '[latest.normal_start_floors]\nRACE = "2026-10-01T00:00:00"',
+            None,
+            None,
+        ),
+        (
+            "[latest.normal_start_floors]\nRACE = 2026-10-01T00:00:00",
+            None,
+            False,
+        ),
+        (
+            "[historical.normal_start_floors]\nRACE = 2026-10-01T00:00:00",
+            None,
+            None,
+        ),
+    ],
+)
+def test_config_rejects_invalid_normal_start_floors(
+    tmp_path: Path,
+    addition: str,
+    latest_normal_data_specs: str | None,
+    latest_normal_update: bool | None,
+) -> None:
+    config_path = _write_config_with_profile_addition(
+        tmp_path,
+        addition,
+        latest_normal_data_specs=latest_normal_data_specs,
+        latest_normal_update=latest_normal_update,
+    )
+
+    with pytest.raises(ValueError, match="normal_start_floors"):
+        JVLinkConfig.from_toml(config_path)
+
+
+def test_repository_config_raises_latest_workout_and_master_read_positions() -> None:
+    config = JVLinkConfig.from_toml(Path(__file__).parents[3] / "configs" / "jvlink.toml")
+
+    assert config.latest.normal_update is True
+    assert config.latest.normal_data_specs == frozenset({"RACE", "SLOP", "WOOD", "DIFN"})
+    assert config.latest.normal_start_floors == {
+        "SLOP": datetime(2026, 10, 1),
+        "WOOD": datetime(2026, 10, 1),
+        "DIFN": datetime(2026, 10, 1),
+    }
+    assert config.latest.setup_update is False
+    assert config.latest.realtime_data_specs == frozenset(
+        {"0B12", "0B15", "0B11", "0B14", "0B13", "0B17"}
+    )
+    others = [
+        config.historical,
+        config.historical_odds,
+        config.realtime_history,
+        config.realtime_current,
+        config.race_day_odds,
+    ]
+    assert all(profile is not None and profile.normal_start_floors is None for profile in others)
 
 
 def test_config_loads_realtime_race(tmp_path: Path) -> None:
