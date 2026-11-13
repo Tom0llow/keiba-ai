@@ -164,7 +164,8 @@ prediction_offset_minutes = 5
 
 race-day-oddsの実行中に、`latest`や`preprocess rebuild`による完全なParquet出力を重ねない。raw DBは
 ロールバックジャーナル方式のため、長い読取の間は取得の書込みが`database is locked`で失敗し、
-取得が欠けるか、その日の取得が停止する。当日の`latest`は、race-day-oddsを起動する前に済ませておく。
+取得が欠けるか、その日の取得が停止する。当日の`latest`（調教と競走馬マスタを含む、ADR-040）は、race-day-oddsを
+起動する前に済ませておく。
 
 DataSpecは`0B31`〜`0B36`の6種ちょうどとする。取得した行は既存のO1/O2 archiveとは別の表へ保存し、
 取得ごとの記録を`ARCHIVE_CAPTURE_LOG`へ残す。
@@ -231,7 +232,12 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   または`--data-spec 0B42`を使う。このコマンドは、失敗した`empty_response_unverified`の項目の
   うち、現在のarchiveの件数がまだ0のものだけを受け付ける。
 - `--retrieve --mode=latest`: rawデータを更新してから、更新した完全なParquet snapshotを
-  公開する。
+  公開する。RACEに加えて、当日の特徴量が読む坂路調教（SLOP→`NL_HC_HANRO`）・ウッドチップ調教
+  （WOOD→`NL_WC_WOOD`）・競走馬マスタ（DIFN→`NL_UM_UMA`）も差分取得する（ADR-040）。BLDN・DIFFは取得しない（特徴量は
+  `NL_UM_UMA`の親のIDだけを読み、DIFNがそれを更新するので、朝の取得を短く保つ）。
+  これらの種別の読込位置は`data/runtime/jvlink/latest.xml`に保存され、`[latest.normal_start_floors]`より前の位置は
+  下限まで上げてから取得する（まだ有効にしたことのない種別が、2015年からの差分を要求しないため）。下限は、その種別を
+  最後に取得した`historical-basic`の収録の終わり以前に置く。初回は下限から当日までの差分を取るので、通常より長くかかる。
 - `--retrieve --mode=realtime`: 対象レースの履歴/現在のオッズを取得してarchiveし、その同じ
   `RaceKey`についてレース単位のParquetを公開する。
 - `--retrieve --mode=race-day-odds --date YYYY-MM-DD`: 指定日の中央01〜10場の全レースについて、

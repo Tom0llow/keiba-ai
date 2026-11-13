@@ -59,6 +59,12 @@ class JVLinkSettingBuilder:
         realtime = _required_child(details, "JVRealTimeDataUpdateSetting")
 
         _apply_section(normal, profile.normal_update, profile.normal_data_specs)
+        if profile.normal_start_floors:
+            _raise_normal_start_floors(
+                normal,
+                profile.normal_data_specs,
+                profile.normal_start_floors,
+            )
         _apply_section(setup, profile.setup_update, profile.setup_data_specs)
         _apply_section(realtime, profile.realtime_update, profile.realtime_data_specs)
 
@@ -113,6 +119,43 @@ def _set_start_datetimes(
             continue
         key = _required_child(data_spec_setting, "JVKaisaiDateTimeKey")
         _set_required_text(key, "KaisaiDateTime", start_datetime.isoformat())
+
+
+def _raise_normal_start_floors(
+    normal: ET.Element,
+    enabled_specs: frozenset[str],
+    floors: dict[str, datetime],
+) -> None:
+    settings = _required_child(normal, "DataSpecSettings")
+    for data_spec_setting in settings.findall("JVDataSpecSetting"):
+        data_spec = data_spec_setting.findtext("DataSpec")
+        if data_spec not in enabled_specs:
+            continue
+        floor = floors.get(data_spec)
+        if floor is None:
+            continue
+        if floor.tzinfo is not None:
+            raise ValueError(f"normal start floor for {data_spec} must be a local datetime")
+        key = _required_child(data_spec_setting, "JVKaisaiDateTimeKey")
+        current = _local_datetime(_required_child(key, "KaisaiDateTime").text, data_spec)
+        if current < floor:
+            _set_required_text(key, "KaisaiDateTime", floor.isoformat())
+
+
+def _local_datetime(value: str | None, data_spec: str) -> datetime:
+    if value is None:
+        raise ValueError(f"{data_spec} normal setting is missing KaisaiDateTime")
+    if "T" not in value:
+        raise ValueError(f"{data_spec} normal setting must contain a local ISO 8601 datetime")
+    try:
+        result = datetime.fromisoformat(value)
+    except ValueError as exc:
+        raise ValueError(
+            f"{data_spec} normal setting must contain a local ISO 8601 datetime"
+        ) from exc
+    if result.tzinfo is not None:
+        raise ValueError(f"{data_spec} normal setting must contain a local ISO 8601 datetime")
+    return result
 
 
 def _set_race_key(

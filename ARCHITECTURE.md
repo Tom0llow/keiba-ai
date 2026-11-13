@@ -167,6 +167,7 @@ workflows/historical_basic.pyはbase専用とし、旧の非週次オッズ取�
 historical_odds_legacy.pyへ分離した。既存HistoricalRetrieverとretrieve_historicalの統合入口だけを
 retriever.pyへ残し、元と同じ一時ディレクトリ内のbase→DB存在確認→odds順序を維持する。
 latestは初回にseedからruntime XMLを作り、以降はruntime XMLを再利用し、seedを変更しない。
+ADR-040により、latestはRACEに加えて調教（SLOP・WOOD）と競走馬マスタ（DIFN）も差分取得する。acquisition/setting_xml.pyは、`[latest.normal_start_floors]`の種別について、normalの節の読込位置を`max(保存された位置, 下限)`へ上げてからXMLを書く（位置が読めなければ書く前に拒否する）。
 realtimeはhistoryの0B41/0B42を取得・archive後にcurrentの0B31/0B32を取得・archiveし、
 一時XMLとskip-last-modified-updateを使用する。archiveは原列・順序を維持し、全行による重複排除を行う。
 
