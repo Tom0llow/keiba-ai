@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
-from itertools import pairwise, permutations
+from itertools import combinations, pairwise, permutations
 
 import numpy as np
 import numpy.typing as npt
@@ -97,6 +97,106 @@ class CombinationLogProbabilities:
     quinella: FloatArray
     trifecta: FloatArray
     trio: FloatArray
+
+
+@dataclass(frozen=True)
+class OrderProbabilities:
+    """Hold all top-three PL order and unordered-combination probabilities."""
+
+    exacta: FloatArray
+    trifecta: FloatArray
+    quinella: FloatArray
+    wide: FloatArray
+    trio: FloatArray
+
+
+def top3_order_probabilities(
+    scores: npt.ArrayLike,
+    *,
+    temperature: float = 1.0,
+) -> OrderProbabilities:
+    """Return all ordered and unordered top-three PL probabilities for one race.
+
+    Array indices follow the input score order. Entries that repeat a horse
+    have probability zero. At least three scores are required.
+    """
+    scaled_scores = _scaled_single_race_scores(scores, temperature)
+    field_size = len(scaled_scores)
+    log_exacta = np.full((field_size, field_size), -np.inf, dtype=np.float64)
+    log_trifecta = np.full((field_size, field_size, field_size), -np.inf, dtype=np.float64)
+    log_total = _logsumexp(scaled_scores)
+
+    for first in range(field_size):
+        after_first = np.arange(field_size) != first
+        log_first = scaled_scores[first] - log_total
+        log_after_first = _logsumexp(scaled_scores[after_first])
+        for second in np.flatnonzero(after_first):
+            after_second = after_first.copy()
+            after_second[second] = False
+            log_exacta[first, second] = log_first + scaled_scores[second] - log_after_first
+            log_after_second = _logsumexp(scaled_scores[after_second])
+            for third in np.flatnonzero(after_second):
+                log_trifecta[first, second, third] = (
+                    log_exacta[first, second] + scaled_scores[third] - log_after_second
+                )
+
+    log_quinella = np.full_like(log_exacta, -np.inf)
+    log_wide = np.full_like(log_exacta, -np.inf)
+    log_trio = np.full_like(log_trifecta, -np.inf)
+    for first_horse, second_horse in combinations(range(field_size), 2):
+        quinella = np.logaddexp(
+            log_exacta[first_horse, second_horse], log_exacta[second_horse, first_horse]
+        )
+        log_quinella[first_horse, second_horse] = quinella
+        log_quinella[second_horse, first_horse] = quinella
+
+        wide_logs: list[np.float64] = []
+        for third_horse in range(field_size):
+            if third_horse in (first_horse, second_horse):
+                continue
+            wide_logs.extend(
+                [
+                    log_trifecta[first_horse, second_horse, third_horse],
+                    log_trifecta[first_horse, third_horse, second_horse],
+                    log_trifecta[second_horse, first_horse, third_horse],
+                    log_trifecta[second_horse, third_horse, first_horse],
+                    log_trifecta[third_horse, first_horse, second_horse],
+                    log_trifecta[third_horse, second_horse, first_horse],
+                ]
+            )
+        wide = np.logaddexp.reduce(np.asarray(wide_logs, dtype=np.float64))
+        log_wide[first_horse, second_horse] = wide
+        log_wide[second_horse, first_horse] = wide
+
+    for horses in combinations(range(field_size), 3):
+        first_horse, second_horse, third_horse = horses
+        trio = np.logaddexp.reduce(
+            np.asarray(
+                [
+                    log_trifecta[first_horse, second_horse, third_horse],
+                    log_trifecta[first_horse, third_horse, second_horse],
+                    log_trifecta[second_horse, first_horse, third_horse],
+                    log_trifecta[second_horse, third_horse, first_horse],
+                    log_trifecta[third_horse, first_horse, second_horse],
+                    log_trifecta[third_horse, second_horse, first_horse],
+                ],
+                dtype=np.float64,
+            )
+        )
+        log_trio[first_horse, second_horse, third_horse] = trio
+        log_trio[first_horse, third_horse, second_horse] = trio
+        log_trio[second_horse, first_horse, third_horse] = trio
+        log_trio[second_horse, third_horse, first_horse] = trio
+        log_trio[third_horse, first_horse, second_horse] = trio
+        log_trio[third_horse, second_horse, first_horse] = trio
+
+    return OrderProbabilities(
+        exacta=np.exp(log_exacta),
+        trifecta=np.exp(log_trifecta),
+        quinella=np.exp(log_quinella),
+        wide=np.exp(log_wide),
+        trio=np.exp(log_trio),
+    )
 
 
 def top3_plackett_luce(
@@ -225,6 +325,21 @@ def _scaled_scores(
     return scaled_scores, temperature_value
 
 
+def _scaled_single_race_scores(scores: npt.ArrayLike, temperature: float) -> FloatArray:
+    temperature_value = _temperature_value(temperature)
+    values = np.asarray(scores, dtype=np.float64)
+    if values.ndim != 1:
+        raise ValueError("scores must be a one-dimensional array")
+    if len(values) < 3:
+        raise ValueError("scores must contain at least 3 horses")
+    if not np.all(np.isfinite(values)):
+        raise ValueError("scores must be finite")
+    scaled_scores = values / temperature_value
+    if not np.all(np.isfinite(scaled_scores)):
+        raise ValueError("scores divided by temperature must be finite")
+    return scaled_scores
+
+
 def _temperature_value(temperature: float) -> float:
     if isinstance(temperature, bool):
         raise ValueError("temperature must be a positive finite number")
@@ -328,6 +443,11 @@ def _softmax(values: FloatArray, *, axis: int) -> FloatArray:
     return weights / weights.sum(axis=axis, keepdims=True)
 
 
+def _logsumexp(values: FloatArray) -> float:
+    maximum = float(values.max())
+    return maximum + float(np.log(np.exp(values - maximum).sum()))
+
+
 def _log_order_probability(
     padded_scores: FloatArray,
     ordered_slots: IntArray,
@@ -349,10 +469,12 @@ def _log_order_probability(
 __all__ = [
     "CombinationLogProbabilities",
     "MarginalProbabilities",
+    "OrderProbabilities",
     "RaceLayout",
     "Top3PlackettLuce",
     "padded_finish_positions",
     "top3_combination_log_probabilities",
     "top3_marginal_probabilities",
+    "top3_order_probabilities",
     "top3_plackett_luce",
 ]

@@ -10,6 +10,7 @@ from typing import cast
 
 from make_features.contracts.observations import (
     CalculationParameters,
+    CardRunner,
     Coverage,
     HistoricalRace,
     HorseOdds,
@@ -333,6 +334,28 @@ def reference_label(
     }
 
 
+CARD_MAPPING_MISMATCH = "stored card permanent IDs must match complete intermediate O1 horse set"
+
+
+def card_entrants(
+    target_se: Sequence[Mapping[str, object]],
+) -> tuple[list[dict[str, object]], tuple[CardRunner, ...], dict[str, str]]:
+    """Project one target's stored entrants and map horse numbers to permanent IDs.
+
+    Entrants are ordered by ``Umaban`` and projected to the card columns. A missing
+    identifier, or a horse number or permanent ID that appears twice, raises
+    ``ValueError``, which holds the whole race. Both the feature build and the
+    race-day prediction (ADR-039) call this, so their mappings cannot diverge.
+    """
+    entrants = sorted(target_se, key=lambda r: str(r.get("Umaban")))
+    safe_se = [{k: row.get(k) for k in CARD_SE_COLUMNS} for row in entrants]
+    runners = tuple(card_runner(row) for row in safe_se)
+    mapping = {r.horse_number: r.horse_id for r in runners}
+    if len(mapping) != len(runners) or len(set(mapping.values())) != len(runners):
+        raise ValueError(CARD_MAPPING_MISMATCH)
+    return safe_se, runners, mapping
+
+
 def normalize_reference_target(
     manifest: Mapping[str, object],
     sources: ReferenceTargetSources,
@@ -360,17 +383,10 @@ def normalize_reference_target(
     quotes = win_quotes(o1)
     if any(reason in {"cancelled_before_sale", "cancelled_after_sale"} for _, _, reason in quotes):
         raise ValueError("intermediate O1 indicates a cancelled entrant")
-    entrants = sorted(sources.target_se, key=lambda r: str(r.get("Umaban")))
     safe_ra = {k: ra.get(k) for k in CARD_RA_COLUMNS}
-    safe_se = [{k: row.get(k) for k in CARD_SE_COLUMNS} for row in entrants]
-    runners = tuple(card_runner(row) for row in safe_se)
-    mapping = {r.horse_number: r.horse_id for r in runners}
-    if (
-        len(mapping) != len(runners)
-        or len(set(mapping.values())) != len(runners)
-        or set(mapping) != {q[0] for q in quotes}
-    ):
-        raise ValueError("stored card permanent IDs must match complete intermediate O1 horse set")
+    safe_se, runners, mapping = card_entrants(sources.target_se)
+    if set(mapping) != {q[0] for q in quotes}:
+        raise ValueError(CARD_MAPPING_MISMATCH)
     raw_card = {"ra": safe_ra, "se": safe_se}
     card = RaceCard(
         identity,

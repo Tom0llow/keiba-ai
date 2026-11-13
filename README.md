@@ -630,3 +630,38 @@ uv run python src/main.py model train-pl --config-name final --override datamart
 - 予測は、ラベルなしの行列と列名から行う。学習で欠損のなかった列（市場の単勝オッズ列など）に欠損があれば、呼出し全体を拒否する（欠けたレースを除くか保留にするのは呼出し側）。
   予測の特徴量は、モデルと同じ学習用datamartから作られ、freezeがモデルのラベルの境界より後でなければならない。
 - PLのモデルはMLflowで管理しない（ADR-027に対する例外）。結果は[最終モデルの学習](docs/experiments/pl-final-model.md)を参照する。
+
+## 当日の重賞のPL確率を公開する
+
+`model predict-pl-live`は、朝に1回起動し、`datamart build-reference-prediction-live`の出力を監視する。JRA平地重賞
+（`jra_flat_graded_stakes_v1`）の各レースについて、特徴量が公開されるたびに、保存したPLモデルの確率を計算して公開する
+（[ADR-039](docs/decisions/ADR-039-publish-race-day-pl-probabilities-for-graded-races.md)）。
+
+```powershell
+uv run python src/main.py model predict-pl-live --features-root output/race-day-20261115 --pl-model output/pl-final-model-2006-2025 --pl-model-manifest-sha256 <manifestのSHA-256> --date 2026-11-15 --processed-root data/processed --output output/pl-race-day-20261115
+```
+
+- `--features-root`は特徴量の常駐CLIの`--output`、`--pl-model-manifest-sha256`は`model train-pl`の要約のSHA-256である。
+  特徴量の常駐CLIと同じ完全snapshot（`--snapshot-id`、省略時はCURRENT）を使う。
+- 起動時に、固定snapshotの対象日の出馬表から、重賞・予定・馬番の対応を決める（特徴量の構築と同じ正規化）。重賞でないレースは
+  `out_of_scope`の行だけを出す。
+- freezeの早い順に、`--poll-interval-seconds`（既定2秒）ごとに`<features-root>/<race_id>/`を見る（その時点で`--features-root`が
+  なければ、stderrへ警告を1回出す）。公開されていれば読んで検査し、
+  `<output>/<race_id>/prediction.json`（`pl_race_prediction` format_version 1）を公開する。中身は、馬番の昇順の馬ごとのスコア・
+  勝率・2着以内・3着以内と、馬単・馬連・ワイド・3連複・3連単の全組合せの確率、モデル・特徴量・snapshotの識別である。
+  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動（#35）は補正しない。複勝・ワイドの払戻の規則への対応は#36で決める。
+- 発売締切（発走2分前）より後になっても特徴量が公開されない重賞は、`features_not_published`で保留する。発売締切の後に初めて
+  見つかった特徴量は計算して公開し、`after_sales_close: true`を記録する。
+- 予測できない重賞は、出力を作らずに保留する。主な`reason`は次のとおりである。
+  - `features_invalid`（特徴量の読込が拒否した）・`snapshot_mismatch`（特徴量のsnapshotが監視の固定と異なる）
+  - 特徴量の`held_races.json`にあるレースは、その`stage`と`reason`
+  - `schedule_mismatch`（特徴量の予定がsnapshotと異なる）・`horse_mapping_mismatch`・`horse_set_mismatch`・`unsupported_field_size`・
+    `features_rejected`（学習で欠損のなかった列の欠損など）・`model_features_mismatch`・`freeze_before_model_boundary`
+  - `schedule_ambiguous`（`stage`は`card`）: 同じレースのRAの行で`GradeCD`か`TrackCD`が食い違い、そのどれかが重賞に当たる
+  - 出馬表の段階の保留は、特徴量の構築と同じ`stage`（`target_pre_freeze`）。`reason`もふつうは構築と同じだが、出走馬の行の
+    不備（馬番・`horse_id`の重複など）は、構築では市場の検査の後に判定されるので、市場の理由と異なることがある
+- stdoutには、レースごとに1行のJSON（`race_id`・`status`（`predicted`/`held`/`out_of_scope`）・`stage`・`reason`・`detail`・`output`・
+  `after_sales_close`・`win`）を出す。stderrには最後に要約を出す。
+- 朝のsnapshotの後の発走時刻の変更は検出しない。予測と`after_sales_close`は変更前の予定による（#31）。
+- モデル・snapshot（対象日のレースがない場合を含む）・最も早いfreezeとモデルのラベルの境界の検査に失敗すると、`--output`を作らずに終了コード1で終わる。
+  監視中の致命的な失敗は1、Ctrl+Cは130で、公開済みのレースは残る。再起動では新しい`--output`を指定する。

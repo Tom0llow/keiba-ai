@@ -8,6 +8,7 @@ from cli.make_features import model_calculate_features, model_explanatory_variab
 from cli.model_projection import model_prepare_input
 from cli.models import model_audit, model_features, model_predict, model_train, model_walk_forward
 from cli.pl_evaluation import model_evaluate_pl
+from cli.pl_prediction import model_predict_pl_live
 from cli.pl_training import model_train_pl
 from cli.preprocessor import preprocess_rebuild
 from cli.real_market import model_prepare_real_input
@@ -48,6 +49,7 @@ model_app.command("prepare-real-input")(model_prepare_real_input)
 model_app.command("prepare-reference-input")(model_prepare_reference_input)
 model_app.command("evaluate-pl")(model_evaluate_pl)
 model_app.command("train-pl")(model_train_pl)
+model_app.command("predict-pl-live")(model_predict_pl_live)
 datamart_app.command("build")(datamart_build)
 datamart_app.command("build-reference")(datamart_build_reference)
 datamart_app.command("build-reference-prediction")(datamart_build_reference_prediction)
