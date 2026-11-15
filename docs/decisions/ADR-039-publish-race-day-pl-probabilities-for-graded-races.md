@@ -262,3 +262,4 @@ Reason not selected:
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-13 | Accepted | 当日の重賞のPL確率の常駐CLI・出力形式・出馬表の正規化の共有を決定 |
+| 2026-11-14 | Accepted | 当日の朝の`latest`の順序をADR-041で前日夜の`latest`に置き換えた |

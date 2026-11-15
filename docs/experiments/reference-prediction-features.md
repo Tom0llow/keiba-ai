@@ -137,5 +137,6 @@ uv run python src/main.py datamart build-reference-prediction --reference-datama
 
 ### 制約
 
-- 当日の0B41/0B42の取得の所要時間と、発走6分前の発表がfreezeまでに届くかは、最初の開催日に確かめる（#54）。
+- 当日の0B41/0B42の取得の所要時間と、発走6分前の発表がfreezeまでに届くかは、2026-11-14・15に確かめた
+  （[当日の運用の実測](race-day-operation.md)）。
 - 計算の時間には、#53の予測の時間を含まない。

@@ -152,7 +152,7 @@ prediction_offset_minutes = 5
 ```
 
 `execution_timeout_seconds`は、1回の取得でJVLinkToSQLiteを待つ上限の秒数で、必須である。超えた取得は
-`failed/jvlink_error`と記録して次の取得へ進む。120秒は実測の前の値なので、運用で所要時間を確かめて見直す。
+`failed/jvlink_error`と記録して次の取得へ進む。2026-11-14・15の計測では、通常の取得の最大は約7秒であり、120秒で十分だった。2026-11-14・15に120秒に達したのは、JV-Linkの停止中だけだった。詳細は[当日の運用の実測](docs/experiments/race-day-operation.md)を参照する。
 
 `prediction_offset_minutes`（任意、3〜5）があると、各レースの発走のその分前に、当日の特徴量のための0B41/0B42の
 時系列も取得する（ADR-032 Amendment 2、[ADR-037](docs/decisions/ADR-037-build-race-day-reference-features-after-freeze.md)）。
@@ -164,7 +164,7 @@ prediction_offset_minutes = 5
 
 race-day-oddsの実行中に、`latest`や`preprocess rebuild`による完全なParquet出力を重ねない。raw DBは
 ロールバックジャーナル方式のため、長い読取の間は取得の書込みが`database is locked`で失敗し、
-取得が欠けるか、その日の取得が停止する。当日の`latest`（調教と競走馬マスタを含む、ADR-040）は、race-day-oddsを
+取得が欠けるか、その日の取得が停止する。調教と競走馬マスタを含む前日の夜の`latest`（ADR-040）は、race-day-oddsを
 起動する前に済ませておく。
 
 DataSpecは`0B31`〜`0B36`の6種ちょうどとする。取得した行は既存のO1/O2 archiveとは別の表へ保存し、
@@ -234,7 +234,7 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
 - `--retrieve --mode=latest`: rawデータを更新してから、更新した完全なParquet snapshotを
   公開する。RACEに加えて、当日の特徴量が読む坂路調教（SLOP→`NL_HC_HANRO`）・ウッドチップ調教
   （WOOD→`NL_WC_WOOD`）・競走馬マスタ（DIFN→`NL_UM_UMA`）も差分取得する（ADR-040）。BLDN・DIFFは取得しない（特徴量は
-  `NL_UM_UMA`の親のIDだけを読み、DIFNがそれを更新するので、朝の取得を短く保つ）。
+  `NL_UM_UMA`の親のIDだけを読み、DIFNがそれを更新するので、前日夜に実行する`latest`の取得を短く保つ）。
   これらの種別の読込位置は`data/runtime/jvlink/latest.xml`に保存され、`[latest.normal_start_floors]`より前の位置は
   下限まで上げてから取得する（まだ有効にしたことのない種別が、2015年からの差分を要求しないため）。下限は、その種別を
   最後に取得した`historical-basic`の収録の終わり以前に置く。初回は下限から当日までの差分を取るので、通常より長くかかる。
@@ -242,7 +242,7 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   `RaceKey`についてレース単位のParquetを公開する。
 - `--retrieve --mode=race-day-odds --date YYYY-MM-DD`: 指定日の中央01〜10場の全レースについて、
   `NL_RA_RACE.HassoTime`の`offsets_minutes`の各分前まで待ち、`0B31`〜`0B36`を取得して`ARCHIVE_CAPTURE_*`へ
-  保存する。当日の`NL_RA_RACE`は、事前に`latest`で取得しておく。取得ごとに
+  保存する。当日の`NL_RA_RACE`は、前日の夜の`latest`で取得しておく。取得ごとに
   `race-day-odds capture <capture_id> <race> -<offset>m <spec>=<status> ...`を出力し、最後の行に件数の要約を
   JSONで出す。失敗があれば終了コード1、Ctrl+Cでは130となる。予定時刻を`late_tolerance_seconds`より過ぎた取得は
   `skipped_late`とし、発走時刻の変更には追従しない。最初の取得の前に実行XMLを一度生成して検証し、設定に誤りが
@@ -572,14 +572,20 @@ uv run python src/main.py datamart build-reference-prediction --reference-datama
 - 当日の発走前の予測には、次の`build-reference-prediction-live`を使う。調教・血統の当日の取得（#61）はまだない。
 - 実データでは1日分で約3.5分・約4.6GBかかる。race-day-oddsの常駐と同じ機械で重ねると、取得が遅れることがある。
 
-`datamart build-reference-prediction-live`は、同じ検証の後に対象日を朝に一度だけ準備し、race-day-oddsの予測用の
-取得（`prediction_offset_minutes`）がレース別のParquetを公開するのを待って、レースごとに特徴量を公開する（ADR-037）。
+`datamart build-reference-prediction-live`は、[当日の運用手順](docs/race-day-operation.md)に従い、前日の夜に固定したsnapshotで
+対象日を一度だけ準備する。race-day-oddsの予測用の取得（`prediction_offset_minutes`）がレース別のParquetを公開するのを待って、
+レースごとに特徴量を公開する（ADR-037）。
 
 ```powershell
-uv run python src/main.py datamart build-reference-prediction-live --reference-datamart <学習用datamart> --reference-datamart-manifest-sha256 <manifestのSHA-256> --date 2026-11-15 --processed-root data/processed --output output/race-day-20261115
+uv run python src/main.py datamart build-reference-prediction-live `
+  --reference-datamart <学習用datamart> `
+  --reference-datamart-manifest-sha256 <manifestのSHA-256> `
+  --date 2026-11-15 --processed-root data/processed `
+  --snapshot-id <CURRENTのID> `
+  --output output/race-day-20261115
 ```
 
-- 当日の朝に`latest`と完全snapshotの公開（`preprocess rebuild`）を済ませ、race-day-oddsを起動してから実行する。
+- 前日の夜に`latest`（完全snapshotの公開を含む）を済ませてそのsnapshotのIDを控え、当日の朝にrace-day-oddsを起動した後に、そのIDを`--snapshot-id`に指定して実行する。
   完全snapshotは`NL_RA_RACE`・`NL_SE_RACE_UMA`・`NL_HC_HANRO`・`NL_WC_WOOD`・`NL_UM_UMA`だけを固定する。
 - freezeの早い順に、`--poll-interval-seconds`（既定5秒）ごとにレース別のParquetを読む。同じ`capture_id`の0B41・0B42が
   ともに`archived`で、開始がfreeze以降の取得があれば、そのレースを計算して`<output>/<race_id>/`へ公開する。
@@ -600,7 +606,7 @@ uv run python src/main.py datamart build-reference-prediction-live --reference-d
   保留の内容が入る。stderrには、準備の進捗・レースごとの所要秒数・最後の要約（stdoutの行数と同じ`targets`・`published`・`held`）を出す。
 - 準備・計算・公開の失敗は終了コード1、Ctrl+Cは130とする。公開済みのレースの出力は残る。`--output`は新しいパスなので、
   途中で再起動すると出力先が分かれる。
-- 既定の時間は実測の前の値である。最初の開催日に、取得記録の`HappyoTime`が発走6分前の発表であることと、所要時間を確かめる（#54）。
+- 既定値は2026-11-14・15に確認した。特徴量はfreezeの約5〜6秒後に公開され、16レース中約3レースではfreeze時の`0B41`が発走10〜11分前の発表だった。詳細は[当日の運用の実測](docs/experiments/race-day-operation.md)を参照する。
 
 結果と計測は[当日の未確定レースの参考特徴量の構築と計測](docs/experiments/reference-prediction-features.md)を参照する。
 
@@ -639,12 +645,18 @@ uv run python src/main.py model train-pl --config-name final --override datamart
 
 ## 当日の重賞のPL確率を公開する
 
-`model predict-pl-live`は、朝に1回起動し、`datamart build-reference-prediction-live`の出力を監視する。JRA平地重賞
+`model predict-pl-live`は、[当日の運用手順](docs/race-day-operation.md)に従って朝に1回起動し、`datamart build-reference-prediction-live`の出力を監視する。JRA平地重賞
 （`jra_flat_graded_stakes_v1`）の各レースについて、特徴量が公開されるたびに、保存したPLモデルの確率を計算して公開する
 （[ADR-039](docs/decisions/ADR-039-publish-race-day-pl-probabilities-for-graded-races.md)）。
 
 ```powershell
-uv run python src/main.py model predict-pl-live --features-root output/race-day-20261115 --pl-model output/pl-final-model-2006-2025 --pl-model-manifest-sha256 <manifestのSHA-256> --date 2026-11-15 --processed-root data/processed --output output/pl-race-day-20261115
+uv run python src/main.py model predict-pl-live `
+  --features-root output/race-day-20261115 `
+  --pl-model output/pl-final-model-2006-2025 `
+  --pl-model-manifest-sha256 <manifestのSHA-256> `
+  --date 2026-11-15 --processed-root data/processed `
+  --snapshot-id <CURRENTのID> `
+  --output output/pl-race-day-20261115
 ```
 
 - `--features-root`は特徴量の常駐CLIの`--output`、`--pl-model-manifest-sha256`は`model train-pl`の要約のSHA-256である。
@@ -668,6 +680,6 @@ uv run python src/main.py model predict-pl-live --features-root output/race-day-
     不備（馬番・`horse_id`の重複など）は、構築では市場の検査の後に判定されるので、市場の理由と異なることがある
 - stdoutには、レースごとに1行のJSON（`race_id`・`status`（`predicted`/`held`/`out_of_scope`）・`stage`・`reason`・`detail`・`output`・
   `after_sales_close`・`win`）を出す。stderrには最後に要約を出す。
-- 朝のsnapshotの後の発走時刻の変更は検出しない。予測と`after_sales_close`は変更前の予定による（#31）。
+- 前日夜のsnapshotの後の発走時刻の変更は検出しない。予測と`after_sales_close`は変更前の予定による（#31）。
 - モデル・snapshot（対象日のレースがない場合を含む）・最も早いfreezeとモデルのラベルの境界の検査に失敗すると、`--output`を作らずに終了コード1で終わる。
   監視中の致命的な失敗は1、Ctrl+Cは130で、公開済みのレースは残る。再起動では新しい`--output`を指定する。

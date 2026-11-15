@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #61、Refs #57・#54・#30・#51
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: ADR-041（決定3の当日の順序のみ）
 
 ---
 
@@ -184,3 +184,4 @@ Reason not selected:
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-13 | Accepted | 当日のlatestにSLOP・WOOD・DIFNを加え、normalの読込位置の下限を設定に持たせる |
+| 2026-11-14 | Accepted | 決定3の当日の朝の`latest`の順序をADR-041で前日夜の`latest`に置き換えた |
