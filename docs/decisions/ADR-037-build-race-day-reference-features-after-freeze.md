@@ -255,3 +255,4 @@ Reason not selected:
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-12 | Accepted | 当日のレースごとに、freeze後に開始した0B41/0B42の取得で参考特徴量を構築することを決定。ADR-036のformat_versionとOption Bの判断を置き換える |
+| 2026-11-14 | Accepted | 当日の朝の`latest`の順序をADR-041で前日夜の`latest`に置き換えた |

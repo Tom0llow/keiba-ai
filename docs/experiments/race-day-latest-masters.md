@@ -33,7 +33,7 @@ uv run python src/main.py --retrieve --mode=latest --data-config <data.toml> --j
 | 全体 | 11,202秒 |
 
 - 長かったのは、元から取得していたRACEの、ダウンロードが始まるまでの待ちと、snapshotの公開である。加えた3種別は計15秒だった。
-- RACEは約1か月分たまっていた。毎朝実行したときのRACEの待ちとsnapshotの公開の時間は、この計測からは分からない（#54で測る）。
+- RACEは約1か月分たまっていた。毎朝実行したときのRACEの待ちとsnapshotの公開の時間は、この計測からは分からない。ADR-041では前日夜の`latest`を実行する。[当日の運用手順](../race-day-operation.md)に記した2026-11-14夜の`latest`は全体で約76分だった。
 
 ## 読込位置
 
@@ -84,4 +84,4 @@ freshness card_horses=505 card_horses_without_pedigree_row=0 history_held_recent
 
 - 初回の`latest`は、下限によって2015年からの差分を要求せず、SLOP・WOOD・DIFNを計15秒で取得した。
 - 2026-11-15の出走馬について、マスタの欠けがなくなり、調教は実行の当日（2026-11-13）まで更新された。
-- 朝の取得の時間の大半は、RACEの待ちとsnapshotの公開で、今回の変更によるものではない。当日の手順での扱いは#54で決める。
+- 朝の取得の時間の大半は、RACEの待ちとsnapshotの公開で、今回の変更によるものではない。ADR-041では前日夜の`latest`を実行する。[当日の運用手順](../race-day-operation.md)に記した2026-11-14夜の`latest`は全体で約76分だった。
