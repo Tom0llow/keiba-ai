@@ -237,9 +237,13 @@ def evaluate_final_odds(
         )
     pooled_payload: dict[str, object] = {}
     pooled_bootstraps: dict[str, _BootstrapMatrix] = {}
+    pooled_years = {
+        _PRIMARY_PERIOD: sorted(settings.test_years),
+        _EARLY_PERIOD: sorted(year for year in settings.test_years if 2016 <= year <= 2020),
+    }
     for name, rows in pooled.items():
         payload, bootstraps = _pooled_payload(rows, settings)
-        pooled_payload[name] = payload
+        pooled_payload[name] = {"test_years": pooled_years[name], **payload}
         pooled_bootstraps[name] = bootstraps
     primary_bootstraps = pooled_bootstraps[_PRIMARY_PERIOD]
     selections = {

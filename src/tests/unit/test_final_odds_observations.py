@@ -275,11 +275,46 @@ def test_combinations_without_a_freeze_quote_are_excluded_with_reasons() -> None
         ({"PayUmaren0Kumi": "03"}, "invalid or duplicate combination"),
         ({"PayUmaren1Kumi": "", "PayUmaren1Pay": "000000600"}, "without a combination"),
         ({"SyussoTosu": None}, "two-digit SyussoTosu"),
+        ({"HenkanUma0": "2"}, "HenkanUma0 to be 0 or 1"),
+        ({"HenkanUma27": ""}, "HenkanUma27 to be 0 or 1"),
+        ({"HenkanUma5": None}, "HenkanUma5 to be 0 or 1"),
     ],
 )
 def test_malformed_payouts_are_rejected(fields: dict[str, object], message: str) -> None:
     with pytest.raises(ValueError, match=message):
         _build(hr=[{**_hr(), **fields}])
+
+
+@pytest.mark.parametrize(
+    ("horses", "dead_heat"),
+    [
+        (("03", "05", "07"), False),
+        (("03", "05", "07", "09"), True),
+    ],
+)
+def test_horses_withdrawn_after_sales_opened_count_for_the_place_payouts(
+    horses: tuple[str, ...], dead_heat: bool
+) -> None:
+    # Eight horses at the start of sales, one refunded: three places are paid.
+    hr = _hr(SyussoTosu="07", HenkanUma10="1", HenkanFlag1="1")
+    for i in range(5):
+        horse = horses[i] if i < len(horses) else ""
+        hr[f"PayFukusyo{i}Umaban"] = horse
+        hr[f"PayFukusyo{i}Pay"] = f"{100 + i:09d}" if horse else ""
+
+    result = _build(hr=[hr])
+
+    for bet_type in ("place_low", "place_mid"):
+        hits = {hit.combination for hit in result.hits if hit.bet_type == bet_type}
+        excluded = {
+            exclusion.combination
+            for exclusion in result.exclusions
+            if exclusion.bet_type == bet_type and exclusion.reason == "dead_heat"
+        }
+        if dead_heat:
+            assert (hits, excluded) == (set(), set(horses))
+        else:
+            assert (hits, excluded) == (set(horses), set())
 
 
 @pytest.mark.parametrize("empty", [None, "", "  ", "00"])
@@ -421,7 +456,7 @@ def _hr(*, race: str = RACE, **fields: object) -> dict[str, object]:
     row: dict[str, object] = {name: "" for name in HR_COLUMNS}
     row.update(_key(race), headDataKubun="2", headMakeDate=race[:8], SyussoTosu="10")
     for name in HR_COLUMNS:
-        if "Flag" in name:
+        if "Flag" in name or name.startswith("HenkanUma"):
             row[name] = "0"
     row.update(PayTansyo0Umaban="03", PayTansyo0Pay="000000480")
     for i, (horse, pay) in enumerate((("03", 180), ("05", 230), ("07", 510))):

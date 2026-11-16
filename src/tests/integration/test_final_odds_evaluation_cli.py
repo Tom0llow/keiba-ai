@@ -111,7 +111,7 @@ def _hr(race_id: str) -> dict[str, object]:
     row: dict[str, object] = {name: "" for name in HR_COLUMNS}
     row.update(_key(race_id), headDataKubun="2", headMakeDate=race_id[:8], SyussoTosu="10")
     for name in HR_COLUMNS:
-        if "Flag" in name:
+        if "Flag" in name or name.startswith("HenkanUma"):
             row[name] = "0"
     row.update(PayTansyo0Umaban="03", PayTansyo0Pay=f"{(30 + index * 3) * 9 + index % 4 * 7:09d}")
     for i, (horse, pay) in enumerate((("03", 170 + index % 3 * 10), ("05", 230), ("07", 510))):
@@ -268,6 +268,8 @@ def test_evaluate_final_odds_publishes_the_report_of_the_pure_evaluation(tmp_pat
     assert report == _direct_report(processed_root, config)
     assert report["counts"]["race_holds_by_reason"] == {"cancelled_race": 1}
     assert report["counts"]["table_holds_by_table_and_reason"] == {"o1": {}, "o2": {}}
+    assert report["pooled"]["all_test_years"]["test_years"] == [2024, 2025]
+    assert report["pooled"]["2016_2020"]["test_years"] == []
     assert report["snapshot"]["snapshot_id"] == SNAPSHOT_ID
     assert set(report["snapshot"]["tables"]) == {RA_TABLE, HR_TABLE, O1_TABLE, O2_TABLE}
 

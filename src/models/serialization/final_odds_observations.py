@@ -49,12 +49,14 @@ SCAN_COLUMNS = (*KEY_COLUMNS, "headDataKubun", "HappyoTime")
 O1_COLUMNS = MARKET_O1_COLUMNS
 O2_COLUMNS = MARKET_O2_COLUMNS
 _FLAG_INDICES = range(9)
+_REFUND_HORSE_INDICES = range(28)
 _SPECIAL_FLAGS = ("TokubaraiFlag", "FuseirituFlag")
 HR_COLUMNS = (
     *KEY_COLUMNS,
     "headDataKubun",
     "headMakeDate",
     "SyussoTosu",
+    *(f"HenkanUma{i}" for i in _REFUND_HORSE_INDICES),
     *(f"{name}{i}" for name in (*_SPECIAL_FLAGS, "HenkanFlag") for i in _FLAG_INDICES),
     *(f"PayTansyo{i}{suffix}" for i in range(3) for suffix in ("Umaban", "Pay")),
     *(f"PayFukusyo{i}{suffix}" for i in range(5) for suffix in ("Umaban", "Pay")),
@@ -351,11 +353,11 @@ def _race_payouts(race_id: str, rows: Sequence[Mapping[str, object]]) -> _Payout
         if any(_flag(row, f"{name}{i}") for i in _FLAG_INDICES):
             raise ObservationHold(reason, race_id)
     refund = any(_flag(row, f"HenkanFlag{i}") for i in _FLAG_INDICES)
-    starters = _starters(row)
+    horses_at_sale = _starters(row) + _refunded_horses(row)
     win = _horse_payouts(row, "PayTansyo", 3)
     place = _horse_payouts(row, "PayFukusyo", 5)
     quinella = _pair_payouts(row)
-    places = 3 if starters >= 8 else 2 if starters >= 5 else 0
+    places = 3 if horses_at_sale >= 8 else 2 if horses_at_sale >= 5 else 0
     return _Payouts(
         paid={"win": win, "place_low": place, "place_mid": place, "quinella": quinella},
         expected={"win": 1, "place_low": places, "place_mid": places, "quinella": 1},
@@ -375,6 +377,17 @@ def _starters(row: Mapping[str, object]) -> int:
     if not isinstance(value, str) or re.fullmatch(r"[0-9]{2}", value) is None:
         raise ValueError("NL_HR_PAY requires a two-digit SyussoTosu")
     return int(value)
+
+
+def _refunded_horses(row: Mapping[str, object]) -> int:
+    """Count the horses withdrawn after sales opened, which still set the place count."""
+    count = 0
+    for i in _REFUND_HORSE_INDICES:
+        value = row.get(f"HenkanUma{i}")
+        if value not in ("0", "1"):
+            raise ValueError(f"NL_HR_PAY requires HenkanUma{i} to be 0 or 1")
+        count += value == "1"
+    return count
 
 
 def _horse_payouts(

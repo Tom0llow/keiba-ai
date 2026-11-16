@@ -166,6 +166,28 @@ def test_counts_keep_race_holds_and_each_table_hold_separate() -> None:
     }
 
 
+@pytest.mark.parametrize(
+    ("test_years", "early_years"),
+    [((2016, 2021), [2016]), ((2021,), [])],
+)
+def test_pooled_periods_record_the_test_years_they_contain(
+    test_years: tuple[int, ...], early_years: list[int]
+) -> None:
+    report = _evaluate(
+        (
+            _race(2014, 1, final_odds=4.0),
+            _race(2015, 1, final_odds=6.0),
+            _race(2016, 1, final_odds=8.0),
+            _race(2021, 1, final_odds=10.0),
+        ),
+        _settings(test_years=test_years),
+    ).report
+
+    pooled = _mapping(report["pooled"])
+    assert _mapping(pooled["all_test_years"])["test_years"] == list(test_years)
+    assert _mapping(pooled["2016_2020"])["test_years"] == early_years
+
+
 def test_report_covers_every_variant_subset_and_bet_type() -> None:
     report = _evaluate(
         (
