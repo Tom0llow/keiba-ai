@@ -23,7 +23,7 @@ src/
 ├─ jra_van_retriever/            # Acquisition, locking, ledger, and recovery
 ├─ make_features/               # Feature contracts, generation, audit, and tables
 ├─ make_datamart/                # Pure joins, validation, and persistence contracts
-├─ models/                      # dataset, ranking, training, backends, evaluation, artifacts, and market
+├─ models/                      # dataset, ranking, training, backends, evaluation, artifacts, market, and betting
 ├─ domain/                      # Shared RaceKey
 └─ tests/
    ├─ unit/                     # Isolated tests for pure logic and mocked external boundaries
@@ -107,6 +107,10 @@ coherent responsibility and have a name that describes that responsibility.
   `native_model.py` it owns its small byte I/O and never imports `data` or the CLI.
   Its final fit lives in `models/experiments/pl_training.py`, and the CLI composes
   reading, training and publication.
+- The ADR-043 betting policy and settlement belong to `models/betting/` and stay pure
+  (no I/O, CLI or `data` imports). Its metrics belong to `models/evaluation/betting_metrics.py`,
+  its input shaping to `models/serialization/betting_inputs.py`, and the backtest assembly
+  to `models/experiments/betting_backtest.py`; the CLI composes reading and publication.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
   See ADR-025 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
 - Share option definitions through `cli/options.py` and generic CLI JSON handling

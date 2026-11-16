@@ -230,7 +230,7 @@ def build_race_observations(
         raise ValueError("max_publication_age_seconds must be a positive integer")
     try:
         freeze = race_freeze(race_id, ra_rows)
-        payouts = _race_payouts(race_id, hr_rows)
+        payouts = race_payouts(race_id, hr_rows)
     except ObservationHold as hold:
         return RaceObservations(
             race_id, (), (), (RaceHold(race_id, "race", hold.reason, hold.detail),), False, {}
@@ -245,11 +245,11 @@ def build_race_observations(
     )
     for scope, rows, bet_types in tables:
         try:
-            row, age = _freeze_row(race_id, rows, freeze)
+            row, age = freeze_row(race_id, rows, freeze)
             ages[scope] = age
             if age > max_publication_age_seconds:
                 raise ObservationHold("stale_publication", f"{race_id}: {age} seconds old")
-            quotes = _o1_quotes(row) if scope == "o1" else _o2_quotes(row)
+            quotes = o1_quotes(row) if scope == "o1" else _o2_quotes(row)
         except ObservationHold as hold:
             holds.append(RaceHold(race_id, scope, hold.reason, hold.detail))
             continue
@@ -273,13 +273,22 @@ def build_race_observations(
 
 
 @dataclass(frozen=True)
-class _Payouts:
+class RacePayouts:
+    """Hold one race's finalized payouts, normal payout counts and refunded horses.
+
+    ``paid`` maps each bet type to ``(combination, payout / 100)`` pairs. ``expected`` is
+    the normal number of payouts (the place count follows the horses at the start of
+    sales). ``refunded_horse_numbers`` are the two-digit horse numbers with a refund.
+    """
+
+    race_id: str
     paid: Mapping[BetType, tuple[tuple[str, float], ...]]
     expected: Mapping[BetType, int]
     refund: bool
+    refunded_horse_numbers: tuple[str, ...]
 
 
-def _freeze_row(
+def freeze_row(
     race_id: str, rows: Sequence[Mapping[str, object]], freeze: datetime
 ) -> tuple[Mapping[str, object], int]:
     """Return the freeze-time row by ``latest_o1`` and its age at freeze in seconds."""
@@ -299,7 +308,14 @@ def _freeze_row(
 QuoteTable = dict[str, tuple[float | None, str | None]]
 
 
-def _o1_quotes(row: Mapping[str, object]) -> Mapping[BetType, QuoteTable]:
+def o1_quotes(row: Mapping[str, object]) -> Mapping[BetType, QuoteTable]:
+    """Return every horse's win, ``place_low`` and ``place_mid`` quote of one O1 row.
+
+    A missing quote maps to ``(None, reason)``. ``place_mid`` is ``sqrt(OddsLow * OddsHigh)``.
+
+    Raises:
+        ObservationHold: ``invalid_quote`` when a horse number or an odds encoding is invalid.
+    """
     try:
         win: QuoteTable = {horse: (odds, reason) for horse, odds, reason in win_quotes(row)}
         low: QuoteTable = {}
@@ -340,7 +356,18 @@ def _o2_quotes(row: Mapping[str, object]) -> Mapping[BetType, QuoteTable]:
     return {"quinella": pairs}
 
 
-def _race_payouts(race_id: str, rows: Sequence[Mapping[str, object]]) -> _Payouts:
+def race_payouts(race_id: str, rows: Sequence[Mapping[str, object]]) -> RacePayouts:
+    """Return finalized payouts and refunded horse numbers for one race.
+
+    ``HenkanUma{i} == "1"`` represents the one-based horse number ``i + 1``.
+    Special payouts and unestablished races are held because their payout layout
+    has no verified settlement rule.
+
+    Raises:
+        ObservationHold: ``no_payout_row``, ``ambiguous_payout_row``, ``payout_not_final``,
+            ``special_payout`` or ``unestablished``.
+        ValueError: If ``SyussoTosu``, a ``HenkanUma`` flag or a payout column is malformed.
+    """
     unique = {canonical_hash(dict(row)): row for row in rows if race_identity(row) == race_id}
     if not unique:
         raise ObservationHold("no_payout_row", race_id)
@@ -353,15 +380,18 @@ def _race_payouts(race_id: str, rows: Sequence[Mapping[str, object]]) -> _Payout
         if any(_flag(row, f"{name}{i}") for i in _FLAG_INDICES):
             raise ObservationHold(reason, race_id)
     refund = any(_flag(row, f"HenkanFlag{i}") for i in _FLAG_INDICES)
-    horses_at_sale = _starters(row) + _refunded_horses(row)
+    refunded_horse_numbers = _refunded_horse_numbers(row)
+    horses_at_sale = _starters(row) + len(refunded_horse_numbers)
     win = _horse_payouts(row, "PayTansyo", 3)
     place = _horse_payouts(row, "PayFukusyo", 5)
     quinella = _pair_payouts(row)
     places = 3 if horses_at_sale >= 8 else 2 if horses_at_sale >= 5 else 0
-    return _Payouts(
+    return RacePayouts(
+        race_id=race_id,
         paid={"win": win, "place_low": place, "place_mid": place, "quinella": quinella},
         expected={"win": 1, "place_low": places, "place_mid": places, "quinella": 1},
         refund=refund,
+        refunded_horse_numbers=refunded_horse_numbers,
     )
 
 
@@ -379,15 +409,16 @@ def _starters(row: Mapping[str, object]) -> int:
     return int(value)
 
 
-def _refunded_horses(row: Mapping[str, object]) -> int:
-    """Count the horses withdrawn after sales opened, which still set the place count."""
-    count = 0
+def _refunded_horse_numbers(row: Mapping[str, object]) -> tuple[str, ...]:
+    """Return horses withdrawn after sales opened, which still set the place count."""
+    numbers: list[str] = []
     for i in _REFUND_HORSE_INDICES:
         value = row.get(f"HenkanUma{i}")
         if value not in ("0", "1"):
             raise ValueError(f"NL_HR_PAY requires HenkanUma{i} to be 0 or 1")
-        count += value == "1"
-    return count
+        if value == "1":
+            numbers.append(f"{i + 1:02d}")
+    return tuple(numbers)
 
 
 def _horse_payouts(
@@ -459,7 +490,11 @@ __all__ = [
     "ObservationHold",
     "RaceHold",
     "RaceObservations",
+    "RacePayouts",
     "build_race_observations",
+    "freeze_row",
+    "o1_quotes",
     "race_freeze",
+    "race_payouts",
     "select_publication_pairs",
 ]

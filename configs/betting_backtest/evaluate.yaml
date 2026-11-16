@@ -1,0 +1,27 @@
+# Replay the fixed expected-value win and place policy (ADR-043) on graded test races.
+# Every value is required; see measure.yaml for the fixed measurement profile.
+processed_root: ???
+pl_evaluation_path: ???
+pl_predictions_sha256: ???
+pl_report_sha256: ???
+pl_variant: ???
+test_years: ???
+bet_types: ???
+policy:
+  min_expected_return: ???
+  kelly_fraction: ???
+  bankroll_yen: ???
+  annual_budget_yen: ???
+  race_budget_yen: ???
+  unit_yen: ???
+final_odds:
+  train_start_year: ???
+  max_publication_age_seconds: ???
+  place_mid_bands: ???
+  quantiles: ???
+  min_hits: ???
+  graded_shrinkage_k: ???
+bootstrap:
+  resamples: ???
+  seed: ???
+  confidence: ???

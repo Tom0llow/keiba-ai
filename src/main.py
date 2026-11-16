@@ -2,6 +2,7 @@
 
 import typer
 
+from cli.betting_backtest import model_backtest_betting
 from cli.final_odds_evaluation import model_evaluate_final_odds
 from cli.jra_van_retriever import main
 from cli.make_datamart import datamart_build
@@ -52,6 +53,7 @@ model_app.command("evaluate-pl")(model_evaluate_pl)
 model_app.command("train-pl")(model_train_pl)
 model_app.command("predict-pl-live")(model_predict_pl_live)
 model_app.command("evaluate-final-odds")(model_evaluate_final_odds)
+model_app.command("backtest-betting")(model_backtest_betting)
 datamart_app.command("build")(datamart_build)
 datamart_app.command("build-reference")(datamart_build_reference)
 datamart_app.command("build-reference-prediction")(datamart_build_reference_prediction)

@@ -22,6 +22,7 @@ from models.serialization.final_odds_observations import (
     RaceObservations,
     build_race_observations,
     race_freeze,
+    race_payouts,
     select_publication_pairs,
 )
 
@@ -186,6 +187,16 @@ def test_refunds_are_flagged_and_hits_are_kept() -> None:
     assert result.refund is True
     assert result.holds == ()
     assert len(result.hits) == 8
+
+
+def test_race_payouts_return_one_based_refunded_horse_numbers() -> None:
+    payouts = race_payouts(
+        RACE,
+        [_hr(HenkanUma0="1", HenkanUma4="1", HenkanUma27="1", HenkanFlag0="1")],
+    )
+
+    assert payouts.refund is True
+    assert payouts.refunded_horse_numbers == ("01", "05", "28")
 
 
 def test_a_win_dead_heat_excludes_every_win_payout() -> None:
