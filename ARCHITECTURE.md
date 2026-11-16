@@ -85,7 +85,7 @@ src/
 ├─ jra_van_retriever/            # 取得とロック・台帳・復旧
 ├─ make_features/               # 特徴量契約・生成・監査・テーブル
 ├─ make_datamart/                # 純粋結合・検証・保存契約
-├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments・probability
+├─ models/                      # dataset・ranking・training・backends・evaluation・artifacts・experiments・probability・market
 ├─ domain/                      # 共有RaceKey
 └─ tests/
    ├─ unit/                     # 純粋処理と外部境界mockの分離テスト
@@ -252,7 +252,7 @@ ADR-034の参考datamartは、特徴量中間表の結合とは別の種類のda
 | models/serialization/reference_datamart.py | 年ごとに履歴を進め、開催日ごとに対象を計算し、閉じた数値列の全列・群ごとの`available_at`・ラベルへ投影し、manifestの内容を作る。ADR-036の`labeled=False`では、対象日1日について、対象日より前の行だけを履歴とし、対象には出馬表の列だけを渡し、市場の完全性を要求し、ラベルを読まない。ADR-037の`prepare_targets`は対象年を市場の前まで準備し、`PreparedTargets.calculate`が1レースずつ（任意の順序・一部）計算する。市場の完全性は、完全snapshotではfreezeより後の発表、当日の取得では開始時刻がfreeze以上であること（`observed_through`）。ラベルなしの一括の`add_year`も同じ経路を通る。鮮度（`freshness`）を集計する。対象期間の行のまとめ（`target_rows`）と予定（`target_manifest`）を、ADR-039の`label_free_target_cards`（対象日の予定・馬番の対応・出馬表の保留）と共有する。I/Oなし。 |
 | make_datamart/tables/reference.py | 年ごとの`part-0.parquet`・`races.parquet`、`held_races.json`、`manifest.json`の書込みと、hash・schema・時点・ラベルの読込検証。ADR-036のラベルなしの形式`reference_prediction_features`も、形式ごとの違い（ADR-037で形式番号2と必須の`market_source`）を`_Layout`にまとめて同じ検証で書込み・読込む（`read_reference_prediction_features`。取得の開始時刻がfreeze以上であることと、出力のレースが`market_source`の1レースだけであることも検証し、形式番号1は拒否する）。manifestのSHA-256で固定して一部だけ読む読込口（`read_reference_datamart_race_ids`・`read_reference_datamart_manifest`・`read_reference_datamart_label_usable_through`）。読込は検証済みの`held_races.json`の内容（`held`）も返す。21群の再計算はしない。`models`をimportしない。 |
 | data/storage/directory_publisher.py | 出力と同じ親のstagingへ書き、完成後にrenameで公開し、失敗時にstagingを削除する。 |
-| data/loader/fixed_snapshot.py / reference_input.py | 表の事前のhash、年・日付の期間読込、O1/O2のfooterを1年の間使い回す読込口。 |
+| data/loader/fixed_snapshot.py / reference_input.py | 表の事前のhash、年・日付の期間読込、O1/O2のfooterを1年の間使い回す読込口。ADR-042の`publication_reader`は、datasetを1回だけ開き、年ごとに中間発表のキー・区分・`HappyoTime`だけを読む`scan`と、選んだ（レース, `HappyoTime`）の行だけを返す`read_pairs`を持つ。freezeや最新の判断はしない。 |
 
 同じJST日付の対象は同じ履歴の接頭辞を見るため、馬・騎手・調教師の索引、窓付き母集団、基準集合の統計、
 半減期がnullのときのPageRankを共有する。freezeの時刻に依存する調教の窓・EWMA・市場は対象ごとに計算する。
@@ -328,6 +328,19 @@ ADR-039の`model predict-pl-live`が、保存したモデルで当日の重賞�
 
 testの着順は採点だけに使い、学習・early stopping・温度推定・確率の生成には使わない。
 
+ADR-042の確定オッズの補正の評価経路は、固定snapshotの中間発表（O1・O2）と確定の払戻（`NL_HR_PAY`）から、freezeの時点の
+単勝・複勝・馬連のオッズに対する、的中したときの確定オッズを券種ごとの帯の倍率で予測し、年単位の拡大型foldで評価する。
+PLの評価・学習・予測とは独立で、補正の成果物は保存しない（保存と当日の適用は#81）。
+
+| 所有者 | 責務 |
+| --- | --- |
+| serialization/final_odds_observations.py | freeze（保存した`HassoTime`−300秒）、pass 2で読む（レース, 発表時刻）の選択（全行の`latest_o1`と同じ結果になる）、1レースの的中の観測（`O_z`と払戻÷100）・保留・除外の組立。I/Oなし。 |
+| market/final_odds_correction.py | 帯ごとの比の平均と`log O_z`の節点、薄い帯の統合、重賞の全レースへの縮小、補間による`Ô`と帯の経験分位点。市場オッズそのものを対象とする純粋な推定で、標準ライブラリだけを使い、I/O・CLI・`data`をimportしない。 |
+| evaluation/final_odds_metrics.py | 的中の指標（`payout_ratio`・`mean_payout_ratio`など）、帯ごとの集計、レース単位のbootstrapと対応ありの差。 |
+| experiments/final_odds_evaluation.py | test年ごとの当てはめ（`all`・`graded`）と`none`の採点、全test年と2016〜2020年のpooled、採否の規則、`report.json`の内容の組立。I/Oなし。 |
+
+testの払戻は採点だけに使い、当てはめには`train_start_year`〜test年−1の的中だけを使う。
+
 ## CLI
 
 main.pyはTyperの組立・登録・起動だけを行う。cli/options.pyとcli/json_io.pyは共通option、JSON境界、構造化エラー、
@@ -367,6 +380,7 @@ ADR-035の評価を実行する。`report.json`と`predictions.parquet`を`publi
 helpとimportは設定・datamart・snapshot・LightGBMを読まない。進捗・要約・終了コードは`datamart build-reference`と同じ規則である。
 ADR-038の`model train-pl`はcli/pl_training.pyが、configuration/pl_training.pyで合成した`configs/pl_training/`の設定を読む。出力・設定・固定したdatamartのmanifest・列とvariant・年・LightGBMの予約キーを全体の読込より先に検査し、出典を記録してからdatamartを読み、最終学習を行う。stagingに書いた成果物を読み直してvalidのスコアの一致を確かめてから、`publish_directory`で公開する。stdoutには要約1行（manifestのSHA-256を含む）を出す。helpとimportは設定・学習・成果物のモジュールとLightGBMを読まない。
 ADR-039の`model predict-pl-live`はcli/pl_prediction.pyが、`read_pl_model`でモデルを読み、固定snapshotの`NL_RA_RACE`・`NL_SE_RACE_UMA`を固定して対象日の出馬表を`label_free_target_cards`で正規化し、`jra_flat_graded_stakes_v1`の重賞を決める。`--output`を作る前に、出力・SHA-256・モデル・snapshot・最も早いfreezeとラベルの境界を検査する。その後、freezeの早い順に`--poll-interval-seconds`ごとに`<features-root>/<race_id>/`の出現を見て、`read_reference_prediction_features`で読み、snapshotの一致と特徴量の保留を確かめ、experiments/pl_prediction.pyで予測を組み立て、`<output>/<race_id>/prediction.json`を`publish_directory`で公開する。1レースの読込・検査の失敗はそのレースの保留とし、発売締切（発走2分前）より後になっても公開されない特徴量は保留する。レースごとの結果はstdoutへ1行のJSON、要約はstderrへ出す。致命的な失敗は終了コード1、Ctrl+Cは130で、公開済みのレースは残す。helpとimportは成果物・予測の組立のモジュールとLightGBMを読まない。
+ADR-042の`model evaluate-final-odds`はcli/final_odds_evaluation.pyが、configuration/final_odds_evaluation.pyで合成した`configs/final_odds_evaluation/`の設定を、出力の検査の後、どの表も読む前に検査する。固定snapshotの`NL_RA_RACE`・`NL_HR_PAY`・O1・O2のhashを先に取り、`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で読み、`jra_flat_graded_stakes_v1`を判定する。年ごとにO1・O2を`publication_reader`の`scan`→`select_publication_pairs`→`read_pairs`で読み、`build_race_observations`で観測を組み立てる。最後に`manifest()`でhashを再確認し、評価を実行して`report.json`だけを`publish_directory`で公開する。進捗は表と年ごとにstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。helpとimportは設定・評価・補正・指標のモジュールを読まない。
 
 ## 進化時の制約
 

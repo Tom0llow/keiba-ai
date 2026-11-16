@@ -1,0 +1,19 @@
+# Evaluate hit-conditional final-odds corrections (ADR-042) on yearly folds of one fixed snapshot.
+# Every value is required; see measure.yaml for the fixed full-period profile.
+processed_root: ???
+snapshot_id: ???
+train_start_year: ???
+test_years: ???
+max_publication_age_seconds: ???
+bands:
+  win: ???
+  place_low: ???
+  place_mid: ???
+  quinella: ???
+quantiles: ???
+min_hits: ???
+graded_shrinkage_k: ???
+bootstrap:
+  resamples: ???
+  seed: ???
+  confidence: ???

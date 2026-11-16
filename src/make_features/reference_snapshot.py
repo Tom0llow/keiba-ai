@@ -76,7 +76,15 @@ def _one(rows: Sequence[dict[str, object]]) -> dict[str, object]:
     return next(iter(unique.values()))
 
 
-def _quote(value: object, *, digits: int) -> float | None:
+def decimal_odds(value: object, *, digits: int) -> float | None:
+    """Convert one fixed-width tenths odds string, returning None for unquoted sentinels.
+
+    Blank values and the all-``0``, all-``-``, all-``*`` and all-``9`` sentinels are
+    unquoted. Any other value must have exactly ``digits`` digits and be at least 1.0.
+
+    Raises:
+        ValueError: If the value is not a nullable string or has an invalid encoding.
+    """
     if value is None:
         return None
     if not isinstance(value, str):
@@ -114,8 +122,8 @@ def market_at(
         if number not in mapping or number in places:
             raise ValueError("invalid place quote horse mapping")
         places[number] = (
-            _quote(o1.get(f"OddsFukusyoInfo{i}OddsLow"), digits=4),
-            _quote(o1.get(f"OddsFukusyoInfo{i}OddsHigh"), digits=4),
+            decimal_odds(o1.get(f"OddsFukusyoInfo{i}OddsLow"), digits=4),
+            decimal_odds(o1.get(f"OddsFukusyoInfo{i}OddsHigh"), digits=4),
         )
     horses = tuple(
         HorseOdds(mapping[number], value, *places.get(number, (None, None)))
@@ -139,7 +147,7 @@ def market_at(
         if ids in seen:
             raise ValueError("duplicate unordered O2 pair")
         seen.add(ids)
-        pairs.append(PairOdds(ids, _quote(o2.get(f"OddsUmarenInfo{i}Odds"), digits=6)))
+        pairs.append(PairOdds(ids, decimal_odds(o2.get(f"OddsUmarenInfo{i}Odds"), digits=6)))
     totals = {}
     for kind, row, column in (
         ("tansyo", o1, "TotalHyosuTansyo"),

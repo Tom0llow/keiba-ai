@@ -667,7 +667,7 @@ uv run python src/main.py model predict-pl-live `
   なければ、stderrへ警告を1回出す）。公開されていれば読んで検査し、
   `<output>/<race_id>/prediction.json`（`pl_race_prediction` format_version 1）を公開する。中身は、馬番の昇順の馬ごとのスコア・
   勝率・2着以内・3着以内と、馬単・馬連・ワイド・3連複・3連単の全組合せの確率、モデル・特徴量・snapshotの識別である。
-  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動（#35）は補正しない。複勝・ワイドの払戻の規則への対応は#36で決める。
+  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動（ADR-042の補正の適用は#81）は補正しない。複勝・ワイドの払戻の規則への対応は#36で決める。
 - 発売締切（発走2分前）より後になっても特徴量が公開されない重賞は、`features_not_published`で保留する。発売締切の後に初めて
   見つかった特徴量は計算して公開し、`after_sales_close: true`を記録する。
 - 予測できない重賞は、出力を作らずに保留する。主な`reason`は次のとおりである。
@@ -683,3 +683,20 @@ uv run python src/main.py model predict-pl-live `
 - 前日夜のsnapshotの後の発走時刻の変更は検出しない。予測と`after_sales_close`は変更前の予定による（#31）。
 - モデル・snapshot（対象日のレースがない場合を含む）・最も早いfreezeとモデルのラベルの境界の検査に失敗すると、`--output`を作らずに終了コード1で終わる。
   監視中の致命的な失敗は1、Ctrl+Cは130で、公開済みのレースは残る。再起動では新しい`--output`を指定する。
+
+## 締切時点のオッズを確定オッズへ補正して評価する
+
+`model evaluate-final-odds`は、固定snapshotのfreeze（発走5分前）の時点の単勝・複勝・馬連のオッズから、その組合せが的中したときの
+確定オッズ（払戻÷100）を券種ごとの帯の倍率で予測し、年単位の拡大型fold（train 2004〜Y−1・test Y）で評価する
+（[ADR-042](docs/decisions/ADR-042-correct-closing-odds-to-hit-conditional-final-odds.md)）。補正の成果物は保存せず、
+`report.json`だけを新しいディレクトリへ公開する。
+
+```powershell
+uv run python src/main.py model evaluate-final-odds --config-name measure --override processed_root=data/processed --output output/final-odds-evaluation-2016-2025
+```
+
+- `configs/final_odds_evaluation/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が計測の前に固定した値（帯、分位点、
+  `min_hits`、縮小の強さ、bootstrap）を持つ。`snapshot_id: null`はCURRENTを一度だけ固定し、使ったIDを`report.json`に記録する。
+- 進捗は表と年ごとにstderrへ、公開後の要約1行（券種ごとの採否を含む）はstdoutへ出る。失敗（Ctrl+Cを含む）では出力もstagingも残らない。
+- 採否は、重賞の全test年で`payout_ratio`と`mean_payout_ratio`の95%区間がともに1を含むかで決める（計測の前に固定）。
+  手順・出力・結果は[確定オッズへの補正](docs/experiments/final-odds-correction.md)を参照する。

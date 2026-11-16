@@ -23,7 +23,7 @@ src/
 ├─ jra_van_retriever/            # Acquisition, locking, ledger, and recovery
 ├─ make_features/               # Feature contracts, generation, audit, and tables
 ├─ make_datamart/                # Pure joins, validation, and persistence contracts
-├─ models/                      # dataset, ranking, training, backends, evaluation, and artifacts
+├─ models/                      # dataset, ranking, training, backends, evaluation, artifacts, and market
 ├─ domain/                      # Shared RaceKey
 └─ tests/
    ├─ unit/                     # Isolated tests for pure logic and mocked external boundaries
