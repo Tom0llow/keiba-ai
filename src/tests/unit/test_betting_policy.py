@@ -92,7 +92,9 @@ def test_betting_policy_rejects_values_that_break_kelly_or_settlement(
 
 
 def test_place_probability_uses_the_entrant_count_rule() -> None:
+    assert place_probability(entrant_count=9, p_top2=0.4, p_top3=0.6) == 0.6
     assert place_probability(entrant_count=8, p_top2=0.4, p_top3=0.6) == 0.6
+    assert place_probability(entrant_count=7, p_top2=0.4, p_top3=0.6) == 0.4
     assert place_probability(entrant_count=5, p_top2=0.4, p_top3=0.6) == 0.4
     assert place_probability(entrant_count=4, p_top2=0.4, p_top3=0.6) is None
 
@@ -141,6 +143,24 @@ def test_decide_races_reports_each_race_outcome_and_scaling() -> None:
     ]
     assert [bet.stake_yen for bet in decisions[0].bets] == [2_500, 2_500]
     assert [bet.stake_yen for bet in decisions[2].bets] == [200]
+
+
+def test_races_sharing_a_freeze_are_processed_in_race_id_order() -> None:
+    policy = BettingPolicy(annual_budget_yen=3_000)
+    freeze = _at(2025, 1, 1)
+
+    decisions = decide_races(
+        [
+            _candidate(race_id="2025010101010102", freeze_at=freeze, horse_number="02"),
+            _candidate(race_id="2025010101010101", freeze_at=freeze, horse_number="01"),
+        ],
+        policy=policy,
+    )
+
+    assert [(d.race_id, d.outcome) for d in decisions] == [
+        ("2025010101010101", "purchased"),
+        ("2025010101010102", "budget_exhausted"),
+    ]
 
 
 def test_scaling_that_leaves_every_bet_below_one_unit_exhausts_the_budget() -> None:

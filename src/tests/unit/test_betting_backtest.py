@@ -252,6 +252,7 @@ def test_refunded_horses_are_settled_as_refunds() -> None:
         [hr_row(RACE, FuseirituFlag1="1")],
         [],
         [hr_row(RACE, headDataKubun="1")],
+        [hr_row(RACE), hr_row(RACE, SyussoTosu="09")],
     ],
 )
 def test_a_purchased_race_that_cannot_be_settled_stops_the_backtest(

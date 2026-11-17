@@ -29,7 +29,7 @@ from make_features.catalog.loader import load_feature_definitions
 from make_features.catalog.registry import create_feature_registry
 from make_features.reference_raw import result_boundary
 from models.experiments.betting_backtest import BETS_SCHEMA, RACES_SCHEMA
-from models.serialization.betting_inputs import SE_COLUMNS, SE_TABLE
+from models.serialization.betting_inputs import PL_PREDICTION_COLUMNS, SE_COLUMNS, SE_TABLE
 from models.serialization.final_odds_observations import (
     HR_COLUMNS,
     HR_TABLE,
@@ -52,6 +52,39 @@ CONFIGS = ROOT / "configs/betting_backtest"
 SNAPSHOT_ID = "fixture-snapshot-v1"
 YEARS = (2023, 2024, 2025)
 TEST_YEARS = (2024, 2025)
+# ADR-043 Decision 9, copied literally so that a change to the module's constants fails.
+ADR043_BETS = pa.schema(
+    [
+        pa.field("test_year", pa.int64(), nullable=False),
+        pa.field("race_id", pa.string(), nullable=False),
+        pa.field("freeze_at", pa.timestamp("us", tz="UTC"), nullable=False),
+        pa.field("bet_type", pa.string(), nullable=False),
+        pa.field("horse_number", pa.string(), nullable=False),
+        pa.field("probability", pa.float64(), nullable=False),
+        pa.field("freeze_odds", pa.float64(), nullable=False),
+        pa.field("estimated_odds", pa.float64(), nullable=False),
+        pa.field("expected_return", pa.float64(), nullable=False),
+        pa.field("kelly_fraction", pa.float64(), nullable=False),
+        pa.field("requested_stake_yen", pa.int64(), nullable=False),
+        pa.field("stake_yen", pa.int64(), nullable=False),
+        pa.field("payout_yen", pa.int64(), nullable=False),
+        pa.field("refund_yen", pa.int64(), nullable=False),
+        pa.field("receipt_yen", pa.int64(), nullable=False),
+    ]
+)
+ADR043_RACES = pa.schema(
+    [
+        pa.field("test_year", pa.int64(), nullable=False),
+        pa.field("race_id", pa.string(), nullable=False),
+        pa.field("freeze_at", pa.timestamp("us", tz="UTC"), nullable=False),
+        pa.field("stake_yen", pa.int64(), nullable=False),
+        pa.field("receipt_yen", pa.int64(), nullable=False),
+        pa.field("net_yen", pa.int64(), nullable=False),
+        pa.field("cumulative_net_yen", pa.int64(), nullable=False),
+        pa.field("annual_stake_yen", pa.int64(), nullable=False),
+        pa.field("hit", pa.bool_(), nullable=False),
+    ]
+)
 # Races 01 and 02 are graded; 03 is not. Race 02 has no prediction in either test year:
 # in 2025 the datamart holds it at target_outcome, in 2024 it is unattributed.
 HELD = race_id(2025, 2)
@@ -265,6 +298,34 @@ def test_backtest_betting_publishes_the_report_and_both_tables(tmp_path: Path) -
     races = pq.read_table(output / "races.parquet")
     assert bets.schema.equals(BETS_SCHEMA)
     assert races.schema.equals(RACES_SCHEMA)
+    assert bets.schema.equals(ADR043_BETS)
+    assert races.schema.equals(ADR043_RACES)
+    # The 2023 place hits give a 0.937 multiplier: place 03 at R 1.136 requests 1,500 yen, with
+    # wins on 01 (2,500 yen) and 02 (1,000 yen): 5,000 yen, no scaling. Win 01 pays 300 and
+    # place 03 pays 350: 7,500 + 5,250 = 12,750 yen per year.
+    assert [
+        (
+            row["test_year"],
+            row["bet_type"],
+            row["horse_number"],
+            row["stake_yen"],
+            row["receipt_yen"],
+        )
+        for row in bets.to_pylist()
+    ] == [
+        (year, bet_type, horse, stake, receipt)
+        for year in TEST_YEARS
+        for bet_type, horse, stake, receipt in (
+            ("win", "01", 2_500, 7_500),
+            ("win", "02", 1_000, 0),
+            ("place", "03", 1_500, 5_250),
+        )
+    ]
+    for year in ("2024", "2025"):
+        assert (report["years"][year]["stake_yen"], report["years"][year]["receipt_yen"]) == (
+            5_000,
+            12_750,
+        )
     total = report["all_test_years"]
     assert total["stake_yen"] == sum(bets.column("stake_yen").to_pylist())
     assert total["receipt_yen"] == sum(races.column("receipt_yen").to_pylist())
@@ -543,3 +604,22 @@ def test_held_reader_rejects_a_held_file_format_that_the_manifest_hash_covers(
 
     with pytest.raises(ValueError, match="held-race format is invalid"):
         read_reference_datamart_target_holds(datamart, expected_manifest_sha256=digest)
+
+
+def test_backtest_betting_projects_out_the_results_of_the_predictions(tmp_path: Path) -> None:
+    from data.loader import read_parquet as module
+
+    overrides = _inputs(tmp_path)
+    original = module.read_parquet
+    seen: list[object] = []
+
+    def spy(path: object, *, columns: object = None) -> object:
+        seen.append(columns)
+        return original(path, columns=columns)  # type: ignore[arg-type]
+
+    with patch.object(module, "read_parquet", side_effect=spy):
+        result = _invoke(tmp_path / "backtest", overrides)
+
+    assert result.exit_code == 0, result.stderr
+    assert seen == [PL_PREDICTION_COLUMNS]
+    assert "finish_position" not in cast(tuple[str, ...], seen[0])

@@ -60,8 +60,8 @@ uv run python src/main.py model backtest-betting --config-name measure --overrid
 
 ## 所要時間
 
-計158秒（Windows 11、Python 3.12）。PLの予測の読込と検査が約3秒、`NL_RA_RACE`・`NL_HR_PAY`・`NL_SE_RACE_UMA`の読込が約5秒、
-O1の読込（22年、pass 1が計109秒・996万行、pass 2が計10秒）と的中の観測の組み立てが約143秒、補正・購入・精算・指標が約7秒。
+計159秒（Windows 11、Python 3.12）。PLの予測の読込と検査が約3秒、`NL_RA_RACE`・`NL_HR_PAY`・`NL_SE_RACE_UMA`の読込が約5秒、
+O1の読込（22年、pass 1が計110秒・996万行、pass 2が計10秒）と的中の観測の組み立てが約144秒、補正・購入・精算・指標が約7秒。
 
 ## 結果
 
@@ -128,14 +128,14 @@ O1の読込（22年、pass 1が計109秒・996万行、pass 2が計10秒）と�
 - 年ごとの変動は大きく、2025年は86レースで的中2・最大連敗77だった。暦年の回収率の区間は広く、1年の結果からは方策の
   良否を判断できない。
 - この結果は、運用での購入の開始の根拠にならない。PLの確率の改善（単勝の高いオッズ帯の校正）と、選ばれる買い目での
-  オッズの見積もりの改善（#82）を、評価期間を使わない設計で検討する必要がある。
+  オッズの見積もりの改善（#92、#82）を、評価期間を使わない設計で検討する必要がある。
 
 ## 限界
 
 - 1回の実行で、1つのsnapshotとPLの評価の1つの出力だけを使った。bootstrapは購入レースを単位とし、予算の経路（縮小・枠）と
   年の間の変化は区間に含まない。
 - PLの予測がない重賞186レース（約14%）を評価から外した。そのうち139レースは結果に基づく保留（同着・異常区分など）で、
-  運用では予測・購入するはずのレースである。この欠落による偏りの向きは分からない。
+  運用では予測・購入するはずのレースである。この欠落による偏りの向きは分からない（予測を作る対応は#91）。
 - freezeは保存した`HassoTime`の5分前で、発走時刻の変更は反映しない（ADR-041）。当日は発表が遅れて古いオッズを使うことがある（#78）。
 - 方策の値（`R`の閾値、ケリーの係数）は計測の前に固定した値で、探索はしていない。単勝と複勝の相関や、年間の枠の配分は
   最適化していない。
@@ -144,8 +144,8 @@ O1の読込（22年、pass 1が計109秒・996万行、pass 2が計10秒）と�
 
 ## 再現の情報
 
-- 実行: 2026-11-17（レビューの2回の修正の後に再実行。`report.json`の`provenance`を除き、report・`bets.parquet`・`races.parquet`は
+- 実行: 2026-11-17（レビューの2回の修正とテストの追加の後に再実行。`report.json`の`provenance`を除き、report・`bets.parquet`・`races.parquet`は
   修正前の実行と同じ）、Python 3.12.12、pyarrow 25.0.1。
 - コード: `a096df2`にこの変更を加えたworktree（`report.json`の`provenance.source_sha256`
-  `0f286be038fc2cf992b141df9ca27ad4d759c8c7a02c62ee01cef3fbfa2f8cf1`）。
-- 出力: `output/ev-betting-backtest-2016-2025-r3/`（`report.json`・`bets.parquet`・`races.parquet`、Gitには含めない）。
+  `67db81b6c6ee3d9b3e25c680473db122936e7d8e1f8dafe5c83bf050d771bcfa`）。
+- 出力: `output/ev-betting-backtest-2016-2025-r4/`（`report.json`・`bets.parquet`・`races.parquet`、Gitには含めない）。
