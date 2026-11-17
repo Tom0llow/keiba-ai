@@ -1,4 +1,4 @@
-"""Compose and structurally validate the ADR-043 betting backtest settings."""
+"""Compose and structurally validate the ADR-043 and ADR-044 betting backtest settings."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ _KEYS = {
     "policy",
     "final_odds",
     "bootstrap",
+    "estimation",
 }
 _POLICY_KEYS = {
     "min_expected_return",
@@ -41,6 +42,14 @@ _FINAL_ODDS_KEYS = {
     "graded_shrinkage_k",
 }
 _BOOTSTRAP_KEYS = {"resamples", "seed", "confidence"}
+_ESTIMATION_KEYS = {
+    "blend_min_races",
+    "blend_tolerance",
+    "blend_max_iterations",
+    "place_width_bands",
+}
+# models.probability.market_blend.MAX_TOLERANCE; configuration imports no business module.
+_MAX_BLEND_TOLERANCE = 1e-8
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -75,6 +84,7 @@ def load_betting_backtest_config(
     _policy(values["policy"])
     _final_odds(values["final_odds"], years[0])
     _bootstrap(values["bootstrap"])
+    _estimation(values["estimation"])
     return values
 
 
@@ -126,6 +136,22 @@ def _bootstrap(value: object) -> None:
     (confidence,) = _numbers([value["confidence"]], "bootstrap.confidence")
     if not 0.0 < confidence < 1.0:
         raise ValueError("bootstrap.confidence must be between zero and one")
+
+
+def _estimation(value: object) -> None:
+    if not isinstance(value, dict) or set(value) != _ESTIMATION_KEYS:
+        raise ValueError("estimation has missing or unsupported keys")
+    for name in ("blend_min_races", "blend_max_iterations"):
+        if _integer(value[name], f"estimation.{name}") < 1:
+            raise ValueError(f"estimation.{name} must be a positive integer")
+    (tolerance,) = _numbers([value["blend_tolerance"]], "estimation.blend_tolerance")
+    if not 0.0 < tolerance <= _MAX_BLEND_TOLERANCE:
+        raise ValueError(
+            f"estimation.blend_tolerance must be positive and at most {_MAX_BLEND_TOLERANCE:g}"
+        )
+    bands = _numbers(value["place_width_bands"], "estimation.place_width_bands")
+    if not bands or bands[0] != 1.0 or any(left >= right for left, right in pairwise(bands)):
+        raise ValueError("estimation.place_width_bands must start at 1.0 and strictly increase")
 
 
 def _integer(value: object, name: str) -> int:

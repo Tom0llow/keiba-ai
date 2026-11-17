@@ -25,3 +25,9 @@ bootstrap:
   resamples: 2000
   seed: 0
   confidence: 0.95
+# Fixed before the ADR-044 measurement; do not change these values after it.
+estimation:
+  blend_min_races: 1000
+  blend_tolerance: 1.0e-10
+  blend_max_iterations: 100
+  place_width_bands: [1.0, 1.5, 2.0, 3.0, 5.0]

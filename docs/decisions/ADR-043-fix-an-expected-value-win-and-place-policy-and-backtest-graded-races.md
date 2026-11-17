@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #36、Refs #57・#35・#67・#81・#56・#82
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: N/A（決定1・3・4・8・9は[ADR-044](ADR-044-select-a-selection-bias-estimate-each-year-from-earlier-graded-flat-results.md)が選択した経路について改めた。Amendment 1）
 
 ---
 
@@ -135,6 +135,17 @@ PLの評価`graded-final3`（test 2016〜2025、`all_columns`）とsnapshot `098
 的中した複勝の払戻倍率の和は`Ô`の和の約0.75倍で、期待値の高い買い目を選ぶと確率とオッズの見積もりが過大な買い目が集まる。
 この方策での購入は損失になると判断し、結果を運用での購入の開始の根拠にしない。
 
+### Amendment 1: 推定の方法の年ごとの選択（2026-11-17、ADR-044）
+
+- [ADR-044](ADR-044-select-a-selection-bias-estimate-each-year-from-earlier-graded-flat-results.md)は、方策（決定5〜7）を
+  変えずに、確率とオッズの推定の方法を4通り用意し、test年ごとに前の年の重賞の定額の回収率で選ぶ。人間の承認のもとで、
+  評価期間の中で前の年だけを使って方法を選ぶ（下のRationaleの「評価期間を使わない」から離れる）。
+- 改めた決定: 決定1（合成の当てはめのため、`finish_position`を2つ目の投影で読む）、決定3・4（選択した経路の確率と複勝の`Ô`）、
+  決定8（件数に`place_width_invalid`と合成の保留の理由`blend_market_incomplete`・`blend_zero_probability`を加える）、
+  決定9（reportはformat_version 2、2つの表に`method`列）。この決定3・4は方法`pl_mid`としてそのまま残り、`pl_mid`の結果は
+  このADRの計測と同じ値を再現する。
+- `model backtest-betting`はversion 1を書かない。
+
 ## Rationale
 
 - 方策を計測の前に1つに固定すれば、評価期間を方策の選択に使わない（#36）ことを、内側の期間の設計なしに守れる。
@@ -254,7 +265,7 @@ CLIと`models/betting/`などの新しいモジュールを削除すれば戻せ
 ## Follow-up Actions
 
 - [ ] 予測がない重賞への予測の作成（#91）。
-- [ ] 選ばれる買い目での確率（単勝の高いオッズ帯）とオッズ（複勝）の見積もりの改善（#92、#82と、評価期間を使わない設計）。
+- [x] 選ばれる買い目での確率（単勝の高いオッズ帯）とオッズ（複勝）の見積もりの改善（#92、ADR-044。#82は継続）。
 - [ ] 当日の購入案の提示（#81）と実購入額の管理（#56）。
 
 ## Decision History
@@ -263,3 +274,4 @@ CLIと`models/betting/`などの新しいモジュールを削除すれば戻せ
 | --- | --- | --- |
 | 2026-11-16 | Proposed | GATE 1で人間が決めた方策を計測の前に固定した |
 | 2026-11-17 | Accepted | 実データで評価し、全test年の回収率0.810（95%区間0.670〜0.963）を記録した |
+| 2026-11-17 | Accepted（Amendment 1） | ADR-044が決定1・3・4・8・9を選択した経路について改めた（人間の承認、#92） |

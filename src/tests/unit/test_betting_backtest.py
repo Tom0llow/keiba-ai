@@ -1,8 +1,9 @@
-"""Tests for the ADR-043 backtest assembly (plan AC-10 to AC-12)."""
+"""Tests for the ADR-043 backtest assembly under ADR-044's report version 2."""
 
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import cast
@@ -17,7 +18,7 @@ from models.experiments.betting_backtest import (
     bets_table,
     run_betting_backtest,
 )
-from models.serialization.betting_inputs import race_predictions
+from models.serialization.betting_inputs import BlendTraining, race_predictions
 from models.serialization.final_odds_observations import HitObservation
 from tests.betting_fixtures import (
     hr_row,
@@ -44,6 +45,10 @@ def _settings(**fields: object) -> BettingBacktestSettings:
         "bootstrap_resamples": 20,
         "bootstrap_seed": 0,
         "bootstrap_confidence": 0.95,
+        "blend_min_races": 1,
+        "blend_tolerance": 1e-10,
+        "blend_max_iterations": 100,
+        "place_width_bands": (1.0, 1.5, 2.0, 3.0, 5.0),
     }
     values.update(fields)
     return BettingBacktestSettings(**values)  # type: ignore[arg-type]
@@ -61,10 +66,21 @@ def _race(race: str = RACE, **rows: Sequence[Mapping[str, object]]) -> GradedRac
 
 def _hits(year: int, ratio: float = 1.0) -> list[HitObservation]:
     race = race_id(year, 90)
-    return [
-        HitObservation(race, "place_mid", f"{number:02d}", odds, odds * ratio, 60)
-        for number, odds in ((1, 1.5), (2, 3.0), (3, 6.0))
-    ]
+    hits: list[HitObservation] = []
+    for number, mid in ((1, 1.5), (2, 3.0), (3, 6.0)):
+        hits.append(HitObservation(race, "place_mid", f"{number:02d}", mid, mid * ratio, 60))
+        hits.append(HitObservation(race, "place_low", f"{number:02d}", mid, mid * ratio, 60))
+    return hits
+
+
+def _no_blend(years: Sequence[int]) -> BlendTraining:
+    return BlendTraining(
+        races={year: () for year in years},
+        excluded={
+            year: {"market_incomplete": 0, "zero_probability": 0, "winner_count": 0}
+            for year in years
+        },
+    )
 
 
 def _run(
@@ -84,6 +100,7 @@ def _run(
         predictions=race_predictions(rows, variant="all_columns", test_years=chosen.test_years),
         target_hold_stages=holds or {},
         training_hits=_hits(2024) if hits is None else hits,
+        blend_training=_no_blend(chosen.test_years),
         graded_race_ids=frozenset(),
         config={"fixture": True},
         inputs={"fixture": True},
@@ -119,7 +136,7 @@ def test_one_graded_race_buys_scales_and_settles_the_expected_bets() -> None:
     assert counts["scaled"] == 1
 
 
-def test_report_has_the_adr043_keys_and_consistent_counts() -> None:
+def test_report_has_the_adr044_keys_and_consistent_counts() -> None:
     other = race_id(2025, 2)
     held = race_id(2025, 3)
     result = _run(
@@ -134,11 +151,16 @@ def test_report_has_the_adr043_keys_and_consistent_counts() -> None:
         "inputs",
         "provenance",
         "policy",
+        "estimation",
+        "selection",
         "counts",
         "years",
         "all_test_years",
+        "common_years",
+        "methods",
     }
     assert result.report["format"] == "ev_betting_backtest"
+    assert result.report["format_version"] == 2
     counts = _mapping(_mapping(result.report["counts"])["2025"])
     assert counts["graded_races"] == 3
     assert counts["no_prediction"] == {
@@ -278,6 +300,16 @@ def test_an_annual_budget_left_below_one_unit_is_counted() -> None:
 def test_predictions_outside_the_graded_races_are_rejected() -> None:
     with pytest.raises(ValueError, match="outside the graded test races"):
         _run(predictions=[*prediction_rows(RACE), *prediction_rows(race_id(2025, 4))])
+
+
+@pytest.mark.parametrize("tolerance", [0.0, math.nan, 1e-5, True])
+def test_settings_reject_a_blend_tolerance_outside_the_bound(tolerance: float) -> None:
+    with pytest.raises(ValueError, match="blend_tolerance must be positive and at most 1e-08"):
+        _settings(blend_tolerance=tolerance)
+
+
+def test_settings_accept_the_blend_tolerance_bound() -> None:
+    assert _settings(blend_tolerance=1e-8).blend_tolerance == 1e-8
 
 
 def test_settings_reject_invalid_years() -> None:

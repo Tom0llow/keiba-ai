@@ -111,6 +111,9 @@ coherent responsibility and have a name that describes that responsibility.
   (no I/O, CLI or `data` imports). Its metrics belong to `models/evaluation/betting_metrics.py`,
   its input shaping to `models/serialization/betting_inputs.py`, and the backtest assembly
   to `models/experiments/betting_backtest.py`; the CLI composes reading and publication.
+- ADR-044's PL-market blend belongs to `models/probability/market_blend.py` and its
+  width-banded place correction to `models/market/place_width_correction.py`; both stay pure.
+  A test year's fits and method selection use only data from earlier years.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
   See ADR-025 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
 - Share option definitions through `cli/options.py` and generic CLI JSON handling
