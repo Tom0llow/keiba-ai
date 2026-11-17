@@ -667,7 +667,7 @@ uv run python src/main.py model predict-pl-live `
   なければ、stderrへ警告を1回出す）。公開されていれば読んで検査し、
   `<output>/<race_id>/prediction.json`（`pl_race_prediction` format_version 1）を公開する。中身は、馬番の昇順の馬ごとのスコア・
   勝率・2着以内・3着以内と、馬単・馬連・ワイド・3連複・3連単の全組合せの確率、モデル・特徴量・snapshotの識別である。
-  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動（ADR-042の補正の適用は#81）は補正しない。複勝・ワイドの払戻の規則への対応は#36で決める。
+  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動（ADR-042の補正の適用は#81）は補正しない。過去検証での単勝・複勝の買い方はADR-043で固定し、当日の購入案への適用は#81で扱う。
 - 発売締切（発走2分前）より後になっても特徴量が公開されない重賞は、`features_not_published`で保留する。発売締切の後に初めて
   見つかった特徴量は計算して公開し、`after_sales_close: true`を記録する。
 - 予測できない重賞は、出力を作らずに保留する。主な`reason`は次のとおりである。
@@ -700,3 +700,21 @@ uv run python src/main.py model evaluate-final-odds --config-name measure --over
 - 進捗は表と年ごとにstderrへ、公開後の要約1行（券種ごとの採否を含む）はstdoutへ出る。失敗（Ctrl+Cを含む）では出力もstagingも残らない。
 - 採否は、重賞の全test年で`payout_ratio`と`mean_payout_ratio`の95%区間がともに1を含むかで決める（計測の前に固定）。
   手順・出力・結果は[確定オッズへの補正](docs/experiments/final-odds-correction.md)を参照する。
+
+## 期待値による単勝・複勝の購入方策を過去の重賞で評価する
+
+`model backtest-betting`は、PLの評価（`model evaluate-pl`）のtest年ごとの確率と、同じ固定snapshotのfreeze（発走5分前）の
+単勝・複勝のオッズから、計測の前に固定した方策で平地重賞の単勝・複勝を仮想購入し、確定の払戻で精算して暦年ごとに報告する
+（[ADR-043](docs/decisions/ADR-043-fix-an-expected-value-win-and-place-policy-and-backtest-graded-races.md)）。複勝のオッズはADR-042の補正を当てる。システムは購入を実行しない。
+
+```powershell
+uv run python src/main.py model backtest-betting --config-name measure --override processed_root=data/processed --override pl_evaluation_path=<PLの評価の出力> --override pl_predictions_sha256=<SHA-256> --override pl_report_sha256=<SHA-256> --output output/ev-betting-backtest-2016-2025
+```
+
+- `configs/betting_backtest/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が計測の前に固定した方策（期待受取倍率1.10以上、
+  1/4ケリー、基準資金・年間の枠10万円、1レース5,000円、100円単位）とADR-042の複勝の補正の値を持つ。
+- PLの評価の`report.json`・`predictions.parquet`はSHA-256で固定し、reportが記録する重賞の出典のsnapshotとdatamartを使う。
+- `report.json`・`bets.parquet`（買い目ごと）・`races.parquet`（購入レースごとの資金推移）だけを新しいディレクトリへ公開する。
+  進捗はstderrへ、要約1行はstdoutへ出る。失敗（Ctrl+Cを含む）では出力もstagingも残らない。
+- 収支は手数料を含まない。PLの予測がない重賞は購入せず、件数と理由を数える。手順・結果は
+  [期待値による購入方策のバックテスト](docs/experiments/ev-betting-backtest.md)を参照する。

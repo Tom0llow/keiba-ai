@@ -1,0 +1,27 @@
+defaults:
+  - evaluate
+  - _self_
+# Fixed before the measurement (ADR-043). Do not change these values after the measurement.
+# Pass processed_root, pl_evaluation_path and the two SHA-256 values with --override.
+# final_odds repeats ADR-042's fixed place_mid settings (configs/final_odds_evaluation/measure.yaml).
+pl_variant: all_columns
+test_years: [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+bet_types: [win, place]
+policy:
+  min_expected_return: 1.10
+  kelly_fraction: 0.25
+  bankroll_yen: 100000
+  annual_budget_yen: 100000
+  race_budget_yen: 5000
+  unit_yen: 100
+final_odds:
+  train_start_year: 2004
+  max_publication_age_seconds: 600
+  place_mid_bands: [1.0, 1.2, 1.5, 2.0, 3.0, 5.0, 10.0, 20.0]
+  quantiles: [0.1, 0.5, 0.9]
+  min_hits: 100
+  graded_shrinkage_k: 200
+bootstrap:
+  resamples: 2000
+  seed: 0
+  confidence: 0.95

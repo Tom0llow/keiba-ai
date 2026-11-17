@@ -322,6 +322,23 @@ def read_reference_datamart_manifest(
     return manifest
 
 
+def read_reference_datamart_target_holds(
+    path: Path, *, expected_manifest_sha256: str
+) -> tuple[dict[str, object], ...]:
+    """Return a labeled datamart's held target races, without reading its partitions.
+
+    The pinned manifest is checked like ``read_reference_datamart_manifest``, and
+    ``held_races.json`` is checked against the manifest's hash, format, count and role and
+    stage counts like the full reader. Only ``role == "target"`` entries are returned, in
+    file order (ADR-043 counts why an evaluation race has no prediction).
+    """
+    manifest = read_reference_datamart_manifest(
+        path, expected_manifest_sha256=expected_manifest_sha256
+    )
+    held = _validate_held(path.resolve(), manifest["held_races"], _DATAMART, None)
+    return tuple(dict(item) for item in held if item["role"] == "target")
+
+
 def read_reference_datamart_label_usable_through(
     path: Path, *, expected_manifest_sha256: str
 ) -> datetime:
