@@ -706,15 +706,19 @@ uv run python src/main.py model evaluate-final-odds --config-name measure --over
 `model backtest-betting`は、PLの評価（`model evaluate-pl`）のtest年ごとの確率と、同じ固定snapshotのfreeze（発走5分前）の
 単勝・複勝のオッズから、計測の前に固定した方策で平地重賞の単勝・複勝を仮想購入し、確定の払戻で精算して暦年ごとに報告する
 （[ADR-043](docs/decisions/ADR-043-fix-an-expected-value-win-and-place-policy-and-backtest-graded-races.md)）。複勝のオッズはADR-042の補正を当てる。システムは購入を実行しない。
+確率とオッズの推定は、PLのまま・PLと市場の合成と、`place_mid`の補正・幅の帯ごとの補正の4通りを年ごとに評価し、test年ごとに
+その年より前の重賞の定額の回収率で方法を選ぶ（[ADR-044](docs/decisions/ADR-044-select-a-selection-bias-estimate-each-year-from-earlier-graded-flat-results.md)）。
 
 ```powershell
 uv run python src/main.py model backtest-betting --config-name measure --override processed_root=data/processed --override pl_evaluation_path=<PLの評価の出力> --override pl_predictions_sha256=<SHA-256> --override pl_report_sha256=<SHA-256> --output output/ev-betting-backtest-2016-2025
 ```
 
 - `configs/betting_backtest/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が計測の前に固定した方策（期待受取倍率1.10以上、
-  1/4ケリー、基準資金・年間の枠10万円、1レース5,000円、100円単位）とADR-042の複勝の補正の値を持つ。
+  1/4ケリー、基準資金・年間の枠10万円、1レース5,000円、100円単位）、ADR-042の複勝の補正の値、ADR-044の推定の値
+  （合成の最少レース数1,000・許容1e-10・最大100回、幅の帯`[1.0, 1.5, 2.0, 3.0, 5.0]`）を持つ。
 - PLの評価の`report.json`・`predictions.parquet`はSHA-256で固定し、reportが記録する重賞の出典のsnapshotとdatamartを使う。
-- `report.json`・`bets.parquet`（買い目ごと）・`races.parquet`（購入レースごとの資金推移）だけを新しいディレクトリへ公開する。
+- `report.json`（format_version 2。年ごとに選んだ方法、各方法の定額・方策の結果を含む）・`bets.parquet`（買い目ごと）・
+  `races.parquet`（購入レースごとの資金推移）だけを新しいディレクトリへ公開する。2つの表は選んだ方法の経路で、`method`列を持つ。
   進捗はstderrへ、要約1行はstdoutへ出る。失敗（Ctrl+Cを含む）では出力もstagingも残らない。
 - 収支は手数料を含まない。PLの予測がない重賞は購入せず、件数と理由を数える。手順・結果は
   [期待値による購入方策のバックテスト](docs/experiments/ev-betting-backtest.md)を参照する。

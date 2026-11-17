@@ -1,4 +1,4 @@
-"""Tests for ADR-043 backtest input shaping (plan AC-8 and AC-9)."""
+"""Tests for ADR-043 and ADR-044 backtest input shaping."""
 
 from __future__ import annotations
 
@@ -7,8 +7,11 @@ from datetime import UTC, datetime
 
 import pytest
 
+from models.probability.market_blend import market_log_probabilities
 from models.serialization.betting_inputs import (
+    PL_BLEND_COLUMNS,
     PL_PREDICTION_COLUMNS,
+    blend_training_races,
     freeze_quotes,
     race_entrants,
     race_predictions,
@@ -104,6 +107,93 @@ def test_freeze_quotes_use_latest_o1_and_return_every_horse() -> None:
     assert quotes.place["03"] == pytest.approx(math.sqrt(12.0))
 
 
+def test_freeze_quotes_return_both_place_bounds_without_changing_the_mid() -> None:
+    row = o1_row(RACE)
+    row["OddsFukusyoInfo1OddsHigh"] = None
+    row["OddsFukusyoInfo2OddsLow"] = None
+    row["OddsFukusyoInfo4OddsLow"], row["OddsFukusyoInfo4OddsHigh"] = "0012", "0036"
+
+    quotes = freeze_quotes(RACE, [row], FREEZE, max_publication_age_seconds=600)
+
+    assert (quotes.place_low["01"], quotes.place_high["01"]) == (1.1, 1.5)
+    assert quotes.place["01"] == pytest.approx(math.sqrt(1.1 * 1.5))
+    assert (quotes.place_low["02"], quotes.place_high["02"], quotes.place["02"]) == (
+        1.5,
+        None,
+        None,
+    )
+    assert (quotes.place_low["03"], quotes.place_high["03"], quotes.place["03"]) == (
+        None,
+        None,
+        None,
+    )
+    assert (quotes.place_low["05"], quotes.place_high["05"]) == (1.2, 3.6)
+
+
+def _blend_rows(race: str, **changes: object) -> list[dict[str, object]]:
+    rows = [{name: row[name] for name in PL_BLEND_COLUMNS} for row in prediction_rows(race)]
+    for name, value in changes.items():
+        horse, column = name.split("__")
+        rows[int(horse) - 1][column] = value
+    return rows
+
+
+def test_blend_training_races_split_years_and_count_exclusions() -> None:
+    first, second = race_id(2024), race_id(2025)
+    rows = [
+        *_blend_rows(first),
+        *_blend_rows(race_id(2024, 2), **{"03__market_win_odds": None}),
+        *_blend_rows(race_id(2024, 3), **{"05__p_win": 0.0}),
+        *_blend_rows(race_id(2024, 4), **{"02__finish_position": 1}),
+        *_blend_rows(second),
+        *[{**row, "variant": "ignored"} for row in _blend_rows(race_id(2025, 2))],
+        *[{**row, "variant": "without_market"} for row in _blend_rows(race_id(2025, 3))],
+    ]
+
+    training = blend_training_races(rows, variant="all_columns", test_years=(2024, 2025))
+
+    assert [len(training.races[year]) for year in (2024, 2025)] == [1, 1]
+    assert training.excluded[2024] == {
+        "market_incomplete": 1,
+        "zero_probability": 1,
+        "winner_count": 1,
+    }
+    assert training.excluded[2025] == {
+        "market_incomplete": 0,
+        "zero_probability": 0,
+        "winner_count": 0,
+    }
+    (race,) = training.races[2024]
+    assert race.winner == 0
+    assert race.log_p_win[1] == pytest.approx(math.log(0.2))
+    odds = [
+        int(code) / 10 for code in ("0030", "0060", "0080", "0080", "0200", "0200", "0200", "0200")
+    ]
+    assert race.log_q == pytest.approx(market_log_probabilities(odds))
+
+
+def test_blend_training_races_reject_unconfigured_years_and_repeated_horses() -> None:
+    rows = _blend_rows(RACE)
+    with pytest.raises(ValueError, match="not the race's test year"):
+        blend_training_races(rows, variant="all_columns", test_years=(2024,))
+    with pytest.raises(ValueError, match="unique"):
+        blend_training_races([*rows, rows[0]], variant="all_columns", test_years=(2025,))
+    with pytest.raises(ValueError, match="no rows for variant"):
+        blend_training_races(rows, variant="other", test_years=(2025,))
+
+
+def test_the_blend_projection_reads_only_the_fit_columns() -> None:
+    assert PL_BLEND_COLUMNS == (
+        "variant",
+        "test_year",
+        "race_id",
+        "horse_id",
+        "p_win",
+        "market_win_odds",
+        "finish_position",
+    )
+
+
 @pytest.mark.parametrize(
     ("rows", "reason"),
     [
@@ -138,3 +228,22 @@ def test_race_entrants_hold_missing_and_duplicate_entrants() -> None:
 
     assert missing.value.reason == "no_entrants"
     assert mismatch.value.reason == "entrant_mismatch"
+
+
+def test_non_finite_or_non_positive_market_odds_make_a_blend_race_market_incomplete() -> None:
+    rows = [
+        *_blend_rows(race_id(2025, 1), **{"03__market_win_odds": math.nan}),
+        *_blend_rows(race_id(2025, 2), **{"04__market_win_odds": math.inf}),
+        *_blend_rows(race_id(2025, 3), **{"05__market_win_odds": 0.0}),
+    ]
+
+    training = blend_training_races(rows, variant="all_columns", test_years=(2025,))
+
+    assert training.races[2025] == ()
+    assert training.excluded[2025]["market_incomplete"] == 3
+    with pytest.raises(ValueError, match="numeric market_win_odds"):
+        blend_training_races(
+            _blend_rows(race_id(2025), **{"03__market_win_odds": "3.0"}),
+            variant="all_columns",
+            test_years=(2025,),
+        )

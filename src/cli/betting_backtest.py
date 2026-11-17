@@ -1,4 +1,4 @@
-"""Replay the fixed expected-value win and place policy on graded races (ADR-043)."""
+"""Replay the fixed expected-value win and place policy on graded races (ADR-043, ADR-044)."""
 
 from __future__ import annotations
 
@@ -27,7 +27,7 @@ def model_backtest_betting(
     config_name: Annotated[str, typer.Option("--config-name")] = "evaluate",
     overrides: Annotated[list[str] | None, typer.Option("--override")] = None,
 ) -> None:
-    """Backtest the fixed expected-value win and place policy on graded races."""
+    """Backtest the fixed expected-value policy under yearly selected estimation methods."""
     # Keep Hydra, NumPy and Arrow out of imports and CLI help.
     from configuration.betting_backtest import load_betting_backtest_config
     from data.loader.fixed_snapshot import FixedSnapshot
@@ -47,9 +47,11 @@ def model_backtest_betting(
     )
     from models.experiments.provenance import experiment_provenance
     from models.serialization.betting_inputs import (
+        PL_BLEND_COLUMNS,
         PL_PREDICTION_COLUMNS,
         SE_COLUMNS,
         SE_TABLE,
+        blend_training_races,
         race_predictions,
     )
     from models.serialization.final_odds_observations import (
@@ -109,8 +111,21 @@ def model_backtest_betting(
             prediction_rows, variant=cast(str, config["pl_variant"]), test_years=settings.test_years
         )
         del prediction_rows
+        # ADR-044: earlier years' winners fit the blend; a year's fit never sees its own results.
+        blend_rows = read_parquet(
+            pl_path / "predictions.parquet", columns=PL_BLEND_COLUMNS
+        ).to_pylist()
+        blend_training = blend_training_races(
+            blend_rows, variant=cast(str, config["pl_variant"]), test_years=settings.test_years
+        )
+        del blend_rows
         _pinned_bytes(pl_path / "predictions.parquet", cast(str, config["pl_predictions_sha256"]))
-        _progress("read_predictions", started, predicted_races=len(predictions))
+        _progress(
+            "read_predictions",
+            started,
+            predicted_races=len(predictions),
+            blend_races=sum(len(races) for races in blend_training.races.values()),
+        )
         venues = cast(list[str], REFERENCE_BASES["venues"])
         first_year, last_year = settings.train_start_year, settings.test_years[-1]
         start, end = f"{first_year}0101", f"{last_year}1231"
@@ -172,7 +187,7 @@ def model_backtest_betting(
                     max_publication_age_seconds=settings.max_publication_age_seconds,
                 )
                 training_hits.extend(
-                    hit for hit in observations.hits if hit.bet_type == "place_mid"
+                    hit for hit in observations.hits if hit.bet_type in ("place_mid", "place_low")
                 )
                 if race_id in wanted:
                     graded_o1[race_id] = o1_rows.get(race_id, [])
@@ -192,6 +207,7 @@ def model_backtest_betting(
             predictions=predictions,
             target_hold_stages=holds,
             training_hits=training_hits,
+            blend_training=blend_training,
             graded_race_ids=graded_ids,
             config=config,
             inputs={
@@ -232,6 +248,7 @@ def _settings(config: Mapping[str, object]) -> BettingBacktestSettings:
     policy = cast(dict[str, object], config["policy"])
     final_odds = cast(dict[str, object], config["final_odds"])
     bootstrap = cast(dict[str, object], config["bootstrap"])
+    estimation = cast(dict[str, object], config["estimation"])
     return BettingBacktestSettings(
         test_years=tuple(cast(list[int], config["test_years"])),
         policy=BettingPolicy(
@@ -251,6 +268,12 @@ def _settings(config: Mapping[str, object]) -> BettingBacktestSettings:
         bootstrap_resamples=cast(int, bootstrap["resamples"]),
         bootstrap_seed=cast(int, bootstrap["seed"]),
         bootstrap_confidence=float(cast(float, bootstrap["confidence"])),
+        blend_min_races=cast(int, estimation["blend_min_races"]),
+        blend_tolerance=float(cast(float, estimation["blend_tolerance"])),
+        blend_max_iterations=cast(int, estimation["blend_max_iterations"]),
+        place_width_bands=tuple(
+            float(v) for v in cast(list[float], estimation["place_width_bands"])
+        ),
     )
 
 

@@ -316,6 +316,7 @@ ADR-039の`model predict-pl-live`が、保存したモデルで当日の重賞�
 | --- | --- |
 | probability/plackett_luce.py | padded配置、top-3 PLのNLL・勾配・厳密なHessian対角項、勝率・2着以内・3着以内の周辺確率、単勝・馬単・馬連・3連単・3連複の実際の組合せの対数確率、ADR-039の1レースの全組合せの確率（馬単・3連単・馬連・ワイド・3連複）。numpyだけ、I/Oなし。 |
 | probability/calibration.py | validのtop-3 PLのレース平均NLLを最小にする単一の温度（黄金分割）。 |
+| probability/market_blend.py | ADR-044のPLと市場の合成（`α·log p_win + β·log q`）の、勝者のレース平均の対数尤度を最大にするNewton法の当てはめと、合成した強さの勝率・2着以内・3着以内。numpyだけ、I/Oなし。 |
 | evaluation/probability_metrics.py | レース単位の確率指標、市場完全レースの$q_i$、確率帯・オッズ帯の校正表（馬の等重み）、レース単位の対応ありbootstrap。 |
 | dataset/race_arrays.py / serialization/race_arrays.py | numpyの`RaceArrays`の不変条件と部分集合、datamartの`pa.Table`からの列単位の変換。 |
 | serialization/race_subsets.py | 固定snapshotの`NL_RA_RACE`のGradeCD・TrackCDから評価部分集合のrace_id集合を作る純粋な分類。 |
@@ -336,6 +337,7 @@ PLの評価・学習・予測とは独立で、補正の成果物は保存しな
 | --- | --- |
 | serialization/final_odds_observations.py | freeze（保存した`HassoTime`−300秒）、pass 2で読む（レース, 発表時刻）の選択（全行の`latest_o1`と同じ結果になる）、1レースの的中の観測（`O_z`と払戻÷100）・保留・除外の組立。I/Oなし。 |
 | market/final_odds_correction.py | 帯ごとの比の平均と`log O_z`の節点、薄い帯の統合、重賞の全レースへの縮小、補間による`Ô`と帯の経験分位点。市場オッズそのものを対象とする純粋な推定で、標準ライブラリだけを使い、I/O・CLI・`data`をimportしない。 |
+| market/place_width_correction.py | ADR-044の複勝の幅（`OddsHigh/OddsLow`を0.1刻みの整数の比で扱う）、`OddsHigh`の復元、幅の帯の割当てと統合、帯ごとのADR-042の`graded`補正。標準ライブラリだけ、I/Oなし。 |
 | evaluation/final_odds_metrics.py | 的中の指標（`payout_ratio`・`mean_payout_ratio`など）、帯ごとの集計、レース単位のbootstrapと対応ありの差。 |
 | experiments/final_odds_evaluation.py | test年ごとの当てはめ（`all`・`graded`）と`none`の採点、全test年と2016〜2020年のpooled、採否の規則、`report.json`の内容の組立。I/Oなし。 |
 
@@ -344,15 +346,17 @@ testの払戻は採点だけに使い、当てはめには`train_start_year`〜t
 ADR-043の購入方策のバックテストは、ADR-035のPLの評価の予測（test年ごとのfoldの確率）と、同じ固定snapshotのfreezeのO1・
 出走表・確定の払戻から、平地重賞の単勝・複勝の買い目を計測の前に固定した方策（期待受取倍率`P×Ô≥1.10`、1/4ケリー、
 1レース5,000円・暦年10万円、100円単位）で時刻順に買い、確定の払戻で精算して暦年ごとに報告する。複勝の`Ô`はADR-042の
-`place_mid`の`graded`の補正をtest年−1までの的中で当てはめる。購入は実行しない。
+`place_mid`の`graded`の補正をtest年−1までの的中で当てはめる。購入は実行しない。ADR-044により、確率（PLのまま、またはPLと
+市場の合成）と複勝の`Ô`（`place_mid`の補正、または幅の帯ごとの補正）の4通りの方法を、年ごとにその年より前のデータだけで
+当てはめて評価し、test年ごとに前の年の重賞の定額の回収率で方法を選ぶ。
 
 | 所有者 | 責務 |
 | --- | --- |
 | betting/policy.py | 買い目の候補、期待受取倍率、ケリーの比と要求額、レースと暦年の上限による比例の縮小と100円単位の切り捨て、freeze・`race_id`の順の処理とレースごとの結果（購入・候補なし・枠の不足）、頭数による複勝の確率の選択。I/Oなし。 |
 | betting/settlement.py | 1レースの買い目を、確定の払戻（同着は行どおり）と返還馬の返還で精算する。 |
 | evaluation/betting_metrics.py | 暦年と全test年の購入額・受取額・回収率・収支・的中率・最大ドローダウン・最大連敗・レースごとの累積収支、購入レースを単位とするbootstrapの回収率の区間、券種別の集計。 |
-| serialization/betting_inputs.py | PLの予測の検査（`finish_position`を読まない、確率の範囲・順序・レース内の和）、`card_entrants`による馬番の対応、ADR-042と同じ規則のfreezeのO1の単勝・`place_mid`の気配。 |
-| experiments/betting_backtest.py | test年ごとの複勝の補正の当てはめ、予測・出走表・O1の馬の集合と単勝オッズの一致の検査（違反は保留）、方策の適用と精算、件数、`report.json`の内容と`bets.parquet`・`races.parquet`のschema。I/Oなし。 |
+| serialization/betting_inputs.py | PLの予測の検査（候補用の投影は`finish_position`を読まない、確率の範囲・順序・レース内の和）、ADR-044の合成の当てはめ用の投影と年ごとのレース・除外の数への整形、`card_entrants`による馬番の対応、ADR-042と同じ規則のfreezeのO1の単勝・`place_mid`・`OddsLow`・`OddsHigh`の気配。 |
+| experiments/betting_backtest.py | test年ごとに、その年より前のデータだけで複勝の補正（`place_mid`と幅の帯ごと）とPLと市場の合成を当てはめ、4方法の候補・定額の評価・方策の適用と精算、前の年の重賞の定額の回収率による方法の選択、予測・出走表・O1の馬の集合と単勝オッズの一致の検査（違反は保留）、件数、`report.json`（version 2）の内容と`bets.parquet`・`races.parquet`のschema。I/Oなし。 |
 
 datamartの保留の理由は、make_datamart/tables/reference.pyの`read_reference_datamart_target_holds`が、manifestと`held_races.json`の
 hash・形式を検査して`role="target"`の項目だけを返す。
@@ -397,7 +401,7 @@ helpとimportは設定・datamart・snapshot・LightGBMを読まない。進捗�
 ADR-038の`model train-pl`はcli/pl_training.pyが、configuration/pl_training.pyで合成した`configs/pl_training/`の設定を読む。出力・設定・固定したdatamartのmanifest・列とvariant・年・LightGBMの予約キーを全体の読込より先に検査し、出典を記録してからdatamartを読み、最終学習を行う。stagingに書いた成果物を読み直してvalidのスコアの一致を確かめてから、`publish_directory`で公開する。stdoutには要約1行（manifestのSHA-256を含む）を出す。helpとimportは設定・学習・成果物のモジュールとLightGBMを読まない。
 ADR-039の`model predict-pl-live`はcli/pl_prediction.pyが、`read_pl_model`でモデルを読み、固定snapshotの`NL_RA_RACE`・`NL_SE_RACE_UMA`を固定して対象日の出馬表を`label_free_target_cards`で正規化し、`jra_flat_graded_stakes_v1`の重賞を決める。`--output`を作る前に、出力・SHA-256・モデル・snapshot・最も早いfreezeとラベルの境界を検査する。その後、freezeの早い順に`--poll-interval-seconds`ごとに`<features-root>/<race_id>/`の出現を見て、`read_reference_prediction_features`で読み、snapshotの一致と特徴量の保留を確かめ、experiments/pl_prediction.pyで予測を組み立て、`<output>/<race_id>/prediction.json`を`publish_directory`で公開する。1レースの読込・検査の失敗はそのレースの保留とし、発売締切（発走2分前）より後になっても公開されない特徴量は保留する。レースごとの結果はstdoutへ1行のJSON、要約はstderrへ出す。致命的な失敗は終了コード1、Ctrl+Cは130で、公開済みのレースは残す。helpとimportは成果物・予測の組立のモジュールとLightGBMを読まない。
 ADR-042の`model evaluate-final-odds`はcli/final_odds_evaluation.pyが、configuration/final_odds_evaluation.pyで合成した`configs/final_odds_evaluation/`の設定を、出力の検査の後、どの表も読む前に検査する。固定snapshotの`NL_RA_RACE`・`NL_HR_PAY`・O1・O2のhashを先に取り、`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で読み、`jra_flat_graded_stakes_v1`を判定する。年ごとにO1・O2を`publication_reader`の`scan`→`select_publication_pairs`→`read_pairs`で読み、`build_race_observations`で観測を組み立てる。最後に`manifest()`でhashを再確認し、評価を実行して`report.json`だけを`publish_directory`で公開する。進捗は表と年ごとにstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。helpとimportは設定・評価・補正・指標のモジュールを読まない。
-ADR-043の`model backtest-betting`はcli/betting_backtest.pyが、configuration/betting_backtest.pyで合成した`configs/betting_backtest/`の設定を、出力の検査の後に検査する。出力が`processed_root`・PLの評価のディレクトリと同じかその中なら拒否し、PLの評価の`report.json`・`predictions.parquet`のSHA-256を照合して、reportから固定snapshotとdatamartを決める。出力がdatamart・固定snapshotの中でも、`predictions.parquet`とsnapshotの表を読む前に拒否する。固定snapshotの`NL_RA_RACE`・`NL_SE_RACE_UMA`・`NL_HR_PAY`・O1のhashを先に取り、`NL_RA_RACE`がPLの評価の重賞の出典と一致することを確かめる。datamartの保留の理由を読み、予測を`finish_position`なしで読む。`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で、`NL_SE_RACE_UMA`をtest年の重賞だけ読み、年ごとにO1をADR-042と同じ2 passで読んで、全レースの`place_mid`の的中を組み立てる（O2は読まない）。バックテストを実行し、`report.json`・`bets.parquet`・`races.parquet`を`publish_directory`で公開する。進捗はstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。importは設定・方策・指標・入力の整形のモジュールと重い外部ライブラリを読まず、helpは設定・方策・指標・入力の整形のモジュールを読まない。
+ADR-043の`model backtest-betting`はcli/betting_backtest.pyが、configuration/betting_backtest.pyで合成した`configs/betting_backtest/`の設定を、出力の検査の後に検査する。出力が`processed_root`・PLの評価のディレクトリと同じかその中なら拒否し、PLの評価の`report.json`・`predictions.parquet`のSHA-256を照合して、reportから固定snapshotとdatamartを決める。出力がdatamart・固定snapshotの中でも、`predictions.parquet`とsnapshotの表を読む前に拒否する。固定snapshotの`NL_RA_RACE`・`NL_SE_RACE_UMA`・`NL_HR_PAY`・O1のhashを先に取り、`NL_RA_RACE`がPLの評価の重賞の出典と一致することを確かめる。datamartの保留の理由を読み、予測を`finish_position`なしの候補用の投影と、ADR-044の合成の当てはめ用の投影（`finish_position`を含む7列）で、`predictions.parquet`の2回のhashの照合の間に読む。`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で、`NL_SE_RACE_UMA`をtest年の重賞だけ読み、年ごとにO1をADR-042と同じ2 passで読んで、全レースの`place_mid`・`place_low`の的中を組み立てる（O2は読まない）。バックテストを実行し、`report.json`・`bets.parquet`・`races.parquet`を`publish_directory`で公開する。進捗はstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。importは設定・方策・指標・入力の整形のモジュールと重い外部ライブラリを読まず、helpは設定・方策・指標・入力の整形のモジュールを読まない。
 
 ## 進化時の制約
 

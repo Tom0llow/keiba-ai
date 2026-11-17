@@ -29,7 +29,12 @@ from make_features.catalog.loader import load_feature_definitions
 from make_features.catalog.registry import create_feature_registry
 from make_features.reference_raw import result_boundary
 from models.experiments.betting_backtest import BETS_SCHEMA, RACES_SCHEMA
-from models.serialization.betting_inputs import PL_PREDICTION_COLUMNS, SE_COLUMNS, SE_TABLE
+from models.serialization.betting_inputs import (
+    PL_BLEND_COLUMNS,
+    PL_PREDICTION_COLUMNS,
+    SE_COLUMNS,
+    SE_TABLE,
+)
 from models.serialization.final_odds_observations import (
     HR_COLUMNS,
     HR_TABLE,
@@ -52,8 +57,9 @@ CONFIGS = ROOT / "configs/betting_backtest"
 SNAPSHOT_ID = "fixture-snapshot-v1"
 YEARS = (2023, 2024, 2025)
 TEST_YEARS = (2024, 2025)
-# ADR-043 Decision 9, copied literally so that a change to the module's constants fails.
-ADR043_BETS = pa.schema(
+# ADR-043 Decision 9 with ADR-044's method column, copied literally so that a change to the
+# module's constants fails.
+ADR044_BETS = pa.schema(
     [
         pa.field("test_year", pa.int64(), nullable=False),
         pa.field("race_id", pa.string(), nullable=False),
@@ -70,9 +76,10 @@ ADR043_BETS = pa.schema(
         pa.field("payout_yen", pa.int64(), nullable=False),
         pa.field("refund_yen", pa.int64(), nullable=False),
         pa.field("receipt_yen", pa.int64(), nullable=False),
+        pa.field("method", pa.string(), nullable=False),
     ]
 )
-ADR043_RACES = pa.schema(
+ADR044_RACES = pa.schema(
     [
         pa.field("test_year", pa.int64(), nullable=False),
         pa.field("race_id", pa.string(), nullable=False),
@@ -83,6 +90,7 @@ ADR043_RACES = pa.schema(
         pa.field("cumulative_net_yen", pa.int64(), nullable=False),
         pa.field("annual_stake_yen", pa.int64(), nullable=False),
         pa.field("hit", pa.bool_(), nullable=False),
+        pa.field("method", pa.string(), nullable=False),
     ]
 )
 # Races 01 and 02 are graded; 03 is not. Race 02 has no prediction in either test year:
@@ -298,8 +306,16 @@ def test_backtest_betting_publishes_the_report_and_both_tables(tmp_path: Path) -
     races = pq.read_table(output / "races.parquet")
     assert bets.schema.equals(BETS_SCHEMA)
     assert races.schema.equals(RACES_SCHEMA)
-    assert bets.schema.equals(ADR043_BETS)
-    assert races.schema.equals(ADR043_RACES)
+    assert bets.schema.equals(ADR044_BETS)
+    assert races.schema.equals(ADR044_RACES)
+    # With one earlier blend race (below blend_min_races) only the current method is available.
+    assert report["format_version"] == 2
+    assert set(bets.column("method").to_pylist()) == {"pl_mid"}
+    assert set(races.column("method").to_pylist()) == {"pl_mid"}
+    assert [report["selection"][year]["method"] for year in ("2024", "2025")] == ["pl_mid"] * 2
+    blend = report["methods"]["blend_mid"]["years"]["2025"]["blend"]
+    assert (blend["races"], blend["failure"]) == (1, "insufficient_races")
+    assert report["methods"]["pl_mid"]["years"]["2025"]["policy"] == report["years"]["2025"]
     # The 2023 place hits give a 0.937 multiplier: place 03 at R 1.136 requests 1,500 yen, with
     # wins on 01 (2,500 yen) and 02 (1,000 yen): 5,000 yen, no scaling. Win 01 pays 300 and
     # place 03 pays 350: 7,500 + 5,250 = 12,750 yen per year.
@@ -382,6 +398,8 @@ for name in (
     "models.betting.policy",
     "models.evaluation.betting_metrics",
     "models.serialization.betting_inputs",
+    "models.probability.market_blend",
+    "models.market.place_width_correction",
 ):
     assert name not in sys.modules, name
 """
@@ -466,6 +484,13 @@ def test_backtest_betting_rejects_pl_files_that_differ_from_the_pins(
         ("final_odds.place_mid_bands=[0.9]", "place_mid_bands"),
         ("final_odds.quantiles=[0.5,0.1]", "strictly increasing"),
         ("bootstrap.confidence=1.0", "bootstrap.confidence"),
+        ("~estimation", "missing or unsupported keys"),
+        ("+estimation.extra=1", "estimation has missing or unsupported keys"),
+        ("estimation.blend_min_races=0", "estimation.blend_min_races"),
+        ("estimation.blend_max_iterations=1.5", "estimation.blend_max_iterations"),
+        ("estimation.blend_tolerance=0", "estimation.blend_tolerance"),
+        ("estimation.place_width_bands=[1.5,2.0]", "estimation.place_width_bands"),
+        ("estimation.place_width_bands=[1.0,2.0,2.0]", "estimation.place_width_bands"),
     ],
 )
 def test_backtest_config_rejects_invalid_values(override: str, message: str) -> None:
@@ -512,6 +537,13 @@ def test_measure_profile_repeats_the_fixed_adr042_place_settings() -> None:
         "unit_yen": 100,
     }
     assert config["test_years"] == list(range(2016, 2026))
+    # ADR-044 Decision 6, fixed before the measurement.
+    assert config["estimation"] == {
+        "blend_min_races": 1000,
+        "blend_tolerance": 1e-10,
+        "blend_max_iterations": 100,
+        "place_width_bands": [1.0, 1.5, 2.0, 3.0, 5.0],
+    }
 
 
 @pytest.mark.parametrize(
@@ -606,20 +638,38 @@ def test_held_reader_rejects_a_held_file_format_that_the_manifest_hash_covers(
         read_reference_datamart_target_holds(datamart, expected_manifest_sha256=digest)
 
 
-def test_backtest_betting_projects_out_the_results_of_the_predictions(tmp_path: Path) -> None:
+def test_backtest_betting_reads_two_projections_between_the_prediction_pins(
+    tmp_path: Path,
+) -> None:
+    from cli import betting_backtest as command
     from data.loader import read_parquet as module
 
     overrides = _inputs(tmp_path)
-    original = module.read_parquet
-    seen: list[object] = []
+    original_read = module.read_parquet
+    original_pin = command._pinned_bytes
+    seen: list[tuple[str, object]] = []
 
-    def spy(path: object, *, columns: object = None) -> object:
-        seen.append(columns)
-        return original(path, columns=columns)  # type: ignore[arg-type]
+    def read_spy(path: object, *, columns: object = None) -> object:
+        seen.append(("read", columns))
+        return original_read(path, columns=columns)  # type: ignore[arg-type]
 
-    with patch.object(module, "read_parquet", side_effect=spy):
+    def pin_spy(path: Path, expected_sha256: str) -> bytes:
+        seen.append(("pin", path.name))
+        return original_pin(path, expected_sha256)
+
+    with (
+        patch.object(module, "read_parquet", side_effect=read_spy),
+        patch.object(command, "_pinned_bytes", side_effect=pin_spy),
+    ):
         result = _invoke(tmp_path / "backtest", overrides)
 
     assert result.exit_code == 0, result.stderr
-    assert seen == [PL_PREDICTION_COLUMNS]
-    assert "finish_position" not in cast(tuple[str, ...], seen[0])
+    assert seen == [
+        ("pin", "report.json"),
+        ("pin", "predictions.parquet"),
+        ("read", PL_PREDICTION_COLUMNS),
+        ("read", PL_BLEND_COLUMNS),
+        ("pin", "predictions.parquet"),
+    ]
+    assert "finish_position" not in PL_PREDICTION_COLUMNS
+    assert "finish_position" in PL_BLEND_COLUMNS

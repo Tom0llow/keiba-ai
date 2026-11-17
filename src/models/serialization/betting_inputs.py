@@ -12,10 +12,13 @@ import re
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import datetime
+from typing import cast
 
 from make_features.real_market import canonical_hash
 from make_features.reference_raw import CARD_SE_COLUMNS, race_identity
 from make_features.reference_snapshot import card_entrants
+from models.market.place_width_correction import recover_place_high
+from models.probability.market_blend import BlendRace, market_log_probabilities
 from models.serialization.final_odds_observations import (
     ObservationHold,
     freeze_row,
@@ -37,6 +40,18 @@ PL_PREDICTION_COLUMNS = (
     "market_win_odds",
     "in_jra_flat_graded_stakes",
 )
+# ADR-044: the blend is fitted on earlier years' winners, so this second projection reads
+# ``finish_position``; ``run_betting_backtest`` passes a year's fit only earlier years.
+PL_BLEND_COLUMNS = (
+    "variant",
+    "test_year",
+    "race_id",
+    "horse_id",
+    "p_win",
+    "market_win_odds",
+    "finish_position",
+)
+BLEND_EXCLUSIONS = ("market_incomplete", "zero_probability", "winner_count")
 _SUM_TOLERANCE = 1e-6
 _ORDER_TOLERANCE = 1e-12
 
@@ -72,6 +87,16 @@ class FreezeQuotes:
     age_seconds: int
     win: Mapping[str, float | None]
     place: Mapping[str, float | None]
+    place_low: Mapping[str, float | None]
+    place_high: Mapping[str, float | None]
+
+
+@dataclass(frozen=True)
+class BlendTraining:
+    """Hold every test year's races usable for the blend fit and the excluded counts."""
+
+    races: Mapping[int, tuple[BlendRace, ...]]
+    excluded: Mapping[int, Mapping[str, int]]
 
 
 def race_predictions(
@@ -124,10 +149,100 @@ def freeze_quotes(
     if age > max_publication_age_seconds:
         raise ObservationHold("stale_publication", f"{race_id}: {age} seconds old")
     quotes = o1_quotes(row)
+    low = {horse: odds for horse, (odds, _) in quotes["place_low"].items()}
+    mid = {horse: odds for horse, (odds, _) in quotes["place_mid"].items()}
+    high: dict[str, float | None] = {}
+    for horse, odds in mid.items():
+        lower = low.get(horse)
+        high[horse] = None if odds is None or lower is None else recover_place_high(lower, odds)
     return FreezeQuotes(
         age_seconds=age,
         win={horse: odds for horse, (odds, _) in quotes["win"].items()},
-        place={horse: odds for horse, (odds, _) in quotes["place_mid"].items()},
+        place=mid,
+        place_low=low,
+        place_high=high,
+    )
+
+
+def blend_training_races(
+    rows: Sequence[Mapping[str, object]], *, variant: str, test_years: Collection[int]
+) -> BlendTraining:
+    """Return each test year's races for the ADR-044 blend fit, with excluded counts.
+
+    A race is excluded, in this order, when a horse lacks positive finite market odds
+    (``market_incomplete``), a horse has ``p_win <= 0`` (``zero_probability``), or not
+    exactly one horse finished first (``winner_count``). Horses are ordered by ID.
+
+    Raises:
+        ValueError: If the variant has no rows, a value has the wrong type, a race ID is
+            invalid, a test year is not configured or differs from the race's year, or a
+            horse appears twice in a race.
+    """
+    selected = [row for row in rows if row.get("variant") == variant]
+    if not selected:
+        raise ValueError(f"PL predictions have no rows for variant {variant!r}")
+    years = set(test_years)
+    by_race: dict[str, list[Mapping[str, object]]] = {}
+    for row in selected:
+        race_id = row.get("race_id")
+        if not isinstance(race_id, str) or re.fullmatch(r"[0-9]{16}", race_id) is None:
+            raise ValueError("PL predictions require 16-digit race IDs")
+        test_year = row.get("test_year")
+        if isinstance(test_year, bool) or not isinstance(test_year, int):
+            raise ValueError("PL predictions require an integer test_year")
+        if test_year not in years or test_year != int(race_id[:4]):
+            raise ValueError(f"{race_id}: test_year {test_year} is not the race's test year")
+        by_race.setdefault(race_id, []).append(row)
+    races: dict[int, list[BlendRace]] = {year: [] for year in sorted(years)}
+    excluded = {year: dict.fromkeys(BLEND_EXCLUSIONS, 0) for year in sorted(years)}
+    for race_id, items in sorted(by_race.items()):
+        year = int(race_id[:4])
+        reason, race = _blend_race(race_id, items)
+        if race is None:
+            excluded[year][cast(str, reason)] += 1
+        else:
+            races[year].append(race)
+    return BlendTraining(
+        races={year: tuple(values) for year, values in races.items()},
+        excluded=excluded,
+    )
+
+
+def _blend_race(
+    race_id: str, rows: Sequence[Mapping[str, object]]
+) -> tuple[str | None, BlendRace | None]:
+    horses: dict[str, tuple[float, float | None, int]] = {}
+    for row in rows:
+        horse_id = row.get("horse_id")
+        if not isinstance(horse_id, str) or not horse_id or horse_id in horses:
+            raise ValueError(f"{race_id}: horse_id must be unique non-empty strings")
+        finish = row.get("finish_position")
+        if isinstance(finish, bool) or not isinstance(finish, int):
+            raise ValueError(f"{race_id}: finish_position must be an integer")
+        market = row.get("market_win_odds")
+        if market is not None and (isinstance(market, bool) or not isinstance(market, int | float)):
+            raise ValueError("PL predictions require numeric market_win_odds")
+        horses[horse_id] = (
+            _probability(row.get("p_win"), "p_win"),
+            # A missing or non-finite market makes the race market_incomplete, not an error.
+            None if market is None or not math.isfinite(market) else float(market),
+            finish,
+        )
+    ordered = [horses[horse_id] for horse_id in sorted(horses)]
+    odds: list[float] = []
+    for _, market, _ in ordered:
+        if market is None or market <= 0.0:
+            return "market_incomplete", None
+        odds.append(market)
+    if any(p_win <= 0.0 for p_win, _, _ in ordered):
+        return "zero_probability", None
+    winners = [index for index, (_, _, finish) in enumerate(ordered) if finish == 1]
+    if len(winners) != 1 or len(ordered) < 2:
+        return "winner_count", None
+    return None, BlendRace(
+        tuple(math.log(p_win) for p_win, _, _ in ordered),
+        market_log_probabilities(odds),
+        winners[0],
     )
 
 
@@ -206,12 +321,16 @@ def _probability(value: object, name: str) -> float:
 
 
 __all__ = [
+    "BLEND_EXCLUSIONS",
+    "PL_BLEND_COLUMNS",
     "PL_PREDICTION_COLUMNS",
     "SE_COLUMNS",
     "SE_TABLE",
+    "BlendTraining",
     "FreezeQuotes",
     "HorsePrediction",
     "RacePrediction",
+    "blend_training_races",
     "freeze_quotes",
     "race_entrants",
     "race_predictions",
