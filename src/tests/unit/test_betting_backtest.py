@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from collections.abc import Mapping, Sequence
 from dataclasses import replace
 from typing import cast
@@ -299,6 +300,16 @@ def test_an_annual_budget_left_below_one_unit_is_counted() -> None:
 def test_predictions_outside_the_graded_races_are_rejected() -> None:
     with pytest.raises(ValueError, match="outside the graded test races"):
         _run(predictions=[*prediction_rows(RACE), *prediction_rows(race_id(2025, 4))])
+
+
+@pytest.mark.parametrize("tolerance", [0.0, math.nan, 1e-5, True])
+def test_settings_reject_a_blend_tolerance_outside_the_bound(tolerance: float) -> None:
+    with pytest.raises(ValueError, match="blend_tolerance must be positive and at most 1e-08"):
+        _settings(blend_tolerance=tolerance)
+
+
+def test_settings_accept_the_blend_tolerance_bound() -> None:
+    assert _settings(blend_tolerance=1e-8).blend_tolerance == 1e-8
 
 
 def test_settings_reject_invalid_years() -> None:

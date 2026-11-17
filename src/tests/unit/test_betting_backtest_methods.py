@@ -248,8 +248,8 @@ def _selection_results(
 def test_selection_uses_only_earlier_years_that_every_method_covers() -> None:
     flats = {
         "pl_mid": {2016: (100, 100), 2017: (80, 100), 2018: (90, 100), 2019: (0, 100)},
-        "blend_mid": {2016: None, 2017: (120, 100), 2018: (70, 100), 2019: (900, 100)},
-        "pl_width": {2016: (500, 100), 2017: (90, 100), 2018: (80, 100), 2019: (0, 100)},
+        "blend_mid": {2016: None, 2017: (120, 100), 2018: (70, 100), 2019: (0, 100)},
+        "pl_width": {2016: (500, 100), 2017: (90, 100), 2018: (80, 100), 2019: (900, 100)},
         "blend_width": {2016: None, 2017: (60, 100), 2018: (60, 100), 2019: (0, 100)},
     }
 
@@ -261,7 +261,8 @@ def test_selection_uses_only_earlier_years_that_every_method_covers() -> None:
     assert selection[2016] == ("pl_mid", ())
     assert selection[2017] == ("pl_mid", ())
     assert selection[2018] == ("blend_mid", (2017,))
-    # 2017-2018: pl_mid 170, blend_mid 190, pl_width 170; 2019 itself is never used.
+    # 2017-2018: pl_mid 170, blend_mid 190, pl_width 170. Counting 2019 itself would pick
+    # pl_width (1070 against blend_mid 190).
     assert selection[2019] == ("blend_mid", (2017, 2018))
 
 

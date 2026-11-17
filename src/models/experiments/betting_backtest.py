@@ -44,6 +44,7 @@ from models.market.place_width_correction import (
     validate_width_bands,
 )
 from models.probability.market_blend import (
+    MAX_TOLERANCE,
     BlendFit,
     BlendRace,
     blend_probabilities,
@@ -115,8 +116,12 @@ class BettingBacktestSettings:
             if isinstance(value, bool) or not isinstance(value, int) or value < 1:
                 raise ValueError(f"{name} must be a positive integer")
         tolerance = self.blend_tolerance
-        if isinstance(tolerance, bool) or not math.isfinite(tolerance) or tolerance <= 0.0:
-            raise ValueError("blend_tolerance must be positive and finite")
+        if (
+            isinstance(tolerance, bool)
+            or not math.isfinite(tolerance)
+            or not 0.0 < tolerance <= MAX_TOLERANCE
+        ):
+            raise ValueError(f"blend_tolerance must be positive and at most {MAX_TOLERANCE:g}")
         validate_width_bands(self.place_width_bands)
 
 
@@ -603,7 +608,7 @@ def _payouts(race_id: str, hr_rows: Mapping[str, Sequence[Mapping[str, object]]]
 def _selection(
     results: Mapping[Method, Mapping[int, _MethodYear]], test_years: Sequence[int]
 ) -> dict[int, tuple[Method, tuple[int, ...]]]:
-    """Return each test year's method and comparison years (ADR-044 Decision 3)."""
+    """Return each test year's method and comparison years (ADR-044 Decision 4)."""
     selection: dict[int, tuple[Method, tuple[int, ...]]] = {}
     for year in test_years:
         years = tuple(y for y in test_years if y < year and all(y in results[m] for m in METHODS))

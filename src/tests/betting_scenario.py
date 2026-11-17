@@ -8,9 +8,8 @@ come from 2023 (identity) and 2024 (ratio 1.2), each with its ``place_low`` part
 from __future__ import annotations
 
 from models.serialization.final_odds_observations import HitObservation
-from tests.betting_fixtures import hr_row, o1_row, prediction_rows, race_id
+from tests.betting_fixtures import hr_row, o1_row, race_id
 
-TEST_YEARS = (2024, 2025)
 PLACE_HITS = ((1, 1.5, 1.2), (2, 3.0, 2.0), (3, 6.0, 3.0))
 
 
@@ -45,16 +44,6 @@ def scenario_o1_rows(year: int) -> dict[str, list[dict[str, object]]]:
         second: [o1_row(second)],
         third: [o1_row(third, clock="1514")],
     }
-
-
-def scenario_predictions() -> list[dict[str, object]]:
-    """Return the scenario's graded prediction rows of both test years."""
-    return [
-        row
-        for year in TEST_YEARS
-        for race in scenario_race_ids(year)
-        for row in prediction_rows(race)
-    ]
 
 
 def scenario_hits(year: int, ratio: float = 1.0) -> list[HitObservation]:

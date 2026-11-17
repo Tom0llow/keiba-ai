@@ -18,6 +18,7 @@ import pytest
 from omegaconf import OmegaConf
 from typer.testing import CliRunner, Result
 
+from configuration import betting_backtest as backtest_configuration
 from configuration.betting_backtest import load_betting_backtest_config
 from data.loader.fixed_snapshot import FixedSnapshot
 from main import app
@@ -29,6 +30,7 @@ from make_features.catalog.loader import load_feature_definitions
 from make_features.catalog.registry import create_feature_registry
 from make_features.reference_raw import result_boundary
 from models.experiments.betting_backtest import BETS_SCHEMA, RACES_SCHEMA
+from models.probability.market_blend import MAX_TOLERANCE
 from models.serialization.betting_inputs import (
     PL_BLEND_COLUMNS,
     PL_PREDICTION_COLUMNS,
@@ -489,6 +491,7 @@ def test_backtest_betting_rejects_pl_files_that_differ_from_the_pins(
         ("estimation.blend_min_races=0", "estimation.blend_min_races"),
         ("estimation.blend_max_iterations=1.5", "estimation.blend_max_iterations"),
         ("estimation.blend_tolerance=0", "estimation.blend_tolerance"),
+        ("estimation.blend_tolerance=1.0e-07", "at most 1e-08"),
         ("estimation.place_width_bands=[1.5,2.0]", "estimation.place_width_bands"),
         ("estimation.place_width_bands=[1.0,2.0,2.0]", "estimation.place_width_bands"),
     ],
@@ -502,6 +505,24 @@ def test_backtest_config_rejects_invalid_values(override: str, message: str) -> 
     )
     with pytest.raises(ValueError, match=message):
         load_betting_backtest_config(CONFIGS, config_name="measure", overrides=(*fixed, override))
+
+
+def test_backtest_config_accepts_the_blend_tolerance_bound() -> None:
+    # configuration imports no business module, so it repeats the bound of market_blend.
+    assert backtest_configuration._MAX_BLEND_TOLERANCE == MAX_TOLERANCE
+    config = load_betting_backtest_config(
+        CONFIGS,
+        config_name="measure",
+        overrides=(
+            "processed_root=processed",
+            "pl_evaluation_path=pl",
+            f"pl_predictions_sha256={'a' * 64}",
+            f"pl_report_sha256={'b' * 64}",
+            "estimation.blend_tolerance=1.0e-08",
+        ),
+    )
+
+    assert cast(dict[str, object], config["estimation"])["blend_tolerance"] == MAX_TOLERANCE
 
 
 def test_measure_profile_repeats_the_fixed_adr042_place_settings() -> None:

@@ -48,6 +48,8 @@ _ESTIMATION_KEYS = {
     "blend_max_iterations",
     "place_width_bands",
 }
+# models.probability.market_blend.MAX_TOLERANCE; configuration imports no business module.
+_MAX_BLEND_TOLERANCE = 1e-8
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 
 
@@ -143,8 +145,10 @@ def _estimation(value: object) -> None:
         if _integer(value[name], f"estimation.{name}") < 1:
             raise ValueError(f"estimation.{name} must be a positive integer")
     (tolerance,) = _numbers([value["blend_tolerance"]], "estimation.blend_tolerance")
-    if tolerance <= 0.0:
-        raise ValueError("estimation.blend_tolerance must be positive")
+    if not 0.0 < tolerance <= _MAX_BLEND_TOLERANCE:
+        raise ValueError(
+            f"estimation.blend_tolerance must be positive and at most {_MAX_BLEND_TOLERANCE:g}"
+        )
     bands = _numbers(value["place_width_bands"], "estimation.place_width_bands")
     if not bands or bands[0] != 1.0 or any(left >= right for left, right in pairwise(bands)):
         raise ValueError("estimation.place_width_bands must start at 1.0 and strictly increase")

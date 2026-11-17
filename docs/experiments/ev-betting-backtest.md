@@ -172,7 +172,7 @@ Issue #92として、ADR-043の方策（閾値・ケリー・予算）を変え�
 合成の係数は2016〜`Y−1`の全レースの予測（`all_columns`）で、補正は2004〜`Y−1`の的中で当てはめた。方法の候補・選択の規則・
 評価期間の中での前の年だけによる選択は、GATE 1の前に人間が決めた。候補は上のB4の診断を見た後に決めたため、結果は楽観的に偏りうる。
 
-実行は上の「実行」と同じコマンド（`measure.yaml`に`estimation`を追加）で、出力は`output/ev-betting-estimates-2016-2025-r4/`。
+実行は上の「実行」と同じコマンド（`measure.yaml`に`estimation`を追加）で、出力は`output/ev-betting-estimates-2016-2025-r6/`。
 
 ### ADR-044の結果
 
@@ -257,14 +257,17 @@ PLの確率をおよそ0.7乗し、市場の確率をおよそ0.4乗して合わ
 
 ### ADR-044の再現の情報
 
-- 実行: 2026-11-17、Python 3.12.12。428秒で、PLの予測の読込と検査が約6秒、`NL_RA_RACE`・`NL_HR_PAY`・`NL_SE_RACE_UMA`の読込が
+- 実行: 2026-11-17、Python 3.12.12。4回目の実行は428秒で、PLの予測の読込と検査が約6秒、`NL_RA_RACE`・`NL_HR_PAY`・`NL_SE_RACE_UMA`の読込が
   約12秒、O1の読込（22年、pass 1が計287秒、pass 2が計35秒）と的中の観測の組み立てが約369秒、当てはめ・4方法の候補・定額・方策・
   指標が約40秒だった。O1の読込はADR-043の計測と同じ処理で、時間の差は実行環境の負荷による。
 - レビューの2回の修正の前後で4回実行した。最初の実行（`output/ev-betting-estimates-2016-2025/`）と比べ、件数・金額・選ばれた方法・
   指標は同じで、違いは合成の係数（2020・2023年、1e-9以下）と`bets.parquet`の小数（1.2e-10以下）だけだった（Newton法のステップの
-  受け入れに丸めの許容を加えたため）。2回目と最後の実行は`provenance`を除いて完全に一致した。3回目の実行は、評価の後の公開
+  受け入れに丸めの許容を加えたため）。2回目と4回目の実行は`provenance`を除いて完全に一致した。3回目の実行は、評価の後の公開
   （stagingのディレクトリの名前の変更）がWindowsのアクセス拒否で失敗し、出力もstagingも残らなかった（既存の公開処理での一時的な競合）。
+- 合成の許容の上限（#94）とテストの修正（#95）の後に5回目（437秒）、そのレビューの修正（設定の値の検査にも上限を加えた）の後に
+  6回目（435秒）を実行した。どちらも4回目と`provenance`を除いて完全に一致した（`report.json`・`bets.parquet`・`races.parquet`）。
+  上限`1e-8`は計測の許容`1e-10`より大きく、結果を変えない。
 - コード: `f4931af`にこの変更を加えたworktree（`report.json`の`provenance.source_sha256`
-  `cf65b9b90b90abeb5aa0d3140c6556bb0d75a9d5d058847a3483e1843ae505f2`）。
+  `f9b7f9701855405e11a51f448ef12b927a075ab7f65b970ae8f64ac25d05f1ab`）。
 - 入力: 上のADR-043の計測と同じPLの評価（`graded-final3`）とsnapshot `098ce3f4…`。合成の当てはめ用のレースは29,754（除外0件）。
-- 出力: `output/ev-betting-estimates-2016-2025-r4/`（`report.json`・`bets.parquet`・`races.parquet`、Gitには含めない）。
+- 出力: `output/ev-betting-estimates-2016-2025-r6/`（`report.json`・`bets.parquet`・`races.parquet`、Gitには含めない）。

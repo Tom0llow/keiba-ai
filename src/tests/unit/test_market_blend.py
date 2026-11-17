@@ -9,6 +9,7 @@ import numpy as np
 import pytest
 
 from models.probability.market_blend import (
+    MAX_TOLERANCE,
     BlendRace,
     blend_probabilities,
     fit_market_blend,
@@ -219,3 +220,35 @@ def test_separable_races_have_no_maximum_and_are_unavailable() -> None:
     fit = fit_market_blend(races, min_races=10, tolerance=1e-10, max_iterations=100)
 
     assert (fit.failure, fit.alpha, fit.beta) == ("not_concave", None, None)
+
+
+@pytest.mark.parametrize("gap", [0.01, 0.1, 1.0, 10.0, 100.0])
+@pytest.mark.parametrize("size", [3, 18])
+def test_separable_races_are_unavailable_at_the_tolerance_bound(gap: float, size: int) -> None:
+    # Issue #94: the gradient falls with the curvature, so a looser tolerance (1e-5 here)
+    # accepted such races before the curvature reached its floor.
+    generator = Random(size * 1_000 + int(gap * 100))
+    races: list[BlendRace] = []
+    for _ in range(200):
+        strengths = sorted((generator.gauss(0.0, 1.0) for _ in range(size)), reverse=True)
+        strengths[0] = strengths[1] + gap
+        market = [generator.gauss(0.0, 1.0) for _ in range(size)]
+        races.append(BlendRace(tuple(_log_softmax(strengths)), tuple(_log_softmax(market)), 0))
+
+    fit = fit_market_blend(races, min_races=10, tolerance=MAX_TOLERANCE, max_iterations=100)
+
+    assert (fit.available, fit.alpha, fit.beta) == (False, None, None)
+
+
+@pytest.mark.parametrize(
+    "tolerance", [0.0, -1e-10, math.nan, math.inf, MAX_TOLERANCE * 1.000001, 1e-5, True]
+)
+def test_the_tolerance_must_be_positive_and_at_most_the_bound(tolerance: float) -> None:
+    with pytest.raises(ValueError, match="tolerance must be positive and at most 1e-08"):
+        fit_market_blend(_races(20), min_races=1, tolerance=tolerance, max_iterations=100)
+
+
+def test_the_tolerance_bound_itself_is_accepted() -> None:
+    fit = fit_market_blend(_races(), min_races=10, tolerance=MAX_TOLERANCE, max_iterations=100)
+
+    assert fit.available

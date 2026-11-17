@@ -29,6 +29,11 @@ _ROUNDING_SLACK = 1e-12
 # coefficients grow while the mean log-likelihood flattens, so its curvature falls towards
 # zero. A real optimum keeps a curvature of the order of the features' within-race variance.
 _MIN_CURVATURE = 1e-6
+# On separable races the gradient falls together with the curvature (the curvature is about
+# the winner's feature gap times the gradient), so a loose tolerance accepts a point before
+# the curvature reaches _MIN_CURVATURE. Separable races were accepted at 1e-5 and never at
+# 1e-6 or below; the bound keeps a hundredfold margin (ADR-044, Issue #94).
+MAX_TOLERANCE = 1e-8
 
 
 @dataclass(frozen=True)
@@ -82,12 +87,17 @@ def fit_market_blend(
     likelihood does not decrease by more than a rounding slack. It converges when the largest absolute gradient of the
     mean log-likelihood is below ``tolerance`` at a point with a negative definite Hessian
     whose curvature is at least ``1e-6`` in every direction (a flatter likelihood has no
-    maximum, as on separable races).
+    maximum, as on separable races). ``tolerance`` is at most ``MAX_TOLERANCE`` so that
+    separable races fail the curvature check before the gradient falls below it.
     """
     _positive_integer(min_races, "min_races")
     _positive_integer(max_iterations, "max_iterations")
-    if isinstance(tolerance, bool) or not math.isfinite(tolerance) or tolerance <= 0.0:
-        raise ValueError("tolerance must be positive and finite")
+    if (
+        isinstance(tolerance, bool)
+        or not math.isfinite(tolerance)
+        or not 0.0 < tolerance <= MAX_TOLERANCE
+    ):
+        raise ValueError(f"tolerance must be positive and at most {MAX_TOLERANCE:g}")
     count = len(races)
     if count < min_races:
         return BlendFit(None, None, count, 0, "insufficient_races")
@@ -207,6 +217,7 @@ def _positive_integer(value: int, name: str) -> None:
 
 
 __all__ = [
+    "MAX_TOLERANCE",
     "BlendFailure",
     "BlendFit",
     "BlendRace",

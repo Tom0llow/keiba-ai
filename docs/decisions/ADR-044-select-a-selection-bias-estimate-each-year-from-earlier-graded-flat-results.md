@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-17
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: Closes #92、Refs #57・#36・#82・#91
+- Related Issues/PRs: Closes #92・#94・#95、Refs #57・#36・#82・#91
 - Supersedes: N/A（ADR-043の決定1・3・4・8・9を、選択した経路について改める）
 - Superseded by: N/A
 
@@ -48,9 +48,11 @@ test年`Y`ごとに`Y`より前の年の重賞の定額の回収率で選ぶ（�
      半分にする（最大30回）。最適点の近くでは1ステップの増加が対数尤度の丸め誤差より小さいため、許容がないと収束の前に止まる。
      レース平均の対数尤度の勾配の最大絶対値が`blend_tolerance`未満で、Hessianが負定値かつ符号を変えた固有値がすべて`1e-6`以上なら
      収束。勝者が常に特徴の最大の馬である（分離できる）レースでは最大点がなく、係数が発散して対数尤度が平らになるため、曲率が
-     `1e-6`を下回ったら負定値でない（`not_concave`）とする。この判定は許容が小さいこと（計測の`1e-10`）を前提とする。分離できる
-     レースでは勾配と曲率が一緒に小さくなるため、許容を`1e-4`程度より緩めると、曲率が下限に達する前に収束と判定されうる。
-     曲率の下限は特徴のスケールに依存する（実データの最適点の最小の曲率は約0.013）。
+     `1e-6`を下回ったら負定値でない（`not_concave`）とする。分離できるレースでは勾配と曲率が一緒に小さくなる（曲率は勝者の特徴の
+     差と勾配の積の程度）ため、許容が緩いと曲率が下限に達する前に収束と判定される。分離できる合成データ（3〜18頭、勝者の差
+     0.01〜100）では、許容`1e-5`で誤って収束し、`1e-6`以下では誤らなかった。このため`blend_tolerance`の上限を`1e-8`とし（100倍の
+     余裕）、超える値を設定の検査・`BettingBacktestSettings`・当てはめのすべてで拒む（#94）。曲率の下限は特徴のスケールに依存する
+     （実データの最適点の最小の曲率は約0.013）。
      使えるレースが`blend_min_races`未満・負定値でない・収束しない年は、合成の方法を使えない（`available`がfalse）。
      最初のtest年は必ず使えない。
    - 重賞で`market_win_odds`のない馬・`p_win ≤ 0`の馬がいるレースは、合成の方法では保留（`blend_market_incomplete`・
@@ -73,6 +75,7 @@ test年`Y`ごとに`Y`より前の年の重賞の定額の回収率で選ぶ（�
    `variant`・`test_year`・`race_id`・`horse_id`・`p_win`・`market_win_odds`・`finish_position`の投影を、`predictions.parquet`の
    2回のhashの照合の間で読む。年`y`の当てはめには`y`より前の年のレースだけを渡す。的中の観測は`place_low`と`place_mid`を渡す。
 6. **設定**: 必須の`estimation`（`blend_min_races`・`blend_tolerance`・`blend_max_iterations`・`place_width_bands`）。
+   `blend_tolerance`は正で`1e-8`以下（決定2）。
    `measure.yaml`は計測の前に`1000`・`1e-10`・`100`・`[1.0, 1.5, 2.0, 3.0, 5.0]`に固定した。
 7. **出力**（ADR-043の決定9を改める）: `report.json`はformat `ev_betting_backtest`・**format_version 2**。
 
