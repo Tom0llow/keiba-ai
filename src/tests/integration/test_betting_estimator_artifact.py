@@ -32,18 +32,27 @@ def _write(directory: Path, manifest: Manifest | None = None) -> str:
     return hashlib.sha256(payload).hexdigest()
 
 
-@pytest.mark.parametrize(("method", "graded"), [("pl_mid", False), ("blend_width", True)])
+@pytest.mark.parametrize(
+    ("method", "graded", "min_hits"),
+    [("pl_mid", False, 1), ("blend_width", True, 1), ("blend_width", True, 2)],
+)
 def test_a_written_artifact_reads_back_with_identical_estimates(
-    tmp_path: Path, method: str, graded: bool
+    tmp_path: Path, method: str, graded: bool, min_hits: int
 ) -> None:
-    record = estimator_record(winner=method, graded=graded)  # type: ignore[arg-type]
+    record = estimator_record(winner=method, graded=graded, min_hits=min_hits)  # type: ignore[arg-type]
     graded_counts = [
         band.hit_count
         for correction in (record.mid, *record.width.corrections)
         for band in correction.bands
     ]
-    # The graded record mixes empty and fitted graded bands; the other has none fitted.
+    # The graded records mix empty and fitted graded bands; the other has none fitted.
     assert (0 in graded_counts, any(graded_counts)) == (True, graded)
+    # With min_hits=2 one place_mid band keeps the all-races quantiles and the other its
+    # own, and every fitted width band keeps the all-races quantiles.
+    assert record.settings.min_hits == min_hits
+    mid_counts = [band.hit_count for band in record.mid.bands]
+    assert (1 in mid_counts, 2 in mid_counts) == (graded, graded)
+    assert any(0 < count < min_hits for count in graded_counts) == (min_hits > 1)
     directory = tmp_path / "estimator"
     directory.mkdir()
 

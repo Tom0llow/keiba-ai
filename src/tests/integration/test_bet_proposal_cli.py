@@ -12,7 +12,7 @@ import json
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import timedelta
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -38,6 +38,7 @@ from tests.integration.test_pl_prediction_cli import (
     CLOSE_09,
     CLOSE_10,
     DAY,
+    FREEZE_09,
     FREEZE_10,
     MORNING,
     RACE_09,
@@ -316,6 +317,25 @@ def test_a_prediction_not_published_by_sales_close_is_held(
     assert clock.now > CLOSE_09
     assert clock.now <= CLOSE_10
     assert sorted(path.name for path in output.iterdir()) == [RACE_10]
+
+
+def test_a_published_prediction_is_not_examined_before_its_freeze(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    """Both predictions exist from the morning; each race is proposed only at its freeze."""
+    clock = _Clock(MORNING, [])
+
+    result, output = _run(proposals, tmp_path, clock)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    poll = timedelta(seconds=2)
+    for race, freeze in ((RACE_09, FREEZE_09), (RACE_10, FREEZE_10)):
+        assert lines[race]["status"] == "proposed"
+        assert lines[race]["after_sales_close"] is False
+        computed_at = datetime.fromisoformat(_proposal(output, race)["computed_at"])
+        assert freeze <= computed_at < freeze + poll
+    assert FREEZE_10 <= clock.now < FREEZE_10 + poll
 
 
 def _copied(proposals: Proposals, tmp_path: Path, edit: Callable[[Payload], None]) -> Path:

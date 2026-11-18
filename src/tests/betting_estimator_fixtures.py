@@ -95,19 +95,24 @@ def flat_results(years: Sequence[int], winner: Method = "blend_width") -> Backte
 
 
 def estimator_record(
-    target_year: int = 2025, winner: Method = "blend_width", *, graded: bool = False
+    target_year: int = 2025,
+    winner: Method = "blend_width",
+    *,
+    graded: bool = False,
+    min_hits: int = 1,
 ) -> BettingEstimatorRecord:
     """Return a fitted record for ``target_year`` from the scenario hits and blend races.
 
     With ``graded`` the hit race of every other year is graded, so the graded fits hold
-    both empty and fitted bands.
+    both empty and fitted bands. With ``graded`` and ``min_hits=2`` some fitted graded
+    bands have fewer hits than ``min_hits`` and keep the all-races quantiles.
     """
     test_years = tuple(range(target_year - 2, target_year))
     graded_ids = (
         frozenset(hit.race_id for hit in scenario_hits(target_year - 2)) if graded else frozenset()
     )
     record, _ = fit_betting_estimator(
-        settings=estimator_settings(test_years),
+        settings=estimator_settings(test_years, min_hits=min_hits),
         results=flat_results(test_years, winner),
         hits=varied_hits(range(2021, target_year)),
         graded_race_ids=graded_ids,
