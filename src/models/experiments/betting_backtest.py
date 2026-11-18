@@ -15,10 +15,10 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from datetime import datetime
 from itertools import pairwise
-from typing import Literal
 
 import pyarrow as pa
 
+from models.betting.methods import BASELINE_METHOD, METHODS, Method, select_method
 from models.betting.policy import Bet, BetCandidate, BettingPolicy, place_probability
 from models.betting.policy import decide_races as decide_policy_races
 from models.betting.settlement import SettledBet, settle_bets
@@ -54,6 +54,7 @@ from models.probability.market_blend import (
 from models.serialization.betting_inputs import (
     BLEND_EXCLUSIONS,
     BlendTraining,
+    FreezeQuotes,
     HorsePrediction,
     RacePrediction,
     freeze_quotes,
@@ -70,10 +71,6 @@ from models.serialization.final_odds_observations import (
 REPORT_FORMAT = "ev_betting_backtest"
 REPORT_FORMAT_VERSION = 2
 NO_PREDICTION_STAGES = ("target_outcome", "target_pre_freeze", "other_held", "unattributed")
-Method = Literal["pl_mid", "blend_mid", "pl_width", "blend_width"]
-# The fixed order also breaks ties: the current ADR-043 method first, the most changed last.
-METHODS: tuple[Method, ...] = ("pl_mid", "blend_mid", "pl_width", "blend_width")
-BASELINE_METHOD: Method = "pl_mid"
 _BET_TYPE_ORDER = {"win": 0, "place": 1}
 
 
@@ -169,8 +166,8 @@ class _Flat:
 
 
 @dataclass(frozen=True)
-class _YearEstimators:
-    """Hold one test year's fits, each from data before that year only."""
+class YearEstimators:
+    """Hold one year's fits, each from data before that year only."""
 
     mid: FinalOddsCorrection
     width: PlaceWidthCorrection
@@ -223,17 +220,17 @@ def run_betting_backtest(
         raise ValueError("graded races must fall within test_years")
     if not set(predictions) <= set(by_id):
         raise ValueError("PL predictions contain a race outside the graded test races")
-    width_observations = _width_observations(training_hits)
+    widths = width_observations(training_hits)
     estimators = {
-        year: _year_estimators(
-            year, settings, training_hits, width_observations, blend_training, graded_race_ids
+        year: fit_year_estimators(
+            year, settings, training_hits, widths, blend_training, graded_race_ids
         )
         for year in test_years
     }
     results: dict[Method, dict[int, _MethodYear]] = {method: {} for method in METHODS}
     for method in METHODS:
         for year in test_years:
-            if _available(method, estimators[year]):
+            if method_available(method, estimators[year]):
                 results[method][year] = _method_year(
                     method,
                     year,
@@ -301,15 +298,19 @@ def run_betting_backtest(
     )
 
 
-def _year_estimators(
+def fit_year_estimators(
     year: int,
     settings: BettingBacktestSettings,
     hits: Sequence[HitObservation],
     width_observations: Sequence[PlaceWidthObservation],
     blend_training: BlendTraining,
     graded_race_ids: frozenset[str],
-) -> _YearEstimators:
-    """Fit one test year's corrections and blend from data before ``year`` only."""
+) -> YearEstimators:
+    """Fit one year's corrections and blend from data before ``year`` only.
+
+    ``year`` may follow the last test year (the race-day artifact, ADR-045): the blend
+    then uses every test year and the corrections every hit from ``train_start_year``.
+    """
     earlier_years = [y for y in settings.test_years if y < year]
     blend_races: list[BlendRace] = [
         race for y in earlier_years for race in blend_training.races.get(y, ())
@@ -318,7 +319,7 @@ def _year_estimators(
         reason: sum(blend_training.excluded.get(y, {}).get(reason, 0) for y in earlier_years)
         for reason in BLEND_EXCLUSIONS
     }
-    return _YearEstimators(
+    return YearEstimators(
         mid=_place_correction(hits, year, settings, graded_race_ids),
         width=fit_place_width_correction(
             [
@@ -377,7 +378,7 @@ def _place_correction(
     )
 
 
-def _width_observations(hits: Sequence[HitObservation]) -> list[PlaceWidthObservation]:
+def width_observations(hits: Sequence[HitObservation]) -> list[PlaceWidthObservation]:
     """Pair every ``place_mid`` hit with its ``place_low`` partner to give its width.
 
     A hit whose recovered ``OddsHigh`` is below ``OddsLow`` has no width and is not used.
@@ -398,7 +399,13 @@ def _width_observations(hits: Sequence[HitObservation]) -> list[PlaceWidthObserv
     return observations
 
 
-def _available(method: Method, estimators: _YearEstimators) -> bool:
+# Existing tests call the fits by their former private names.
+_year_estimators = fit_year_estimators
+_width_observations = width_observations
+
+
+def method_available(method: Method, estimators: YearEstimators) -> bool:
+    """Return whether ``method`` can run with these fits (a blend method needs the blend)."""
     return not method.startswith("blend") or estimators.blend.available
 
 
@@ -408,7 +415,7 @@ def _method_year(
     races: Sequence[GradedRaceInput],
     predictions: Mapping[str, RacePrediction],
     target_hold_stages: Mapping[str, str],
-    estimators: _YearEstimators,
+    estimators: YearEstimators,
     settings: BettingBacktestSettings,
 ) -> _MethodYear:
     """Build one method's candidates of one year, score them flat and apply the policy."""
@@ -458,7 +465,7 @@ def _race_candidates(
     race: GradedRaceInput,
     prediction: RacePrediction,
     method: Method,
-    estimators: _YearEstimators,
+    estimators: YearEstimators,
     settings: BettingBacktestSettings,
 ) -> tuple[list[BetCandidate], bool, int]:
     """Return one race's candidates, whether place bets are offered and invalid widths.
@@ -487,9 +494,30 @@ def _race_candidates(
             market is not None and quote is not None and not math.isclose(market, quote)
         ):
             raise ObservationHold("market_odds_mismatch", f"{race_id}: horse {number}")
-    numbers = sorted(entrants)
-    probabilities = _probabilities(race_id, method, numbers, entrants, horses, estimators)
-    entrant_count = len(entrants)
+    by_number = {number: horses[horse_id] for number, horse_id in entrants.items()}
+    probabilities = method_probabilities(race_id, method, by_number, estimators)
+    return race_bet_candidates(race_id, freeze, quotes, probabilities, method, estimators)
+
+
+def race_bet_candidates(
+    race_id: str,
+    freeze: datetime,
+    quotes: FreezeQuotes,
+    probabilities: Mapping[str, tuple[float, float, float]],
+    method: Method,
+    estimators: YearEstimators,
+) -> tuple[list[BetCandidate], bool, int]:
+    """Return one race's win and place candidates under ``method``.
+
+    ``probabilities`` maps every entrant's horse number to its (win, top-two,
+    top-three) probability; the entrant count picks the place probability (ADR-042
+    Decision 7). A horse without a win quote gets no win candidate, and one without a
+    place quote, or with an invalid width under a width method, gets no place
+    candidate. Returns the candidates, whether place bets are offered, and the number
+    of invalid widths.
+    """
+    numbers = sorted(probabilities)
+    entrant_count = len(numbers)
     place_offered = entrant_count > 4
     candidates: list[BetCandidate] = []
     width_invalid = 0
@@ -520,16 +548,23 @@ def _race_candidates(
     return candidates, place_offered, width_invalid
 
 
-def _probabilities(
+def method_probabilities(
     race_id: str,
     method: Method,
-    numbers: Sequence[str],
-    entrants: Mapping[str, str],
     horses: Mapping[str, HorsePrediction],
-    estimators: _YearEstimators,
+    estimators: YearEstimators,
 ) -> dict[str, tuple[float, float, float]]:
-    """Return each horse number's (win, top-two, top-three) probability under ``method``."""
-    predicted = [horses[entrants[number]] for number in numbers]
+    """Return each horse number's (win, top-two, top-three) probability under ``method``.
+
+    ``horses`` maps every entrant's horse number to its prediction. A blend method
+    uses each horse's ``market_win_odds`` as the market.
+
+    Raises:
+        ObservationHold: ``blend_market_incomplete`` or ``blend_zero_probability`` for a
+            blend method when a horse has no positive market odds or no positive ``p_win``.
+    """
+    numbers = sorted(horses)
+    predicted = [horses[number] for number in numbers]
     if not method.startswith("blend"):
         return {
             number: (horse.p_win, horse.p_top2, horse.p_top3)
@@ -609,23 +644,22 @@ def _selection(
     results: Mapping[Method, Mapping[int, _MethodYear]], test_years: Sequence[int]
 ) -> dict[int, tuple[Method, tuple[int, ...]]]:
     """Return each test year's method and comparison years (ADR-044 Decision 4)."""
-    selection: dict[int, tuple[Method, tuple[int, ...]]] = {}
-    for year in test_years:
-        years = tuple(y for y in test_years if y < year and all(y in results[m] for m in METHODS))
-        best: Method = BASELINE_METHOD
-        best_totals: tuple[int, int] | None = None
-        if years:
-            for method in METHODS:
-                receipt, stake = _flat_totals(results[method], years)
-                if stake == 0:
-                    continue
-                # receipt/stake > best_receipt/best_stake, compared exactly in integers.
-                if best_totals is None or receipt * best_totals[1] > best_totals[0] * stake:
-                    best, best_totals = method, (receipt, stake)
-        if year not in results[best]:
-            best = BASELINE_METHOD
-        selection[year] = (best, years)
-    return selection
+    flat = {
+        method: {
+            year: (result.flat.receipt_yen, result.flat.stake_yen)
+            for year, result in results[method].items()
+        }
+        for method in METHODS
+    }
+    return {
+        year: select_method(
+            flat,
+            test_years,
+            year,
+            available=frozenset(method for method in METHODS if year in results[method]),
+        )
+        for year in test_years
+    }
 
 
 def _flat_totals(results: Mapping[int, _MethodYear], years: Sequence[int]) -> tuple[int, int]:
@@ -671,7 +705,7 @@ def _common_payload(
 def _method_payload(
     method: Method,
     results: Mapping[int, _MethodYear],
-    estimators: Mapping[int, _YearEstimators],
+    estimators: Mapping[int, YearEstimators],
     test_years: Sequence[int],
     settings: BettingBacktestSettings,
 ) -> dict[str, object]:
@@ -704,7 +738,7 @@ def _method_payload(
     }
 
 
-def _blend_payload(estimators: _YearEstimators) -> dict[str, object]:
+def _blend_payload(estimators: YearEstimators) -> dict[str, object]:
     fit = estimators.blend
     return {
         "alpha": fit.alpha,

@@ -63,6 +63,15 @@ def load_betting_backtest_config(
     with initialize_config_dir(version_base="1.3", config_dir=str(config_dir.resolve())):
         config = compose(config_name=config_name, overrides=list(overrides))
         raw = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
+    return validate_betting_backtest_config(raw)
+
+
+def validate_betting_backtest_config(raw: object) -> dict[str, object]:
+    """Return ``raw`` after checking its exact keys, types and ordered values.
+
+    The race-day estimator (ADR-045) applies the same checks to the ``config`` that a
+    backtest report records.
+    """
     if not isinstance(raw, dict) or set(raw) != _KEYS:
         raise ValueError("betting backtest config has missing or unsupported keys")
     values = cast(dict[str, object], raw)

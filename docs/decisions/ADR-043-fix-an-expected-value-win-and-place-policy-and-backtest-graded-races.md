@@ -266,7 +266,8 @@ CLIと`models/betting/`などの新しいモジュールを削除すれば戻せ
 
 - [ ] 予測がない重賞への予測の作成（#91）。
 - [x] 選ばれる買い目での確率（単勝の高いオッズ帯）とオッズ（複勝）の見積もりの改善（#92、ADR-044。#82は継続）。
-- [ ] 当日の購入案の提示（#81）と実購入額の管理（#56）。
+- [x] 当日の購入案の提示（#81、[ADR-045](ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)。提示額は0円）。
+- [ ] 実購入額の管理（#56）。
 
 ## Decision History
 

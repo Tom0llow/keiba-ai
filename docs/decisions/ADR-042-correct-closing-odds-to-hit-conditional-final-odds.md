@@ -201,7 +201,7 @@ freezeの後の票で変わる。1円あたりの期待値は`P(的中) × E[確
 
 ## Follow-up Actions
 
-- [ ] 補正の成果物の保存と、当日の購入案への適用（#81、#36と合わせて設計）。
+- [x] 補正の成果物の保存と、当日の購入案への適用（#81、[ADR-045](ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)）。
 - [ ] 発表の古さ・説明変数・学習の窓の比較（#82）。
 - [ ] 未採用の券種のB4での扱いを決める（#36）。
 

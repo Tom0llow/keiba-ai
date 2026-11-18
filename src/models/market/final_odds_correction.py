@@ -8,7 +8,7 @@ combination winning; data loading, folds and report assembly belong elsewhere.
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from itertools import pairwise
 from math import ceil, exp, isfinite, log
 from numbers import Real
@@ -52,6 +52,15 @@ class FinalOddsCorrection:
         repr=False,
         compare=False,
     )
+
+    @property
+    def quantile_fallback(self) -> FinalOddsCorrection | None:
+        """Return the ``all`` correction a graded correction falls back to, if any."""
+        return self._quantile_fallback
+
+    def with_quantile_fallback(self, fallback: FinalOddsCorrection) -> FinalOddsCorrection:
+        """Return this correction falling back to ``fallback``, as a graded fit does."""
+        return replace(self, _quantile_fallback=fallback)
 
     def estimate(self, freeze_odds: float) -> FinalOddsEstimate:
         """Return the expected final odds and empirical ratio interval for one quote."""

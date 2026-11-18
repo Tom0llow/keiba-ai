@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 from collections.abc import Callable, Mapping, Sequence
+from dataclasses import dataclass
 from pathlib import Path
 from time import perf_counter
 from typing import TYPE_CHECKING, Annotated, cast
@@ -14,10 +16,13 @@ import typer
 if TYPE_CHECKING:
     from datetime import datetime
 
-    from data.loader.fixed_snapshot import PublicationReader
+    from data.loader.fixed_snapshot import FixedSnapshot, PublicationReader
     from models.experiments.betting_backtest import BettingBacktestSettings
+    from models.serialization.final_odds_observations import HitObservation
 
 type _Identity = Callable[[Mapping[str, object]], str]
+_HEX64 = re.compile(r"[0-9a-f]{64}")
+_SNAPSHOT_ID = re.compile(r"[A-Za-z0-9_-]+")
 _COMMAND = "model backtest-betting"
 
 
@@ -36,7 +41,6 @@ def model_backtest_betting(
     from data.saver.write_parquet import write_parquet
     from data.storage.directory_publisher import publish_directory
     from make_datamart.tables.reference import read_reference_datamart_target_holds
-    from make_features.real_market import KEY_COLUMNS
     from make_features.reference_raw import race_identity
     from make_features.reference_rules import REFERENCE_BASES
     from models.experiments.betting_backtest import (
@@ -55,20 +59,9 @@ def model_backtest_betting(
         race_predictions,
     )
     from models.serialization.final_odds_observations import (
-        HR_COLUMNS,
         HR_TABLE,
-        O1_COLUMNS,
         O1_TABLE,
-        RA_COLUMNS,
         RA_TABLE,
-        HitObservation,
-        ObservationHold,
-        build_race_observations,
-        race_freeze,
-    )
-    from models.serialization.race_subsets import (
-        JRA_FLAT_GRADED_STAKES_V1,
-        classify_nl_ra_race_rows,
     )
 
     started = perf_counter()
@@ -127,23 +120,21 @@ def model_backtest_betting(
             blend_races=sum(len(races) for races in blend_training.races.values()),
         )
         venues = cast(list[str], REFERENCE_BASES["venues"])
-        first_year, last_year = settings.train_start_year, settings.test_years[-1]
-        start, end = f"{first_year}0101", f"{last_year}1231"
-        ra_by_race = _by_race(
-            snapshot.read_period(RA_TABLE, columns=RA_COLUMNS, start=start, end=end, venues=venues),
-            race_identity,
+        last_year = settings.test_years[-1]
+        training = _read_training(
+            snapshot,
+            first_year=settings.train_start_year,
+            last_year=last_year,
+            max_publication_age_seconds=settings.max_publication_age_seconds,
+            graded_o1_years=frozenset(settings.test_years),
+            started=started,
         )
-        hr_by_race = _by_race(
-            snapshot.read_period(HR_TABLE, columns=HR_COLUMNS, start=start, end=end, venues=venues),
-            race_identity,
+        ra_by_race, hr_by_race = training.ra_by_race, training.hr_by_race
+        graded_ids, training_hits, graded_o1 = (
+            training.graded_ids,
+            training.hits,
+            training.graded_o1,
         )
-        graded_ids = classify_nl_ra_race_rows(
-            [
-                rows[0]
-                for rows in (_distinct(rows) for rows in ra_by_race.values())
-                if len(rows) == 1
-            ]
-        ).subsets[JRA_FLAT_GRADED_STAKES_V1]
         test_graded = sorted(
             race_id for race_id in graded_ids if int(race_id[:4]) in settings.test_years
         )
@@ -155,43 +146,14 @@ def model_backtest_betting(
                     SE_TABLE,
                     columns=SE_COLUMNS,
                     start=f"{settings.test_years[0]}0101",
-                    end=end,
+                    end=f"{last_year}1231",
                     venues=venues,
                 )
                 if race_identity(row) in wanted
             ],
             race_identity,
         )
-        _progress("read_races", started, races=len(ra_by_race), graded_test_races=len(test_graded))
-        o1 = snapshot.publication_reader(
-            O1_TABLE, key_columns=KEY_COLUMNS, value_columns=O1_COLUMNS, venues=venues
-        )
-        training_hits: list[HitObservation] = []
-        graded_o1: dict[str, list[dict[str, object]]] = {}
-        for year in range(first_year, last_year + 1):
-            race_ids = sorted(race_id for race_id in ra_by_race if race_id[:4] == f"{year:04d}")
-            freezes: dict[str, datetime] = {}
-            for race_id in race_ids:
-                try:
-                    freezes[race_id] = race_freeze(race_id, ra_by_race[race_id])
-                except ObservationHold:
-                    continue  # the race has no freeze; it gives no hits and is held if graded
-            o1_rows = _publications(o1, year, freezes, started, race_identity)
-            for race_id in race_ids:
-                observations = build_race_observations(
-                    race_id,
-                    ra_rows=ra_by_race[race_id],
-                    o1_rows=o1_rows.get(race_id, ()),
-                    o2_rows=(),
-                    hr_rows=hr_by_race.get(race_id, ()),
-                    max_publication_age_seconds=settings.max_publication_age_seconds,
-                )
-                training_hits.extend(
-                    hit for hit in observations.hits if hit.bet_type in ("place_mid", "place_low")
-                )
-                if race_id in wanted:
-                    graded_o1[race_id] = o1_rows.get(race_id, [])
-            del o1_rows
+        _progress("read_se", started, graded_test_races=len(test_graded))
         backtest = run_betting_backtest(
             settings=settings,
             graded_races=[
@@ -241,6 +203,181 @@ def model_backtest_betting(
     typer.echo(_summary(output_path, len(test_graded), backtest.report, started))
 
 
+_FIT_COMMAND = "model fit-betting-estimator"
+_FIT_TABLES = ("NL_RA_RACE", "NL_HR_PAY", "ARCHIVE_O1_ODDS_TANFUKUWAKU")
+_RECORDED = "the backtest report's recorded inputs"
+
+
+def model_fit_betting_estimator(
+    backtest_path: Annotated[Path, typer.Option("--backtest")],
+    backtest_report_sha256: Annotated[str, typer.Option("--backtest-report-sha256")],
+    pl_evaluation_path: Annotated[Path, typer.Option("--pl-evaluation")],
+    processed_root: Annotated[Path, typer.Option("--processed-root")],
+    output_path: Annotated[Path, typer.Option("--output")],
+) -> None:
+    """Save the race-day estimator for the year after a backtest's last test year (ADR-045).
+
+    Every setting comes from the pinned backtest report; its recorded paths are not used.
+    """
+    # Keep NumPy and Arrow out of imports and CLI help.
+    from configuration.betting_backtest import validate_betting_backtest_config
+    from data.loader.fixed_snapshot import FixedSnapshot
+    from data.loader.read_parquet import read_parquet
+    from data.storage.directory_publisher import publish_directory
+    from models.artifacts.betting_estimator import (
+        read_betting_estimator,
+        require_storable_width_bands,
+        write_betting_estimator,
+    )
+    from models.experiments.betting_estimator import (
+        backtest_results,
+        fit_betting_estimator,
+        require_same_estimates,
+    )
+    from models.experiments.provenance import experiment_provenance
+    from models.serialization.betting_inputs import PL_BLEND_COLUMNS, blend_training_races
+
+    started = perf_counter()
+    try:
+        if output_path.exists() or output_path.is_symlink():
+            raise ValueError("output must be a new non-symbolic-link path")
+        if not output_path.parent.is_dir():
+            raise ValueError("output parent directory must already exist")
+        if _HEX64.fullmatch(backtest_report_sha256) is None:
+            raise ValueError("--backtest-report-sha256 must be 64 lowercase hex digits")
+        _reject_output_inside(
+            output_path,
+            (backtest_path, processed_root, pl_evaluation_path),
+            what="estimator output",
+        )
+        report_bytes = _pinned_bytes(
+            backtest_path / "report.json",
+            backtest_report_sha256,
+            source="--backtest-report-sha256",
+        )
+        try:
+            report = json.loads(report_bytes)
+        except (UnicodeDecodeError, json.JSONDecodeError) as exc:
+            raise ValueError("backtest report is not valid JSON") from exc
+        if not isinstance(report, dict):
+            raise ValueError("backtest report must be a JSON object")
+        config = validate_betting_backtest_config(report.get("config"))
+        settings = _settings(config)
+        # Fail before any row is read when the artifact could not store the bands.
+        require_storable_width_bands(settings.place_width_bands)
+        results = backtest_results(report, settings.test_years)
+        inputs = _backtest_inputs(report.get("inputs"), config)
+        pl = cast(dict[str, str], inputs["pl_evaluation"])
+        for name, digest in (
+            ("report.json", "report_sha256"),
+            ("predictions.parquet", "predictions_sha256"),
+        ):
+            _pinned_bytes(pl_evaluation_path / name, pl[digest], source=_RECORDED)
+        recorded = cast(dict[str, object], inputs["snapshot"])
+        snapshot = FixedSnapshot(processed_root, snapshot_id=cast(str, recorded["snapshot_id"]))
+        _reject_output_inside(output_path, (snapshot.path,), what="estimator output")
+        # Hash the tables before any row is read; manifest() rechecks them at the end.
+        snapshot.pin(_FIT_TABLES)
+        pinned = cast(dict[str, dict[str, str]], snapshot.pinned_manifest()["tables"])
+        recorded_tables = cast(dict[str, dict[str, str]], recorded["tables"])
+        for table in _FIT_TABLES:
+            if pinned[table]["sha256"] != recorded_tables[table]["sha256"]:
+                raise ValueError(f"snapshot {table} differs from the backtest's input")
+        blend_rows = read_parquet(
+            pl_evaluation_path / "predictions.parquet", columns=PL_BLEND_COLUMNS
+        ).to_pylist()
+        blend_training = blend_training_races(
+            blend_rows, variant=pl["variant"], test_years=settings.test_years
+        )
+        del blend_rows
+        _pinned_bytes(
+            pl_evaluation_path / "predictions.parquet", pl["predictions_sha256"], source=_RECORDED
+        )
+        _progress(
+            "read_predictions",
+            started,
+            blend_races=sum(len(races) for races in blend_training.races.values()),
+        )
+        training = _read_training(
+            snapshot,
+            first_year=settings.train_start_year,
+            last_year=settings.test_years[-1],
+            max_publication_age_seconds=settings.max_publication_age_seconds,
+            graded_o1_years=frozenset(),
+            started=started,
+        )
+        manifest = snapshot.manifest()
+        tables = cast(dict[str, dict[str, str]], manifest["tables"])
+        sources = {
+            "backtest_report_sha256": backtest_report_sha256,
+            "pl_evaluation": {
+                "report_sha256": pl["report_sha256"],
+                "predictions_sha256": pl["predictions_sha256"],
+                "variant": pl["variant"],
+            },
+            "snapshot": {
+                "snapshot_id": manifest["snapshot_id"],
+                "tables": {table: tables[table]["sha256"] for table in _FIT_TABLES},
+            },
+        }
+        record, fitted = fit_betting_estimator(
+            settings=settings,
+            results=results,
+            hits=training.hits,
+            graded_race_ids=training.graded_ids,
+            blend_training=blend_training,
+            sources=sources,
+            provenance=experiment_provenance(),
+        )
+        _progress("fit", started, target_year=record.target_year, method=record.method)
+        with publish_directory(output_path) as staging:
+            digest = write_betting_estimator(staging, record)
+            written = read_betting_estimator(staging, expected_manifest_sha256=digest)
+            require_same_estimates(fitted, written.record, training.hits)
+    except KeyboardInterrupt as exc:
+        typer.echo(f"{_FIT_COMMAND} failed: interrupted", err=True)
+        raise typer.Exit(code=130) from exc
+    except Exception as exc:
+        # Every failure, expected or not, removes staging and reports one line.
+        typer.echo(f"{_FIT_COMMAND} failed: {' '.join(str(exc).split())}", err=True)
+        raise typer.Exit(code=1) from exc
+    typer.echo(
+        f"ev betting estimator: {output_path} manifest_sha256={digest} "
+        f"target_year={record.target_year} method={record.method} "
+        f"seconds={perf_counter() - started:.1f}"
+    )
+
+
+def _backtest_inputs(value: object, config: Mapping[str, object]) -> dict[str, object]:
+    """Return a backtest report's PL evaluation and snapshot identities, checked."""
+    if not isinstance(value, dict):
+        raise ValueError("backtest report inputs must be an object")
+    pl = value.get("pl_evaluation")
+    snapshot = value.get("snapshot")
+    if (
+        not isinstance(pl, dict)
+        or pl.get("report_sha256") != config["pl_report_sha256"]
+        or pl.get("predictions_sha256") != config["pl_predictions_sha256"]
+        or pl.get("variant") != config["pl_variant"]
+    ):
+        raise ValueError("backtest report PL evaluation inputs differ from its config")
+    tables = snapshot.get("tables") if isinstance(snapshot, dict) else None
+    if (
+        not isinstance(snapshot, dict)
+        or not isinstance(snapshot.get("snapshot_id"), str)
+        or _SNAPSHOT_ID.fullmatch(cast(str, snapshot["snapshot_id"])) is None
+        or not isinstance(tables, dict)
+        or any(
+            not isinstance(tables.get(table), dict)
+            or not isinstance(tables[table].get("sha256"), str)
+            or _HEX64.fullmatch(tables[table]["sha256"]) is None
+            for table in _FIT_TABLES
+        )
+    ):
+        raise ValueError("backtest report snapshot inputs are invalid")
+    return {"pl_evaluation": pl, "snapshot": snapshot}
+
+
 def _settings(config: Mapping[str, object]) -> BettingBacktestSettings:
     from models.betting.policy import BettingPolicy
     from models.experiments.betting_backtest import BettingBacktestSettings
@@ -277,18 +414,22 @@ def _settings(config: Mapping[str, object]) -> BettingBacktestSettings:
     )
 
 
-def _reject_output_inside(output_path: Path, inputs: Sequence[Path]) -> None:
+def _reject_output_inside(
+    output_path: Path, inputs: Sequence[Path], *, what: str = "backtest output"
+) -> None:
     """Reject an output that equals or lies inside an input directory, after resolution."""
     target = output_path.resolve()
     for path in inputs:
         if target.is_relative_to(path.resolve()):
-            raise ValueError("backtest output must stay outside every input directory")
+            raise ValueError(f"{what} must stay outside every input directory")
 
 
-def _pinned_bytes(path: Path, expected_sha256: str) -> bytes:
+def _pinned_bytes(
+    path: Path, expected_sha256: str, *, source: str = "the configured value"
+) -> bytes:
     data = path.read_bytes()
     if hashlib.sha256(data).hexdigest() != expected_sha256:
-        raise ValueError(f"{path.name} SHA-256 differs from the configured value")
+        raise ValueError(f"{path.name} SHA-256 differs from {source}")
     return data
 
 
@@ -358,6 +499,98 @@ def _distinct(rows: Sequence[dict[str, object]]) -> list[dict[str, object]]:
     for row in rows:
         unique.setdefault(tuple(sorted(row.items())), row)
     return list(unique.values())
+
+
+@dataclass(frozen=True)
+class _Training:
+    """Hold the rows and hit observations that fit the place corrections."""
+
+    ra_by_race: dict[str, list[dict[str, object]]]
+    hr_by_race: dict[str, list[dict[str, object]]]
+    graded_ids: frozenset[str]
+    hits: list[HitObservation]
+    graded_o1: dict[str, list[dict[str, object]]]
+
+
+def _read_training(
+    snapshot: FixedSnapshot,
+    *,
+    first_year: int,
+    last_year: int,
+    max_publication_age_seconds: int,
+    graded_o1_years: frozenset[int],
+    started: float,
+) -> _Training:
+    """Read RA, HR and O1 from ``first_year`` through ``last_year`` (inclusive).
+
+    Returns the races grouped by key, the graded subset (races with one distinct RA row,
+    classified by ``jra_flat_graded_stakes_v1``), every race's ``place_mid`` and
+    ``place_low`` hits, and the freeze-time O1 rows of graded races in
+    ``graded_o1_years``. O1 is read per year in ADR-042's two passes.
+    """
+    from make_features.real_market import KEY_COLUMNS
+    from make_features.reference_raw import race_identity
+    from make_features.reference_rules import REFERENCE_BASES
+    from models.serialization.final_odds_observations import (
+        HR_COLUMNS,
+        HR_TABLE,
+        O1_COLUMNS,
+        O1_TABLE,
+        RA_COLUMNS,
+        RA_TABLE,
+        ObservationHold,
+        build_race_observations,
+        race_freeze,
+    )
+    from models.serialization.race_subsets import (
+        JRA_FLAT_GRADED_STAKES_V1,
+        classify_nl_ra_race_rows,
+    )
+
+    venues = cast(list[str], REFERENCE_BASES["venues"])
+    start, end = f"{first_year}0101", f"{last_year}1231"
+    ra_by_race = _by_race(
+        snapshot.read_period(RA_TABLE, columns=RA_COLUMNS, start=start, end=end, venues=venues),
+        race_identity,
+    )
+    hr_by_race = _by_race(
+        snapshot.read_period(HR_TABLE, columns=HR_COLUMNS, start=start, end=end, venues=venues),
+        race_identity,
+    )
+    graded_ids = classify_nl_ra_race_rows(
+        [rows[0] for rows in (_distinct(rows) for rows in ra_by_race.values()) if len(rows) == 1]
+    ).subsets[JRA_FLAT_GRADED_STAKES_V1]
+    _progress("read_races", started, races=len(ra_by_race), graded_races=len(graded_ids))
+    o1 = snapshot.publication_reader(
+        O1_TABLE, key_columns=KEY_COLUMNS, value_columns=O1_COLUMNS, venues=venues
+    )
+    hits: list[HitObservation] = []
+    graded_o1: dict[str, list[dict[str, object]]] = {}
+    for year in range(first_year, last_year + 1):
+        race_ids = sorted(race_id for race_id in ra_by_race if race_id[:4] == f"{year:04d}")
+        freezes: dict[str, datetime] = {}
+        for race_id in race_ids:
+            try:
+                freezes[race_id] = race_freeze(race_id, ra_by_race[race_id])
+            except ObservationHold:
+                continue  # the race has no freeze; it gives no hits and is held if graded
+        o1_rows = _publications(o1, year, freezes, started, race_identity)
+        for race_id in race_ids:
+            observations = build_race_observations(
+                race_id,
+                ra_rows=ra_by_race[race_id],
+                o1_rows=o1_rows.get(race_id, ()),
+                o2_rows=(),
+                hr_rows=hr_by_race.get(race_id, ()),
+                max_publication_age_seconds=max_publication_age_seconds,
+            )
+            hits.extend(
+                hit for hit in observations.hits if hit.bet_type in ("place_mid", "place_low")
+            )
+            if year in graded_o1_years and race_id in graded_ids:
+                graded_o1[race_id] = o1_rows.get(race_id, [])
+        del o1_rows
+    return _Training(ra_by_race, hr_by_race, frozenset(graded_ids), hits, graded_o1)
 
 
 def _publications(

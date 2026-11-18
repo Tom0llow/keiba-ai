@@ -231,7 +231,7 @@ ADR-043のversion 1の実装へ戻す（このADRの変更を取り消す）。
 
 ## Follow-up Actions
 
-- [ ] 当日の購入案への適用（#81）で、どの推定の方法を使うかを決める。
+- [x] 当日の購入案への適用（#81）で、どの推定の方法を使うかを決める（[ADR-045](ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)。この規則を当日の年へ延長する）。
 
 ## Decision History
 

@@ -114,6 +114,15 @@ coherent responsibility and have a name that describes that responsibility.
 - ADR-044's PL-market blend belongs to `models/probability/market_blend.py` and its
   width-banded place correction to `models/market/place_width_correction.py`; both stay pure.
   A test year's fits and method selection use only data from earlier years.
+- ADR-045's method names and Decision-4 selection belong to `models/betting/methods.py`
+  (standard library only). The race-day estimator artifact belongs to
+  `models/artifacts/betting_estimator.py` (like `pl_model.py`, it owns its small byte I/O
+  and never imports `data` or the CLI); its fit from a backtest report to
+  `models/experiments/betting_estimator.py` and one race's zero-yen proposal to
+  `models/experiments/bet_proposal.py`. Both call the backtest's public fit, probability
+  and candidate functions in `models/experiments/betting_backtest.py` instead of copying
+  them. `model fit-betting-estimator` lives in `cli/betting_backtest.py` and
+  `model propose-bets-live` in `cli/pl_prediction.py`, so no CLI imports a sibling.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
   See ADR-025 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
 - Share option definitions through `cli/options.py` and generic CLI JSON handling
