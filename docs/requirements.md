@@ -39,4 +39,4 @@
 
 ## まだ確定していない事項
 
-LambdaRankのランキングMVPとtop-3 PLによる確率モデルへの拡張方針は[ADR-009](decisions/ADR-009-use-lambdarank-mvp-and-top3-pl-extension.md)で選定済みである。入力特徴量、学習対象の範囲、ハイパーパラメータ、PLの具体的なcustom objectiveと校正方法、同着・取消等のラベル・評価・購入判断の扱いは実装前に定める。入力固定時刻は発走5分前、提示期限は発売締切（発走2分前）とする（ADR-041）。リスク尺度と許容値、購入経路・表示形式、発走前オッズ履歴の保存状況は未決定である。Closing Odds Model、Fractional Kelly、強化学習、Jevなどは採用を決めていない。以前の論点と比較は[モデル設計レビュー](discussions/2026-10-03-model-architecture-review.md)に残し、今後の選定を仕様書または必要なADRへ反映する。
+LambdaRankのランキングMVPとtop-3 PLによる確率モデルへの拡張方針は[ADR-009](decisions/ADR-009-use-lambdarank-mvp-and-top3-pl-extension.md)で選定済みである。入力特徴量、学習対象の範囲、ハイパーパラメータ、PLの具体的なcustom objectiveと校正方法、同着・取消等のラベル・評価・購入判断の扱いは実装前に定める。入力固定時刻は発走5分前、提示期限は発売締切（発走2分前）とする（ADR-041）。リスク尺度と許容値、購入経路、発走前オッズ履歴の保存状況は未決定である。当日の購入案は[ADR-045](decisions/ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)の`proposal.json`に、単勝・複勝の期待値と方策の参考額を記録し、提示額は0円とする。Closing Odds Model、Fractional Kelly、強化学習、Jevなどは採用を決めていない。以前の論点と比較は[モデル設計レビュー](discussions/2026-10-03-model-architecture-review.md)に残し、今後の選定を仕様書または必要なADRへ反映する。

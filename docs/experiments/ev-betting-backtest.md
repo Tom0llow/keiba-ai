@@ -271,3 +271,41 @@ PLの確率をおよそ0.7乗し、市場の確率をおよそ0.4乗して合わ
   `f9b7f9701855405e11a51f448ef12b927a075ab7f65b970ae8f64ac25d05f1ab`）。
 - 入力: 上のADR-043の計測と同じPLの評価（`graded-final3`）とsnapshot `098ce3f4…`。合成の当てはめ用のレースは29,754（除外0件）。
 - 出力: `output/ev-betting-estimates-2016-2025-r6/`（`report.json`・`bets.parquet`・`races.parquet`、Gitには含めない）。
+
+## 当日の推定器と購入案（ADR-045）
+
+[ADR-045](../decisions/ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)の
+`model fit-betting-estimator`で、上のADR-044の計測（`output/ev-betting-estimates-2016-2025-r6`）から2026年の推定器を作り、
+`model propose-bets-live`で2026-11-15の重賞を再生した。
+
+### 推定器の作成
+
+```powershell
+uv run python src/main.py model fit-betting-estimator --backtest output/ev-betting-estimates-2016-2025-r6 --backtest-report-sha256 7a4ebe7fe32766da9e4920c25385588bb3acdce160474368411b885bc28658c9 --pl-evaluation output/pl-evaluation-2016-2025-graded-final3 --processed-root data/processed --output output/ev-betting-estimator-2026
+```
+
+- 所要時間は210秒と160秒（2回の実行。成果物は`provenance`を除いて同じ）。1回目の内訳は、PLの予測の読込4秒、`NL_RA_RACE`・`NL_HR_PAY`の読込2秒、O1の読込（2004〜2025年の2 pass）と的中の観測の組み立てが
+  約192秒、当てはめ・書込み・読み直しの照合が約6秒）。バックテストと違い、`NL_SE_RACE_UMA`は読まず、test年の重賞のO1の行は的中の観測にだけ使い、購入の候補としては保持しない。
+- `target_year` 2026、方法`blend_width`。比較の年は2017〜2025年で、重賞の定額の回収率は`pl_mid` 0.529（195,010÷368,400円）、
+  `blend_mid` 0.668、`pl_width` 0.517、`blend_width` 0.684で、ADR-044の計測のpooledの値と同じである。
+- 合成の係数は`α` 0.6815・`β` 0.4534（2016〜2025年の29,754レース、除外0件、Newton法4回）。2016〜2024年のレースだけで同じ関数で
+  当てはめ直すと、reportの2025年の係数（`α` 0.6806616116141218・`β` 0.4544139088639248、26,737レース）と完全に一致した。
+- 複勝の補正の的中は、2004〜2025年の全レースの`place_mid`の226,408件。幅の帯（1.0・1.5・2.0・3.0・5.0）は統合されず、
+  的中は124,351・77,370・15,514・7,100・2,073件だった。
+- 成果物は`manifest.json`（約90KB）だけで、manifestのSHA-256は作成の要約に出る。
+
+### 2026-11-15の再生
+
+`output/pl-race-day-20261115-r2`（予測の常駐CLIの出力、重賞1レース）と、その特徴量・レース別の取得（version `83284491…`）で再生した。
+レースの後に実行したため、`after_sales_close`は`true`になる。
+
+- 2026111508050411（18頭）: freezeのO1は15:34の発表（60秒前）。`blend_width`の確率と補正で、`R ≥ 1.10`の買い目は複勝11番
+  （`P` 0.387、`O` 3.07（`√(2.7×3.5)`）、`Ô` 2.97、`R` 1.149）だけで、要求額・参考額は1,800円、提示額は0円だった。
+  単勝の`R`は0.52〜0.95で、候補はなかった。
+- この1レースの結果は、方策の良し悪しを示さない。当日の常駐の動作（発売締切の前の公開）は、次の開催日に確かめる。
+
+### ADR-045の限界
+
+- 合成の係数はfoldのモデルの予測で当てはめ、当日は最終モデル（ADR-038）の予測に当てる。
+- 当日は約2割のレースでfreezeの約6分前の発表しかなく、600秒以内のため保留にならない（#78）。`publication_age_seconds`で区別する。
+- 選択した方法・方策の回収率はバックテストで1を下回る（上のADR-043・044の結果）。購入案は0円で、参考額を購入の根拠にしない。

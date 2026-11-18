@@ -667,7 +667,7 @@ uv run python src/main.py model predict-pl-live `
   なければ、stderrへ警告を1回出す）。公開されていれば読んで検査し、
   `<output>/<race_id>/prediction.json`（`pl_race_prediction` format_version 1）を公開する。中身は、馬番の昇順の馬ごとのスコア・
   勝率・2着以内・3着以内と、馬単・馬連・ワイド・3連複・3連単の全組合せの確率、モデル・特徴量・snapshotの識別である。
-  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動（ADR-042の補正の適用は#81）は補正しない。過去検証での単勝・複勝の買い方はADR-043で固定し、当日の購入案への適用は#81で扱う。
+  確率はPLのモデルそのままで、2・3着の偏り（#49）とオッズ変動は補正しない。単勝・複勝の期待値と0円の購入案は、`model propose-bets-live`が付ける（ADR-045）。
 - 発売締切（発走2分前）より後になっても特徴量が公開されない重賞は、`features_not_published`で保留する。発売締切の後に初めて
   見つかった特徴量は計算して公開し、`after_sales_close: true`を記録する。
 - 予測できない重賞は、出力を作らずに保留する。主な`reason`は次のとおりである。
@@ -688,8 +688,8 @@ uv run python src/main.py model predict-pl-live `
 
 `model evaluate-final-odds`は、固定snapshotのfreeze（発走5分前）の時点の単勝・複勝・馬連のオッズから、その組合せが的中したときの
 確定オッズ（払戻÷100）を券種ごとの帯の倍率で予測し、年単位の拡大型fold（train 2004〜Y−1・test Y）で評価する
-（[ADR-042](docs/decisions/ADR-042-correct-closing-odds-to-hit-conditional-final-odds.md)）。補正の成果物は保存せず、
-`report.json`だけを新しいディレクトリへ公開する。
+（[ADR-042](docs/decisions/ADR-042-correct-closing-odds-to-hit-conditional-final-odds.md)）。この評価の経路は補正の成果物を保存せず、
+`report.json`だけを新しいディレクトリへ公開する（当日用の成果物は`model fit-betting-estimator`）。
 
 ```powershell
 uv run python src/main.py model evaluate-final-odds --config-name measure --override processed_root=data/processed --output output/final-odds-evaluation-2016-2025
@@ -722,3 +722,50 @@ uv run python src/main.py model backtest-betting --config-name measure --overrid
   進捗はstderrへ、要約1行はstdoutへ出る。失敗（Ctrl+Cを含む）では出力もstagingも残らない。
 - 収支は手数料を含まない。PLの予測がない重賞は購入せず、件数と理由を数える。手順・結果は
   [期待値による購入方策のバックテスト](docs/experiments/ev-betting-backtest.md)を参照する。
+
+## 当日の購入案の推定器を年ごとに保存する
+
+`model fit-betting-estimator`は、`model backtest-betting`の出力から、最後のtest年の翌年（2016〜2025年の計測なら2026年）に使う
+推定器を成果物として保存する（[ADR-045](docs/decisions/ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)）。
+複勝の補正（`place_mid`と幅の帯ごと）は最後のtest年までの全レースの的中で、PLと市場の合成はPLの評価の全test年の予測で当てはめ、
+推定の方法はADR-044の規則（前の年の重賞の定額の回収率）をその年へ延長して選ぶ。値はすべてバックテストのreportから取る。
+
+```powershell
+uv run python src/main.py model fit-betting-estimator `
+  --backtest output/ev-betting-estimates-2016-2025-r6 --backtest-report-sha256 <report.jsonのSHA-256> `
+  --pl-evaluation output/pl-evaluation-2016-2025-graded-final3 --processed-root data/processed `
+  --output output/ev-betting-estimator-2026
+```
+
+- 成果物は`manifest.json`だけで、stdoutの要約のmanifestのSHA-256で識別する。読込は、形式・帯・年の順序・方策と、記録した
+  選択から計算し直した方法との一致を検証する。stagingの成果物を読み直し、全的中の推定値が当てはめと一致してから公開する。
+- reportの`config`の検査・PLの評価の2ファイルとsnapshotの3表のhashの照合に失敗すると、何も読まずに・何も残さずに終了コード1で終わる。
+  実データでは約3〜3.5分かかる。年が変わったら、その年のバックテストから作り直す。
+
+## 当日の重賞に0円の購入案を付ける
+
+`model propose-bets-live`は、[当日の運用手順](docs/race-day-operation.md)に従って`model predict-pl-live`の後に起動し、その出力を監視する。
+重賞の予測が公開されるたびに、freezeの単勝・複勝のオッズと推定器から期待受取倍率`R = P × Ô`を計算し、ADR-043の方策
+（`R ≥ 1.10`・1/4ケリー・1レース5,000円）の参考額を付けて公開する（[ADR-045](docs/decisions/ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)）。
+**提示する購入額は常に0円である**。バックテストは損失を示しており、参考額を購入の根拠にしない。
+
+```powershell
+uv run python src/main.py model propose-bets-live `
+  --predictions-root output/pl-race-day-20261115 --features-root output/race-day-20261115 `
+  --estimator output/ev-betting-estimator-2026 --estimator-manifest-sha256 <manifestのSHA-256> `
+  --pl-model output/pl-final-model-2006-2025 --pl-model-manifest-sha256 <manifestのSHA-256> `
+  --date 2026-11-15 --processed-root data/processed --snapshot-id <CURRENTのID> `
+  --output output/ev-proposal-20261115
+```
+
+- `--predictions-root`は`predict-pl-live`の`--output`で、`--features-root`・`--pl-model`・`--snapshot-id`は`predict-pl-live`と同じ値を渡す。
+  推定器の`target_year`が`--date`の年と違えば、`--output`を作らずに終了コード1で終わる。
+- `<output>/<race_id>/proposal.json`（`ev_race_proposal` format_version 1）には、馬ごとの確率・単勝と複勝のfreezeのオッズ・`Ô`・`R`、
+  `R ≥ 1.10`の買い目の要求額と1レースの上限で縮小した参考額（`reference_stake_yen`）、`stake_yen`（常に0）、推定器・予測・取得の識別と
+  発表の古さ（`publication_age_seconds`）を記録する。年間の枠の残り（#56）は扱わない。
+- 発売締切までに予測が公開されない重賞は`prediction_not_published`で保留する（本当の理由は`predict-pl-live`のstdoutにある）。
+  その他の保留の理由は`prediction_invalid`・`prediction_mismatch`・`features_invalid`・`market_source_unsupported`・
+  `market_source_unavailable`・`market_source_mismatch`・`stale_publication`などのfreezeの気配の保留・`market_invalid`・
+  `entrant_mismatch`・`market_odds_mismatch`・`blend_market_incomplete`・`blend_zero_probability`・`publish_failed`（公開の失敗）である。
+- stdoutには、レースごとに1行のJSON（`race_id`・`status`（`proposed`/`held`/`out_of_scope`）・`stage`・`reason`・`detail`・`output`・
+  `after_sales_close`・`bets`・`reference_stake_yen`）を出す。終了コードと再起動の規則は`predict-pl-live`と同じである。

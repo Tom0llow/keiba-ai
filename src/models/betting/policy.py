@@ -152,7 +152,7 @@ def decide_races(
             group.append(ordered[index])
             index += 1
         requested = [
-            bet for item in group if (bet := _requested_bet(item, selected_policy)) is not None
+            bet for item in group if (bet := requested_bet(item, selected_policy)) is not None
         ]
         race_id, freeze_at = candidate.race_id, candidate.freeze_at
         if not requested:
@@ -177,7 +177,8 @@ def decide_races(
     return tuple(decisions)
 
 
-def _requested_bet(candidate: BetCandidate, policy: BettingPolicy) -> Bet | None:
+def requested_bet(candidate: BetCandidate, policy: BettingPolicy) -> Bet | None:
+    """Return the candidate's Kelly bet before any cap, or None when it is not eligible."""
     expected_return = candidate.probability * candidate.estimated_odds
     if expected_return < policy.min_expected_return or candidate.estimated_odds <= 1.0:
         return None

@@ -23,6 +23,8 @@ import typer
 
 if TYPE_CHECKING:
     from data.loader.fixed_snapshot import FixedSnapshot
+    from domain.race_key import RaceKey
+    from models.artifacts.betting_estimator import BettingEstimator
     from models.artifacts.pl_model import PLModel
     from models.experiments.pl_prediction import RaceTarget
 
@@ -132,6 +134,7 @@ def model_predict_pl_live(
             poll_seconds=poll_interval_seconds,
             published=watcher.published,
             complete=watcher.complete,
+            missing=_features_not_published,
             report=_emit,
         )
     except KeyboardInterrupt as exc:
@@ -257,42 +260,37 @@ def plan_race_day(
     return targets, outcomes
 
 
-def watch_races(
+def watch_races[Outcome](
     targets: Sequence[RaceTarget],
     *,
     now: Callable[[], datetime],
     sleep: Callable[[float], None],
     poll_seconds: int,
     published: Callable[[RaceTarget], bool],
-    complete: Callable[[RaceTarget], PredictionOutcome],
-    report: Callable[[PredictionOutcome], None],
-) -> list[PredictionOutcome]:
-    """Poll the graded races in freeze order until each is predicted or held.
+    complete: Callable[[RaceTarget], Outcome],
+    missing: Callable[[RaceTarget], Outcome],
+    report: Callable[[Outcome], None],
+) -> list[Outcome]:
+    """Poll the graded races in freeze order until each is completed or held.
 
     A race is examined only after its freeze. The clock is read again just before each
-    race is examined: features published by then are completed even after sales close
-    (``complete`` records it); a race without features after sales close (strictly
-    later than two minutes before the start) is held as ``features_not_published``.
+    race is examined: an input published by then is completed even after sales close
+    (``complete`` records it); a race without its input after sales close (strictly
+    later than two minutes before the start) gets the ``missing`` outcome.
     """
     pending = sorted(targets, key=lambda target: (target.freeze_at, target.race_id))
-    outcomes: list[PredictionOutcome] = []
+    outcomes: list[Outcome] = []
     while pending:
         current = now()
         for target in list(pending):
             if current < target.freeze_at:
                 break
             seen = now()
-            outcome: PredictionOutcome | None = None
+            outcome: Outcome | None = None
             if published(target):
                 outcome = complete(target)
             elif seen > target.sales_close_at:
-                outcome = PredictionOutcome(
-                    target.race_id,
-                    "held",
-                    FEATURES_STAGE,
-                    FEATURES_NOT_PUBLISHED,
-                    "features were not published before sales close",
-                )
+                outcome = missing(target)
             if outcome is not None:
                 report(outcome)
                 outcomes.append(outcome)
@@ -306,6 +304,16 @@ def watch_races(
             )
             sleep(max(wait, 0.0))
     return outcomes
+
+
+def _features_not_published(target: RaceTarget) -> PredictionOutcome:
+    return PredictionOutcome(
+        target.race_id,
+        "held",
+        FEATURES_STAGE,
+        FEATURES_NOT_PUBLISHED,
+        "features were not published before sales close",
+    )
 
 
 @dataclass(frozen=True)
@@ -442,11 +450,17 @@ def _check_new_output(output_path: Path) -> None:
         raise ValueError("output parent directory must already exist")
 
 
-def _check_apart(output_path: Path, features_root: Path, processed_root: Path) -> None:
+def _check_apart(
+    output_path: Path,
+    features_root: Path,
+    processed_root: Path,
+    *,
+    option: str = "--features-root",
+) -> None:
     output = output_path.expanduser().resolve()
     features = features_root.expanduser().resolve()
     if output.is_relative_to(features) or features.is_relative_to(output):
-        raise ValueError("--output and --features-root must not contain each other")
+        raise ValueError(f"--output and {option} must not contain each other")
     if output.is_relative_to(processed_root.expanduser().resolve()):
         raise ValueError("--output must stay outside processed_root")
 
@@ -461,3 +475,324 @@ def _clock() -> datetime:
 
 def _sleep(seconds: float) -> None:
     time.sleep(seconds)
+
+
+_PROPOSE_COMMAND = "model propose-bets-live"
+PREDICTION_NOT_PUBLISHED = "prediction_not_published"
+
+
+@dataclass(frozen=True)
+class ProposalOutcome:
+    """One race's proposal result, printed as one JSON line on stdout (ADR-045)."""
+
+    race_id: str
+    status: Literal["proposed", "held", "out_of_scope"]
+    stage: str | None = None
+    reason: str | None = None
+    detail: str | None = None
+    output: str | None = None
+    after_sales_close: bool | None = None
+    bets: int | None = None
+    reference_stake_yen: int | None = None
+
+    def as_json(self) -> str:
+        """Return the stdout line with sorted keys."""
+        return json.dumps(
+            {
+                "race_id": self.race_id,
+                "status": self.status,
+                "stage": self.stage,
+                "reason": self.reason,
+                "detail": self.detail,
+                "output": self.output,
+                "after_sales_close": self.after_sales_close,
+                "bets": self.bets,
+                "reference_stake_yen": self.reference_stake_yen,
+            },
+            ensure_ascii=True,
+            allow_nan=False,
+            sort_keys=True,
+        )
+
+
+def model_propose_bets_live(
+    predictions_root: Annotated[Path, typer.Option("--predictions-root")],
+    features_root: Annotated[Path, typer.Option("--features-root")],
+    estimator_path: Annotated[Path, typer.Option("--estimator")],
+    estimator_manifest_sha256: Annotated[str, typer.Option("--estimator-manifest-sha256")],
+    pl_model: Annotated[Path, typer.Option("--pl-model")],
+    pl_model_manifest_sha256: Annotated[str, typer.Option("--pl-model-manifest-sha256")],
+    race_datetime: Annotated[
+        datetime, typer.Option("--date", formats=["%Y-%m-%d"], help="Race date (JST).")
+    ],
+    processed_root: Annotated[Path, typer.Option("--processed-root")],
+    output_path: Annotated[Path, typer.Option("--output")],
+    snapshot_id: Annotated[str | None, typer.Option("--snapshot-id")] = None,
+    poll_interval_seconds: Annotated[int, typer.Option("--poll-interval-seconds")] = 2,
+) -> None:
+    """Add a zero-yen expected-value proposal to each graded race's published prediction.
+
+    ``--predictions-root`` is the ``--output`` of ``model predict-pl-live``; pass the same
+    ``--features-root``, ``--pl-model`` and ``--snapshot-id`` as that command. A race
+    whose prediction is not published by sales close is held as
+    ``prediction_not_published``.
+    """
+    # Keep NumPy, Arrow, LightGBM and the model modules out of imports and CLI help.
+    import data.loader.race_version  # noqa: F401  (load Arrow before the first race)
+    from data.loader.fixed_snapshot import FixedSnapshot
+    from models.artifacts.betting_estimator import read_betting_estimator
+    from models.artifacts.pl_model import read_pl_model
+    from models.experiments.bet_proposal import PROPOSAL_STAGE
+    from models.experiments.provenance import experiment_provenance
+
+    started = perf_counter()
+    target_day = race_datetime.date()
+    outcomes: list[ProposalOutcome] = []
+    try:
+        if type(poll_interval_seconds) is not int or poll_interval_seconds < 1:
+            raise ValueError("--poll-interval-seconds must be a positive integer")
+        for name, value in (
+            ("--estimator-manifest-sha256", estimator_manifest_sha256),
+            ("--pl-model-manifest-sha256", pl_model_manifest_sha256),
+        ):
+            if _HEX64.fullmatch(value) is None:
+                raise ValueError(f"{name} must be 64 lowercase hex digits")
+        _check_new_output(output_path)
+        _check_apart(output_path, predictions_root, processed_root, option="--predictions-root")
+        _check_apart(output_path, features_root, processed_root)
+        estimator = read_betting_estimator(
+            estimator_path, expected_manifest_sha256=estimator_manifest_sha256
+        )
+        if target_day.year != estimator.record.target_year:
+            raise ValueError(
+                f"the estimator is for {estimator.record.target_year}, "
+                f"not {target_day.year}; build the estimator for this year"
+            )
+        model = read_pl_model(pl_model, expected_manifest_sha256=pl_model_manifest_sha256)
+        snapshot = FixedSnapshot(processed_root, snapshot_id=snapshot_id)
+        snapshot.pin(_TABLES)
+        targets, startup = plan_race_day(snapshot, target_day)
+        pinned = snapshot.manifest()
+        provenance = experiment_provenance()
+        _check_new_output(output_path)
+        output_path.mkdir()
+        for item in startup:
+            # Startup lines are only out-of-scope races and card holds.
+            outcome = ProposalOutcome(
+                item.race_id,
+                "out_of_scope" if item.status == "out_of_scope" else "held",
+                item.stage,
+                item.reason,
+                item.detail,
+            )
+            _emit_proposal(outcome)
+            outcomes.append(outcome)
+        if not targets:
+            typer.echo(f"no graded race to watch on {target_day.isoformat()}", err=True)
+        watcher = _ProposalWatcher(
+            predictions_root,
+            features_root,
+            processed_root,
+            output_path,
+            estimator=estimator,
+            model_manifest=model.manifest,
+            pl_model_manifest_sha256=pl_model_manifest_sha256,
+            snapshot=_snapshot_identity(pinned),
+            provenance=provenance,
+            now=_clock,
+        )
+
+        def missing(target: RaceTarget) -> ProposalOutcome:
+            return ProposalOutcome(
+                target.race_id,
+                "held",
+                PROPOSAL_STAGE,
+                PREDICTION_NOT_PUBLISHED,
+                "the prediction was not published by sales close",
+            )
+
+        outcomes += watch_races(
+            targets,
+            now=_clock,
+            sleep=_sleep,
+            poll_seconds=poll_interval_seconds,
+            published=watcher.published,
+            complete=watcher.complete,
+            missing=missing,
+            report=_emit_proposal,
+        )
+    except KeyboardInterrupt as exc:
+        typer.echo(f"{_PROPOSE_COMMAND} failed: interrupted", err=True)
+        raise typer.Exit(code=130) from exc
+    except Exception as exc:
+        # Published races stay; any staging of an unfinished race is removed.
+        typer.echo(f"{_PROPOSE_COMMAND} failed: {' '.join(str(exc).split())}", err=True)
+        raise typer.Exit(code=1) from exc
+    counts = {
+        status: sum(outcome.status == status for outcome in outcomes)
+        for status in ("proposed", "held", "out_of_scope")
+    }
+    typer.echo(
+        f"ev_race_proposal date={target_day.isoformat()} "
+        f"graded={counts['proposed'] + counts['held']} proposed={counts['proposed']} "
+        f"held={counts['held']} out_of_scope={counts['out_of_scope']} "
+        f"seconds={perf_counter() - started:.3f}",
+        err=True,
+    )
+
+
+class _ProposalWatcher:
+    """Read one race's prediction, features and race-day O1, then publish its proposal."""
+
+    def __init__(
+        self,
+        predictions_root: Path,
+        features_root: Path,
+        processed_root: Path,
+        output_path: Path,
+        *,
+        estimator: BettingEstimator,
+        model_manifest: Mapping[str, object],
+        pl_model_manifest_sha256: str,
+        snapshot: Mapping[str, object],
+        provenance: Mapping[str, object],
+        now: Callable[[], datetime],
+    ) -> None:
+        source = cast(Mapping[str, object], model_manifest["source_datamart"])
+        columns = cast(list[dict[str, str]], source["columns"])
+        self.predictions_root = predictions_root
+        self.features_root = features_root
+        self.processed_root = processed_root
+        self.output_path = output_path
+        self.estimator = estimator
+        self.pl_model_manifest_sha256 = pl_model_manifest_sha256
+        self.snapshot = snapshot
+        self.provenance = provenance
+        self.now = now
+        self.columns = tuple(_Column(**column) for column in columns)
+        self._warned_missing_root = False
+
+    def published(self, target: RaceTarget) -> bool:
+        """Return whether the race's prediction directory has been published.
+
+        The root is never listed: ``predict-pl-live`` stages unfinished races beside the
+        published ones. A missing root at a due race is reported once on stderr.
+        """
+        if not self.predictions_root.is_dir():
+            if not self._warned_missing_root:
+                typer.echo(
+                    f"warning: --predictions-root does not exist yet: {self.predictions_root}",
+                    err=True,
+                )
+                self._warned_missing_root = True
+            return False
+        return (self.predictions_root / target.race_id).is_dir()
+
+    def complete(self, target: RaceTarget) -> ProposalOutcome:
+        """Propose one race, or hold it with a reason; other races keep being watched."""
+        from data.loader.race_version import read_race_version
+        from data.storage.directory_publisher import publish_directory
+        from make_datamart.tables.reference import read_reference_prediction_features
+        from make_features.real_market import MARKET_COLUMN
+        from make_features.reference_raw import MARKET_O1_COLUMNS
+        from models.experiments.bet_proposal import (
+            O1_TABLE,
+            PROPOSAL_STAGE,
+            ProposalHold,
+            build_race_proposal,
+            proposal_json,
+            read_prediction,
+        )
+
+        def hold(reason: str, detail: str) -> ProposalOutcome:
+            return ProposalOutcome(
+                target.race_id, "held", PROPOSAL_STAGE, reason, " ".join(detail.split())
+            )
+
+        try:
+            # One read: the hash and the parse see the same bytes.
+            data = (self.predictions_root / target.race_id / "prediction.json").read_bytes()
+        except OSError as exc:
+            return hold("prediction_invalid", str(exc))
+        try:
+            prediction = read_prediction(data, target)
+        except ProposalHold as exc:
+            return hold(exc.reason, exc.detail)
+        if prediction.model_manifest_sha256 != self.pl_model_manifest_sha256:
+            return hold("prediction_mismatch", "the prediction's PL model differs from --pl-model")
+        if dict(prediction.snapshot) != dict(self.snapshot):
+            return hold("prediction_mismatch", "the prediction's snapshot differs from the pin")
+        try:
+            read = read_reference_prediction_features(
+                self.features_root / target.race_id,
+                expected_columns=self.columns,
+                expected_manifest_sha256=prediction.features_manifest_sha256,
+            )
+        except (OSError, ValueError) as exc:
+            return hold("features_invalid", str(exc))
+        market: dict[str, float | None] = {}
+        for row in read.rows.to_pylist():
+            if row.get("race_id") == target.race_id:
+                value = row.get(MARKET_COLUMN)
+                market[str(row.get("horse_id"))] = None if value is None else float(value)
+        try:
+            version = read_race_version(
+                self.processed_root,
+                _race_key(target.race_id),
+                columns={O1_TABLE: MARKET_O1_COLUMNS},
+                snapshot_id=prediction.market_snapshot_id,
+            )
+        except (OSError, ValueError) as exc:
+            return hold("market_source_unavailable", str(exc))
+        if version is None:
+            return hold("market_source_unavailable", "the race-day fetch version is missing")
+        if version.sha256.get(O1_TABLE) != prediction.market_o1_sha256:
+            return hold("market_source_mismatch", "the race-day O1 differs from the prediction's")
+        # One clock reading decides both computed_at and after_sales_close.
+        try:
+            proposal = build_race_proposal(
+                target=target,
+                prediction=prediction,
+                market_win_odds=market,
+                o1_rows=version.rows[O1_TABLE],
+                estimator=self.estimator,
+                computed_at=self.now(),
+                snapshot=self.snapshot,
+                provenance=self.provenance,
+            )
+        except ProposalHold as exc:
+            return hold(exc.reason, exc.detail)
+        except ValueError as exc:
+            return hold("market_invalid", str(exc))
+        destination = self.output_path / target.race_id
+        try:
+            payload = proposal_json(proposal.payload)
+            with publish_directory(destination) as staging:
+                (staging / "proposal.json").write_bytes(payload)
+        except (OSError, ValueError) as exc:
+            # publish_directory removes its staging; the other races keep being watched.
+            return hold("publish_failed", str(exc))
+        return ProposalOutcome(
+            target.race_id,
+            "proposed",
+            output=str(destination / "proposal.json"),
+            after_sales_close=proposal.after_sales_close,
+            bets=proposal.bets,
+            reference_stake_yen=proposal.reference_stake_yen,
+        )
+
+
+def _race_key(race_id: str) -> RaceKey:
+    from domain.race_key import RaceKey
+
+    return RaceKey(
+        datetime.strptime(race_id[:8], "%Y%m%d").date(),
+        race_id[8:10],
+        race_id[10:12],
+        race_id[12:14],
+        race_id[14:16],
+    )
+
+
+def _emit_proposal(outcome: ProposalOutcome) -> None:
+    typer.echo(outcome.as_json())
