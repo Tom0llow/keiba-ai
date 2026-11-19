@@ -88,7 +88,7 @@ uv run python src/main.py model predict-pl-live `
   ForEach-Object { "{0:o} {1}" -f (Get-Date), $_ } | Tee-Object -Append -FilePath <予測のログ>
 ```
 
-常駐CLIを同じ`--output`で起動し直すと直ちに失敗する。新しい`--output`（例えば末尾に`-r2`を付けたもの）を指定する。特徴量の常駐CLIに新しい`--output`を指定した場合は、予測の常駐CLIも新しい`--features-root`を指定して再起動する。`-Append`を付けると、それまでのログを残せる。
+常駐CLIを同じ`--output`で起動し直すと直ちに失敗する。新しい`--output`（例えば末尾に`-r2`を付けたもの）を指定する。特徴量の常駐CLIに新しい`--output`を指定した場合は、予測と購入案の常駐CLIも新しい`--features-root`を指定して再起動する（予測の常駐CLIを新しい`--output`で再起動するため、購入案の常駐CLIは新しい`--predictions-root`も指定する）。`-Append`を付けると、それまでのログを残せる。
 
 ### 端末4: 購入案の常駐CLI
 
@@ -112,7 +112,7 @@ uv run python src/main.py model propose-bets-live `
 
 購入案の常駐CLIは、各重賞の台帳の最新の確認が「そのレースより前に発走する当日の重賞の発売締切」以後（最初の重賞は当日0時（JST）以後）になるまで待ち、発売締切までに確認されなければ`ledger_unconfirmed`で保留する。台帳が読めない・不正なら`ledger_unavailable`・`ledger_invalid`で保留する。参考額の上限は、5,000円からそのレースの実購入額、100,000円からその年（開催日の年）の実購入額を引いた残りの小さい方である。提示額は0円のままである。
 
-- 当日の最初の重賞の前に、前日までの購入がすべて記録済みなら確認だけを足す（`--bet`なし）。
+- 当日の最初の重賞の前に（遅くともその発売締切までに）、まだ記録していない購入（当日の購入を含む）を記録する。なければ確認だけを足す（`--bet`なし）。
 - 各重賞の発売締切の後、次の重賞の発売締切までに、その間に買った馬券をすべて記録する（買わなければ確認だけを足す）。重賞以外のレースやシステム外の購入も年間の枠に数えるため、同じく記録する。
 
 ```powershell
@@ -128,12 +128,16 @@ uv run python src/main.py model record-purchases --ledger data/purchases/ledger.
 前日の夜に`latest`を完了してsnapshotのIDを控え、当日は次の順序で進める。
 
 ```text
-前日の夜のlatest
+前日の夜のlatest（台帳がなければ作る）
   -> 当日のrace-day-odds
   -> 特徴量の常駐CLI
   -> 予測の常駐CLI
   -> 購入案の常駐CLI
+  -> 最初の重賞の前に（遅くとも発売締切までに）購入の記録または確認（record-purchases。未記録の購入がなければ--betなし）
+  -> 各重賞の発売締切の後、次の重賞の発売締切までに購入の記録または確認
 ```
+
+台帳の最新の確認が当日0時（JST）より前なら（前日に作った場合や、前の開催日に最後に確認した場合を含む）、当日の確認がないと最初の重賞から`ledger_unconfirmed`で保留される。詳細は「購入の記録と確認」に記す。
 
 2026-11-14・15の計測では、予測用の取得は約1秒、特徴量の準備は64〜85秒、freezeの5〜6秒後に特徴量を公開した。重賞の予測は、2026-11-15にfreezeの約6秒後、発売締切の約174秒前に公開した。前日夜の`latest`は全体で約76分だった。詳細は[当日の運用の実測](experiments/race-day-operation.md)に記録する。
 
@@ -150,8 +154,8 @@ race-day-oddsの実行中は、`latest`、`preprocess rebuild`、対象日の`--
 
 ## 失敗時の対応
 
-- race-day-oddsが途中で止まった場合は、`--recover`で`running`の取得を`interrupted`にしてから、`--date <開催日>`で再起動する。常駐CLIを再起動する場合は、新しい`--output`を指定する。
-- `JVOpen -211`や`-303`が続く場合: 2026-11-14・15の原因は、JV-Linkのサービス`JVLinkAgent`の異常終了だった。JV-Link側の不具合であり、JRA-VANも同じ事象を確認している。サービス停止後は`JVOpen -211`が返り、その後の取得で`-303`が続く。`Get-Service JVLinkAgent`が`Stopped`を示すことと、WindowsのApplicationログに`JVLinkAgent.exe`のApplication Errorがあることを確認する。JV-Linkを使うのはrace-day-oddsだけで、特徴量と予測の常駐CLIはJV-Linkを使わない。race-day-oddsを止め、特徴量と予測の常駐CLIは動かしたままにする。管理者として起動したPowerShellで`Start-Service JVLinkAgent`を試す（実機の運用PCではまだ試していない）。JV-Linkの設定画面が開くことを確認し、開かない場合またはサービスが起動しない場合はPCを再起動する。PCを再起動しない場合は、race-day-oddsだけを`--date <開催日>`で起動し直す。PCを再起動した場合は、3本のCLIを起動し直す。常駐CLIは新しい`--output`を指定し、予測CLIの`--features-root`には特徴量CLIの新しい出力先を指定する。race-day-oddsは`--date <開催日>`で起動すると、開始時に`running`の取得を復旧する。サービスキーは記録しない。エラーコード、最後の取得、停止・復旧の時刻を残す。停止中は、各取得が`execution_timeout_seconds`の上限（120秒）まで待つことがある。
+- race-day-oddsが途中で止まった場合は、`--recover`で`running`の取得を`interrupted`にしてから、`--date <開催日>`で再起動する。常駐CLIを再起動する場合は、新しい`--output`を指定し、後に続く常駐CLIの`--features-root`・`--predictions-root`を端末3・4の節のとおりに付け替える。
+- `JVOpen -211`や`-303`が続く場合: 2026-11-14・15の原因は、JV-Linkのサービス`JVLinkAgent`の異常終了だった。JV-Link側の不具合であり、JRA-VANも同じ事象を確認している。サービス停止後は`JVOpen -211`が返り、その後の取得で`-303`が続く。`Get-Service JVLinkAgent`が`Stopped`を示すことと、WindowsのApplicationログに`JVLinkAgent.exe`のApplication Errorがあることを確認する。JV-Linkを使うのはrace-day-oddsだけで、特徴量・予測・購入案の常駐CLIはJV-Linkを使わない。race-day-oddsを止め、特徴量・予測・購入案の常駐CLIは動かしたままにする。管理者として起動したPowerShellで`Start-Service JVLinkAgent`を試す（実機の運用PCではまだ試していない）。JV-Linkの設定画面が開くことを確認し、開かない場合またはサービスが起動しない場合はPCを再起動する。PCを再起動しない場合は、race-day-oddsだけを`--date <開催日>`で起動し直す。PCを再起動した場合は、race-day-oddsと特徴量・予測・購入案の常駐CLIを起動し直す。常駐CLIは新しい`--output`を指定し、予測CLIと購入案CLIの`--features-root`には特徴量CLIの新しい出力先、購入案CLIの`--predictions-root`には予測CLIの新しい出力先を指定する。購入案CLIの`--ledger`は同じ台帳のパスのまま使う。race-day-oddsは`--date <開催日>`で起動すると、開始時に`running`の取得を復旧する。サービスキーは記録しない。エラーコード、最後の取得、停止・復旧の時刻を残す。停止中は、各取得が`execution_timeout_seconds`の上限（120秒）まで待つことがある。
 - `features_not_published`は、特徴量の計算が遅れた場合だけでなく、予測用の取得が`jvlink_error`などで失敗した場合にも起きる。予測のログだけで判断せず、特徴量のログの保留理由（`race_day_fetch_failed: ...`など）と取得記録を照合する。
 
 ## 記録として残すもの
