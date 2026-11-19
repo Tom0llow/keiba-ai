@@ -137,6 +137,7 @@ ADR-027により`configuration/experiments.py`が明示呼出し時にHydra Comp
 | data/loader/read_parquet.py | 明示Parquetパスのtable/metadata/RecordBatchの物理読込。CURRENTを扱わない。 |
 | data/storage/snapshot_builder.py | 読込・変換・保存・保存結果照合・完成版公開を統括。DataPreprocesserのAPI名も維持する。 |
 | data/storage/snapshot_store.py | complete/race別保存構造、versionパス、CURRENT解決、表パスの所有。 |
+| data/storage/file_replacer.py | 小さなファイルの排他的な作成（既存なら失敗）と、置換の直前に内容が期待どおりか確かめてからの一時ファイルと`os.replace`による原子的な置換（Windowsで拒否された置換は短い間隔で有限回だけ再試行し、一時ファイルを残さない）。ADR-046の購入の台帳が使う。書き手は同時に1つとし、読み直しと置換の間は排他しない。 |
 | data/storage/snapshot_publisher.py | stagingの完成版rename後、os.replaceでCURRENTを原子的に更新する。読込中のためWindowsで置換が拒否された場合は、短い間隔で有限回だけ再試行し、失敗したら一時ファイルを消して旧CURRENTを残す。 |
 | data/loader/processed_data_loader.py | DataLoader公開API。Storageから選択パスを取得し、物理readerへ渡す。 |
 | data/loader/race_version.py | ADR-037の`current_race_version_id`と`read_race_version`。レース別のCURRENTを一度だけ解決するか、指定のversionを読み、指定列だけを読み、nullable stringとレースキーを検査し、ファイルのSHA-256を返す。CURRENTがなければNone。 |
@@ -352,7 +353,7 @@ ADR-043の購入方策のバックテストは、ADR-035のPLの評価の予測�
 
 | 所有者 | 責務 |
 | --- | --- |
-| betting/policy.py | 買い目の候補、期待受取倍率、ケリーの比と要求額、レースと暦年の上限による比例の縮小と100円単位の切り捨て、freeze・`race_id`の順の処理とレースごとの結果（購入・候補なし・枠の不足）、頭数による複勝の確率の選択。I/Oなし。 |
+| betting/policy.py | 買い目の候補、期待受取倍率、ケリーの比と要求額、レースと暦年の上限（呼出し側が渡すレースと年の使用額を差し引く。ADR-046）による比例の縮小と100円単位の切り捨て、freeze・`race_id`の順の処理とレースごとの結果（購入・候補なし・枠の不足）、頭数による複勝の確率の選択。I/Oなし。 |
 | betting/settlement.py | 1レースの買い目を、確定の払戻（同着は行どおり）と返還馬の返還で精算する。 |
 | evaluation/betting_metrics.py | 暦年と全test年の購入額・受取額・回収率・収支・的中率・最大ドローダウン・最大連敗・レースごとの累積収支、購入レースを単位とするbootstrapの回収率の区間、券種別の集計。 |
 | serialization/betting_inputs.py | PLの予測の検査（候補用の投影は`finish_position`を読まない、確率の範囲・順序・レース内の和）、ADR-044の合成の当てはめ用の投影と年ごとのレース・除外の数への整形、`card_entrants`による馬番の対応、ADR-042と同じ規則のfreezeのO1の単勝・`place_mid`・`OddsLow`・`OddsHigh`の気配。 |
@@ -364,13 +365,14 @@ hash・形式を検査して`role="target"`の項目だけを返す。
 
 ADR-045は、バックテストのreport（format_version 2）から、最後のtest年の翌年`T`の推定器（`place_mid`と幅の帯の補正、合成、
 ADR-044の規則で選んだ方法、ADR-043の方策）を成果物として保存し、当日の重賞の予測に単勝・複勝の期待受取倍率と方策の参考額を
-付ける。提示する購入額は常に0円で、購入は実行しない。
+付ける。提示する購入額は常に0円で、購入は実行しない。ADR-046は、人が記録した実購入額の台帳から、参考額の上限をレース内・暦年の残りの枠で決め、台帳の確認がないレースを保留する。
 
 | 所有者 | 責務 |
 | --- | --- |
 | artifacts/betting_estimator.py | 成果物`ev_betting_estimator`（`manifest.json`だけ）の書込みと厳密な読込（キー・型・帯の分割・幅の帯・年の順序・方策、`selection`から計算し直した方法との一致）。小さなバイトI/Oを自分で持ち、`data`・CLIをimportしない。 |
 | experiments/betting_estimator.py | reportの方法・年ごとの定額の検査と、記録された選択の再計算による照合、`T`の当てはめ（バックテストの`fit_year_estimators`）と方法の選択、成果物の記録の組立、書いた成果物の推定値の照合。I/Oなし。 |
-| experiments/bet_proposal.py | 公開された`prediction.json`の検査、freezeのO1の気配とバックテストと同じ照合・確率・候補、1レースだけに当てた方策の参考額（0円に縮小した買い目も残す）、`ev_race_proposal`のpayloadとJSON。I/Oなし。 |
+| experiments/bet_proposal.py | 公開された`prediction.json`の検査、freezeのO1の気配とバックテストと同じ照合・確率・候補、台帳の確認時刻の検査とレース・年の実購入額を差し引いた方策の参考額（0円に縮小した買い目も残す）、`ev_race_proposal`（format_version 2、台帳の識別と残りの枠を含む）のpayloadとJSON。I/Oなし。 |
+| betting/purchase_ledger.py | ADR-046の台帳`purchase_ledger`の厳密な解析（見出し・購入と確認の行・`race_id`・券種ごとの組合せ・100円単位・時刻の順）、追記のバイト列、`--bet`の解析、レースと開催日の年の使用額、確認の要求時刻。標準ライブラリだけ、I/Oなし。 |
 
 ## CLI
 
@@ -414,7 +416,8 @@ ADR-039の`model predict-pl-live`はcli/pl_prediction.pyが、`read_pl_model`で
 ADR-042の`model evaluate-final-odds`はcli/final_odds_evaluation.pyが、configuration/final_odds_evaluation.pyで合成した`configs/final_odds_evaluation/`の設定を、出力の検査の後、どの表も読む前に検査する。固定snapshotの`NL_RA_RACE`・`NL_HR_PAY`・O1・O2のhashを先に取り、`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で読み、`jra_flat_graded_stakes_v1`を判定する。年ごとにO1・O2を`publication_reader`の`scan`→`select_publication_pairs`→`read_pairs`で読み、`build_race_observations`で観測を組み立てる。最後に`manifest()`でhashを再確認し、評価を実行して`report.json`だけを`publish_directory`で公開する。進捗は表と年ごとにstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。helpとimportは設定・評価・補正・指標のモジュールを読まない。
 ADR-043の`model backtest-betting`はcli/betting_backtest.pyが、configuration/betting_backtest.pyで合成した`configs/betting_backtest/`の設定を、出力の検査の後に検査する。出力が`processed_root`・PLの評価のディレクトリと同じかその中なら拒否し、PLの評価の`report.json`・`predictions.parquet`のSHA-256を照合して、reportから固定snapshotとdatamartを決める。出力がdatamart・固定snapshotの中でも、`predictions.parquet`とsnapshotの表を読む前に拒否する。固定snapshotの`NL_RA_RACE`・`NL_SE_RACE_UMA`・`NL_HR_PAY`・O1のhashを先に取り、`NL_RA_RACE`がPLの評価の重賞の出典と一致することを確かめる。datamartの保留の理由を読み、予測を`finish_position`なしの候補用の投影と、ADR-044の合成の当てはめ用の投影（`finish_position`を含む7列）で、`predictions.parquet`の2回のhashの照合の間に読む。`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で、`NL_SE_RACE_UMA`をtest年の重賞だけ読み、年ごとにO1をADR-042と同じ2 passで読んで、全レースの`place_mid`・`place_low`の的中を組み立てる（O2は読まない）。バックテストを実行し、`report.json`・`bets.parquet`・`races.parquet`を`publish_directory`で公開する。進捗はstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。importは設定・方策・指標・入力の整形のモジュールと重い外部ライブラリを読まず、helpは設定・方策・指標・入力の整形のモジュールを読まない。
 ADR-045の`model fit-betting-estimator`はcli/betting_backtest.pyが、バックテストの`report.json`をSHA-256で照合し、その`config`を`configuration/betting_backtest.py`と同じ規則で検査して設定とする（設定ファイルを持たず、reportの絶対パスは使わない）。出力が`--backtest`・`--processed-root`・`--pl-evaluation`・固定snapshotと同じかその中なら拒否する。PLの評価の2ファイルのSHA-256と、固定snapshotの`NL_RA_RACE`・`NL_HR_PAY`・O1のhashをreportの記録と照合してから、合成の当てはめ用の予測と、バックテストと同じ関数で最後のtest年までの的中と重賞の集合を読む。成果物をstagingに書いて読み直し、全的中の推定値と係数が一致することを確かめてから`publish_directory`で公開する。stdoutには要約1行（manifestのSHA-256・`target_year`・方法）を出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。
-ADR-045の`model propose-bets-live`はcli/pl_prediction.pyが、成果物の`target_year`が`--date`の年と一致することとPLのモデルを起動時に確かめ、`predict-pl-live`と同じ出馬表の重賞を同じ監視のループ（未公開の保留を引数で受け取る）で見る。`<predictions-root>/<race_id>/prediction.json`を1回だけ読んでhashと解析を同じバイト列で行い、特徴量を予測が記録するmanifestのSHA-256で読み、レース別の取得のversionを`read_race_version`でO1だけ読んで、experiments/bet_proposal.pyで購入案を組み立て、`<output>/<race_id>/proposal.json`を公開する。1レースの読込・検査・公開の失敗（`OSError`・`ValueError`を含む。公開の失敗は`publish_failed`）はそのレースの保留とし、発売締切までに公開されない予測は`prediction_not_published`で保留する。helpとimportは成果物・購入案のモジュールとLightGBMを読まない。
+ADR-045の`model propose-bets-live`はcli/pl_prediction.pyが、成果物の`target_year`が`--date`の年と一致することとPLのモデルを起動時に確かめ、`predict-pl-live`と同じ出馬表の重賞を同じ監視のループ（未公開の保留を引数で受け取る）で見る。起動時に`--ledger`の台帳を検査し、`plan_race_day`が返す発走時刻のわかる重賞から、各重賞の確認の要求時刻（先に発走する重賞の発売締切か当日0時（JST））を決める。予測が公開され、台帳を1回読んで検査に通り確認が要求時刻に届いたときだけ計算し、その読込の台帳を購入案に使う。届かなければ発売締切まで待ち、締切で`ledger_unavailable`・`ledger_invalid`・`ledger_unconfirmed`として保留する。`<predictions-root>/<race_id>/prediction.json`を1回だけ読んでhashと解析を同じバイト列で行い、特徴量を予測が記録するmanifestのSHA-256で読み、レース別の取得のversionを`read_race_version`でO1だけ読んで、experiments/bet_proposal.pyで購入案を組み立て、`<output>/<race_id>/proposal.json`を公開する。1レースの読込・検査・公開の失敗（`OSError`・`ValueError`を含む。公開の失敗は`publish_failed`）はそのレースの保留とし、発売締切までに公開されない予測は`prediction_not_published`で保留する。helpとimportは成果物・購入案・台帳のモジュールとLightGBMを読まない。
+ADR-046の`model record-purchases`はcli/purchase_ledger.pyが、時計を1回読んで`--bet`の購入と確認の行を台帳へ追記する。台帳は`--create`のときだけ排他的に作り、既存の台帳は読んだ内容のまま変わっていないときだけdata/storage/file_replacer.pyで原子的に置き換える。stdoutに要約1行、上限を超えた累計の警告をstderrへ出す。失敗は終了コード1で台帳を変えない。Ctrl+Cは130で、置換の後に割り込まれた場合は台帳を書いたことを、それ以外は台帳が変わっていないことをstderrに出す。台帳を書くのはこのCLIだけで、`propose-bets-live`は読むだけである。helpとimportは台帳と置換のモジュールを読まない。
 
 ## 進化時の制約
 

@@ -14,6 +14,13 @@ import pytest
 from models.artifacts.betting_estimator import BettingEstimator
 from models.betting.methods import METHODS, Method
 from models.betting.policy import BettingPolicy, decide_races, requested_bet
+from models.betting.purchase_ledger import (
+    Purchase,
+    PurchaseLedger,
+    append_entries,
+    new_ledger,
+    parse_ledger,
+)
 from models.experiments import betting_backtest as backtest
 from models.experiments.bet_proposal import (
     O1_TABLE,
@@ -50,6 +57,15 @@ TARGET = RaceTarget(RACE, START, FREEZE, {h: horse_id(RACE, h) for h in HORSES},
 SNAPSHOT = {"snapshot_id": "e" * 32, "tables": {"NL_RA_RACE": "1" * 64}}
 MARKET = {horse_id(RACE, h): int(code) / 10 for h, code in zip(HORSES, WIN_CODES, strict=True)}
 Payload = dict[str, object]
+JST = ZoneInfo("Asia/Tokyo")
+MIDNIGHT = datetime(2025, 6, 15, tzinfo=JST)
+CONFIRMED = FREEZE - timedelta(minutes=1)
+
+
+def _ledger(*purchases: tuple[str, int], at: datetime = CONFIRMED) -> PurchaseLedger:
+    """Return a synthetic ledger of place bets confirmed at ``at``."""
+    items = [Purchase(race, "place", "01", stake, at) for race, stake in purchases]
+    return parse_ledger(append_entries(new_ledger(), items, confirmed_at=at))
 
 
 def _payload(**changes: object) -> Payload:
@@ -116,6 +132,8 @@ def _propose(
     o1: list[dict[str, object]] | None = None,
     at: datetime | None = None,
     policy: BettingPolicy | None = None,
+    ledger: PurchaseLedger | None = None,
+    required_since: datetime = MIDNIGHT,
 ) -> RaceProposal:
     return build_race_proposal(
         target=TARGET,
@@ -126,6 +144,8 @@ def _propose(
         computed_at=at or FREEZE + timedelta(seconds=20),
         snapshot=SNAPSHOT,
         provenance={"fixture": True},
+        ledger=_ledger() if ledger is None else ledger,
+        ledger_required_since=required_since,
     )
 
 
@@ -170,9 +190,11 @@ def test_each_method_gives_the_backtest_candidates_and_policy_stakes(method: Met
         assert entry["estimated_odds"] == candidate.estimated_odds
         assert entry["expected_return"] == candidate.probability * candidate.estimated_odds
     decision = payload["decision"]
+    decisions = decide_races(candidates, policy=record.policy)
+    outcomes = {"purchased": "reference_bets", "no_eligible_bet": "no_eligible_bet"}
     assert decision == {
-        "outcome": "reference_bets" if bets else "no_eligible_bet",
-        "scaled": any(d.scaled for d in decide_races(candidates, policy=record.policy)),
+        "outcome": outcomes[decisions[0].outcome] if decisions else "no_eligible_bet",
+        "scaled": any(d.scaled for d in decisions),
         "reference_stake_yen": sum(bet.stake_yen for bet in funded.values()),
         "stake_yen": 0,
     }
@@ -199,7 +221,11 @@ def test_a_bet_scaled_to_zero_stays_with_its_requested_stake() -> None:
             stake * budget // total // 100 * 100 for stake in requested
         ]
         assert proposal.payload["decision"]["scaled"] is True  # type: ignore[index]
-    assert _propose(policy=BettingPolicy(race_budget_yen=200)).reference_stake_yen == 0
+    exhausted = _propose(policy=BettingPolicy(race_budget_yen=200))
+    assert exhausted.reference_stake_yen == 0
+    # A cap of at least one unit that floors every stake to zero exhausts the budget.
+    assert exhausted.payload["decision"]["outcome"] == "budget_exhausted"  # type: ignore[index]
+    assert exhausted.payload["decision"]["scaled"] is True  # type: ignore[index]
 
 
 def test_after_sales_close_follows_the_clock_reading() -> None:
@@ -350,3 +376,148 @@ def test_an_eight_horse_race_bases_every_place_bet_on_top3() -> None:
     assert isinstance(horses, list)
     assert {item["place_basis"] for item in horses} == {"top3"}
     assert all(item["place_unavailable_reason"] is None for item in horses)
+
+
+def _stakes(proposal: RaceProposal) -> list[int]:
+    return [bet["reference_stake_yen"] for bet in _items(proposal.payload["bets"])]
+
+
+def _expected_stakes(annual: int, race: int) -> list[int]:
+    record = _estimator("pl_mid").record
+    race_input = GradedRaceInput(
+        RACE, [ra_row(RACE)], [o1_row(RACE)], se_rows(RACE), [hr_row(RACE)]
+    )
+    prediction = race_predictions(prediction_rows(RACE), variant="all_columns", test_years=(2025,))
+    candidates, _, _ = backtest._race_candidates(
+        race_input,
+        prediction[RACE],
+        "pl_mid",
+        year_estimators(record),
+        estimator_settings((2023, 2024)),
+    )
+    funded = {
+        (bet.bet_type, bet.horse_number): bet.stake_yen
+        for decision in decide_races(
+            candidates,
+            policy=record.policy,
+            annual_spent_yen={2025: annual},
+            race_spent_yen={RACE: race},
+        )
+        for bet in decision.bets
+    }
+    requested = [
+        bet
+        for candidate in candidates
+        if (bet := requested_bet(candidate, record.policy)) is not None
+    ]
+    order = {"win": 0, "place": 1}
+    requested.sort(key=lambda bet: (order[bet.bet_type], bet.horse_number))
+    return [funded.get((bet.bet_type, bet.horse_number), 0) for bet in requested]
+
+
+def test_the_ledger_and_budget_are_recorded_and_the_payload_is_version_two() -> None:
+    ledger = _ledger((RACE, 300), (race_id(2025, 2), 1_000), (race_id(2024), 9_000))
+
+    proposal = _propose(ledger=ledger)
+
+    payload = proposal.payload
+    assert payload["format_version"] == 2
+    assert payload["ledger"] == {
+        "sha256": ledger.sha256,
+        "latest_confirmation_at": CONFIRMED.isoformat(),
+        "required_confirmed_since": MIDNIGHT.astimezone(UTC).isoformat(),
+    }
+    # Another race of the year lowers only the annual remainder; another year is not counted.
+    assert payload["budget"] == {
+        "race_spent_yen": 300,
+        "annual_spent_yen": 1_300,
+        "race_remaining_yen": 4_700,
+        "annual_remaining_yen": 98_700,
+        "cap_yen": 4_700,
+    }
+    assert (proposal.race_remaining_yen, proposal.annual_remaining_yen) == (4_700, 98_700)
+    proposal_json(payload)
+
+
+@pytest.mark.parametrize(
+    ("purchases", "annual", "race"),
+    [
+        pytest.param(((RACE, 4_600),), 4_600, 4_600, id="race remainder binds"),
+        pytest.param(((race_id(2025, 2), 99_600),), 99_600, 0, id="annual remainder binds"),
+    ],
+)
+def test_reference_stakes_equal_the_policy_under_the_actual_purchases(
+    purchases: tuple[tuple[str, int], ...], annual: int, race: int
+) -> None:
+    proposal = _propose(ledger=_ledger(*purchases))
+
+    budget = proposal.payload["budget"]
+    assert isinstance(budget, dict)
+    assert budget["cap_yen"] == 400
+    assert _stakes(proposal) == _expected_stakes(annual, race)
+    assert 0 < sum(_stakes(proposal)) <= 400
+    assert all(bet["stake_yen"] == 0 for bet in _items(proposal.payload["bets"]))
+
+
+@pytest.mark.parametrize(
+    ("race", "spent", "race_remaining"),
+    [
+        pytest.param(RACE, 5_000, 0, id="race budget used"),
+        pytest.param(RACE, 6_000, 0, id="race budget exceeded"),
+        pytest.param(race_id(2025, 2), 100_000, 5_000, id="annual budget used"),
+        pytest.param(race_id(2025, 2), 120_000, 5_000, id="annual budget exceeded"),
+    ],
+)
+def test_a_remainder_below_one_unit_exhausts_the_budget_without_scaling(
+    race: str, spent: int, race_remaining: int
+) -> None:
+    proposal = _propose(ledger=_ledger((race, spent)))
+
+    assert _stakes(proposal)
+    assert set(_stakes(proposal)) == {0}
+    assert proposal.payload["decision"] == {
+        "outcome": "budget_exhausted",
+        "scaled": False,
+        "reference_stake_yen": 0,
+        "stake_yen": 0,
+    }
+    budget = proposal.payload["budget"]
+    assert isinstance(budget, dict)
+    assert (budget["race_remaining_yen"], budget["cap_yen"]) == (race_remaining, 0)
+
+
+def test_an_unconfirmed_ledger_holds_the_race() -> None:
+    since = FREEZE - timedelta(seconds=30)
+
+    assert _hold(lambda: _propose(ledger=parse_ledger(new_ledger()))) == "ledger_unconfirmed"
+    assert _hold(lambda: _propose(required_since=since)) == "ledger_unconfirmed"
+    assert _propose(ledger=_ledger(at=since), required_since=since).payload["ledger"]
+
+
+def test_a_race_date_other_than_the_freeze_date_is_rejected() -> None:
+    other = RaceTarget(race_id(2025).replace("0615", "0614"), START, FREEZE, {}, "A")
+
+    with pytest.raises(ValueError, match="JST date"):
+        build_race_proposal(
+            target=other,
+            prediction=read_prediction(_bytes(_payload()), TARGET),
+            market_win_odds=MARKET,
+            o1_rows=[o1_row(RACE)],
+            estimator=_estimator("pl_mid"),
+            computed_at=FREEZE + timedelta(seconds=20),
+            snapshot=SNAPSHOT,
+            provenance={},
+            ledger=_ledger(),
+            ledger_required_since=MIDNIGHT,
+        )
+
+
+def test_the_race_spending_is_counted_once_in_the_annual_remainder() -> None:
+    # 300 yen on this race plus 99,200 yen elsewhere: the annual remainder is 500 yen.
+    proposal = _propose(ledger=_ledger((RACE, 300), (race_id(2025, 2), 99_200)))
+
+    budget = proposal.payload["budget"]
+    assert isinstance(budget, dict)
+    assert (budget["annual_spent_yen"], budget["cap_yen"]) == (99_500, 500)
+    assert _stakes(proposal) == _expected_stakes(99_500, 300)
+    assert sum(_stakes(proposal)) > 200

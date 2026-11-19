@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from datetime import datetime
 from math import floor, isfinite
@@ -93,9 +93,10 @@ class RaceDecision:
     """Describe the policy outcome of one race that had bet candidates.
 
     ``no_eligible_bet`` means no candidate reached the expected-return threshold
-    with a positive stake. ``budget_exhausted`` means the remaining annual
-    budget, or the proportional reduction to it, left no stake of one unit.
-    ``scaled`` is true when the race total was reduced to its cap.
+    with a positive stake. ``budget_exhausted`` means the race's cap (the smaller
+    of the remaining race and annual budgets), or the proportional reduction to
+    it, left no stake of one unit. ``scaled`` is true when the race total was
+    reduced to a cap of at least one unit.
     """
 
     race_id: str
@@ -128,19 +129,34 @@ def select_bets(
 
 
 def decide_races(
-    candidates: Sequence[BetCandidate], *, policy: BettingPolicy | None = None
+    candidates: Sequence[BetCandidate],
+    *,
+    policy: BettingPolicy | None = None,
+    annual_spent_yen: Mapping[int, int] | None = None,
+    race_spent_yen: Mapping[str, int] | None = None,
 ) -> tuple[RaceDecision, ...]:
     """Return one decision per race with candidates, under the annual and race limits.
 
-    Races are processed by freeze then race ID.  A race over its remaining cap
-    has every requested stake proportionally reduced and rounded down to the
-    configured unit.  Neither refunds nor payouts participate in this policy.
+    Races are processed by freeze then race ID.  A race's cap is the smaller of
+    its race budget less ``race_spent_yen[race_id]`` and the annual budget less
+    the year's spending, which starts from ``annual_spent_yen[year]`` (the JST
+    year of the freeze) and grows with the stakes funded here.  The annual
+    spending already includes a race's own spending; the two are never added.
+    Both mappings default to no prior spending and are not modified.  A race
+    over its remaining cap has every requested stake proportionally reduced and
+    rounded down to the configured unit.  Neither refunds nor payouts
+    participate in this policy.
+
+    Raises:
+        ValueError: If candidates disagree on a race's freeze or repeat a bet, or
+            a spending key or value is malformed or negative.
     """
     selected_policy = BettingPolicy() if policy is None else policy
     _consistent_race_freezes(candidates)
+    annual_spent: dict[int, int] = _spending(annual_spent_yen, int, "annual_spent_yen")
+    race_spent: dict[str, int] = _spending(race_spent_yen, str, "race_spent_yen")
     ordered = sorted(candidates, key=_candidate_order_key)
     decisions: list[RaceDecision] = []
-    annual_spent: dict[int, int] = {}
     index = 0
     while index < len(ordered):
         candidate = ordered[index]
@@ -160,7 +176,7 @@ def decide_races(
             continue
         year = freeze_at.astimezone(JST).year
         remaining = selected_policy.annual_budget_yen - annual_spent.get(year, 0)
-        cap = min(selected_policy.race_budget_yen, remaining)
+        cap = min(selected_policy.race_budget_yen - race_spent.get(race_id, 0), remaining)
         total_requested = sum(bet.requested_stake_yen for bet in requested)
         scaled = total_requested > cap
         funded = (
@@ -213,6 +229,19 @@ def _scale_bets(bets: Sequence[Bet], *, cap: int, unit_yen: int) -> list[Bet]:
         if stake:
             scaled.append(replace(bet, stake_yen=stake))
     return scaled
+
+
+def _spending[Key: (int, str)](
+    values: Mapping[Key, int] | None, key_type: type[Key], name: str
+) -> dict[Key, int]:
+    copied: dict[Key, int] = {}
+    for key, value in (values or {}).items():
+        if isinstance(key, bool) or not isinstance(key, key_type) or key == "":
+            raise ValueError(f"{name} keys must be {key_type.__name__} values")
+        if isinstance(value, bool) or not isinstance(value, int) or value < 0:
+            raise ValueError(f"{name} values must be non-negative integers")
+        copied[key] = value
+    return copied
 
 
 def _consistent_race_freezes(candidates: Sequence[BetCandidate]) -> None:

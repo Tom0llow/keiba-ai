@@ -1,4 +1,4 @@
-"""Add zero-yen proposals to published race-day predictions (ADR-045).
+"""Add zero-yen proposals to published race-day predictions (ADR-045, ADR-046).
 
 The fixture builds race-day features whose market comes from a real race-scoped O1
 version, publishes their predictions with ``model predict-pl-live`` and then runs
@@ -12,7 +12,7 @@ import json
 import shutil
 from collections.abc import Callable
 from dataclasses import dataclass
-from datetime import datetime, timedelta
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
 from unittest.mock import patch
@@ -32,7 +32,9 @@ from make_features.catalog.registry import create_feature_registry
 from make_features.reference_raw import MARKET_O1_COLUMNS
 from models.artifacts.betting_estimator import write_betting_estimator
 from models.betting.methods import Method
+from models.betting.purchase_ledger import Purchase, append_entries, new_ledger
 from models.experiments.bet_proposal import O1_TABLE
+from models.experiments.pl_prediction import SALES_CLOSE_BEFORE_START
 from tests.betting_estimator_fixtures import estimator_record
 from tests.integration.test_pl_prediction_cli import (
     CLOSE_09,
@@ -43,6 +45,10 @@ from tests.integration.test_pl_prediction_cli import (
     MORNING,
     RACE_09,
     RACE_10,
+    RACE_11,
+    RACE_12,
+    RACE_13,
+    RACE_14,
     _add_grades,
     _Clock,
     _race_id,
@@ -61,6 +67,21 @@ from tests.reference_fixtures import (
 _TABLES = ("NL_RA_RACE", "NL_SE_RACE_UMA")
 _VERSIONS = {RACE_09: "9" * 32, RACE_10: "a" * 32}
 Payload = dict[str, Any]
+# Midnight JST of the race day, the earliest confirmation the first graded race accepts.
+MIDNIGHT = datetime(DAY.year, DAY.month, DAY.day, tzinfo=UTC) - timedelta(hours=9)
+
+
+def _ledger_bytes(*purchases: tuple[str, int], at: datetime = CLOSE_09) -> bytes:
+    """Return a synthetic ledger of win bets confirmed at ``at``."""
+    items = [Purchase(race, "win", "01", stake, at) for race, stake in purchases]
+    return append_entries(new_ledger(), items, confirmed_at=at)
+
+
+def _confirm(path: Path, at: datetime) -> Callable[[], None]:
+    def write() -> None:
+        path.write_bytes(append_entries(path.read_bytes(), [], confirmed_at=at))
+
+    return write
 
 
 @dataclass(frozen=True)
@@ -205,9 +226,13 @@ def _run(
     method: Method = "blend_mid",
     year: int = DAY.year,
     pl_digest: str | None = None,
+    ledger: Path | None = None,
 ) -> tuple[Result, Path]:
     estimator, digest = _estimator(tmp_path, method, year)
     output = tmp_path / "proposals"
+    if ledger is None:
+        ledger = tmp_path / "ledger.jsonl"
+        ledger.write_bytes(_ledger_bytes())
     with (
         patch("cli.pl_prediction._clock", clock),
         patch("cli.pl_prediction._sleep", clock.sleep),
@@ -239,6 +264,8 @@ def _run(
                 str(world.processed),
                 "--output",
                 str(output),
+                "--ledger",
+                str(ledger),
             ],
         )
     return result, output
@@ -256,6 +283,8 @@ def _lines(result: Result) -> dict[str, Payload]:
         "after_sales_close",
         "bets",
         "reference_stake_yen",
+        "race_remaining_yen",
+        "annual_remaining_yen",
     }
     assert all(set(line) == keys for line in lines)
     return {line["race_id"]: line for line in lines}
@@ -285,7 +314,7 @@ def test_each_published_prediction_gets_a_zero_yen_proposal(
     for race in (RACE_09, RACE_10):
         payload = _proposal(output, race)
         prediction = (proposals.predictions / race / "prediction.json").read_bytes()
-        assert payload["format"] == "ev_race_proposal"
+        assert (payload["format"], payload["format_version"]) == ("ev_race_proposal", 2)
         assert payload["prediction"]["sha256"] == hashlib.sha256(prediction).hexdigest()
         assert payload["estimator"]["method"] == method
         assert payload["market"]["snapshot_id"] == _VERSIONS[race]
@@ -293,6 +322,10 @@ def test_each_published_prediction_gets_a_zero_yen_proposal(
         assert all(bet["stake_yen"] == 0 for bet in payload["bets"])
         assert lines[race]["bets"] == len(payload["bets"])
         assert lines[race]["reference_stake_yen"] == payload["decision"]["reference_stake_yen"]
+        assert (lines[race]["race_remaining_yen"], lines[race]["annual_remaining_yen"]) == (
+            5_000,
+            100_000,
+        )
         numbers = [horse["horse_number"] for horse in payload["horses"]]
         assert numbers == sorted(numbers)
         assert payload["provenance"] == {"fixture": "provenance"}
@@ -449,6 +482,8 @@ def test_an_output_inside_the_predictions_root_names_that_option(
             str(proposals.processed),
             "--output",
             str(root / "proposals"),
+            "--ledger",
+            str(tmp_path / "ledger.jsonl"),
         ],
     )
 
@@ -478,3 +513,330 @@ def test_a_wrong_pl_model_identity_fails_before_creating_the_output(
 
     assert result.exit_code == 1
     assert not output.exists()
+
+
+def test_plan_race_day_gives_the_start_of_every_graded_race_with_a_card(
+    proposals: Proposals,
+) -> None:
+    from cli.pl_prediction import plan_race_day
+
+    snapshot = FixedSnapshot(proposals.processed)
+    snapshot.pin(_TABLES)
+
+    targets, _, starts = plan_race_day(snapshot, DAY)
+
+    # Race 14 is held for its field size but keeps its start; 11 is not graded, and
+    # 12 (no start) and 13 (ambiguous rows) have none.
+    assert sorted(starts) == [RACE_09, RACE_10, RACE_14]
+    assert {target.race_id: target.scheduled_start_at for target in targets} == {
+        RACE_09: starts[RACE_09],
+        RACE_10: starts[RACE_10],
+    }
+    assert starts[RACE_14] == MIDNIGHT + timedelta(hours=17)
+    assert {RACE_11, RACE_12, RACE_13}.isdisjoint(starts)
+    assert starts[RACE_09] - SALES_CLOSE_BEFORE_START == CLOSE_09
+
+
+def test_actual_purchases_cap_the_reference_stakes_and_are_recorded(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    other_year = f"{DAY.year - 1}0105060101" + "01"
+    ledger.write_bytes(_ledger_bytes((RACE_10, 1_000), (RACE_11, 2_000), (other_year, 50_000)))
+    clock = _Clock(FREEZE_10 + timedelta(seconds=10), [])
+
+    result, output = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert (lines[RACE_10]["race_remaining_yen"], lines[RACE_10]["annual_remaining_yen"]) == (
+        4_000,
+        97_000,
+    )
+    assert (lines[RACE_09]["race_remaining_yen"], lines[RACE_09]["annual_remaining_yen"]) == (
+        5_000,
+        97_000,
+    )
+    payload = _proposal(output, RACE_10)
+    assert payload["budget"] == {
+        "race_spent_yen": 1_000,
+        "annual_spent_yen": 3_000,
+        "race_remaining_yen": 4_000,
+        "annual_remaining_yen": 97_000,
+        "cap_yen": 4_000,
+    }
+    assert payload["ledger"] == {
+        "sha256": hashlib.sha256(ledger.read_bytes()).hexdigest(),
+        "latest_confirmation_at": CLOSE_09.isoformat(),
+        "required_confirmed_since": CLOSE_09.isoformat(),
+    }
+    assert payload["decision"]["reference_stake_yen"] <= 4_000
+    assert _proposal(output, RACE_09)["ledger"]["required_confirmed_since"] == (
+        MIDNIGHT.isoformat()
+    )
+
+
+def test_a_later_race_waits_for_a_confirmation_after_the_earlier_sales_close(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes(at=MORNING))
+    confirmed = CLOSE_10 - timedelta(seconds=30)
+    clock = _Clock(MORNING, [(confirmed, _confirm(ledger, confirmed))])
+
+    result, output = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert lines[RACE_09]["status"] == "proposed"
+    assert lines[RACE_10]["status"] == "proposed"
+    assert lines[RACE_10]["after_sales_close"] is False
+    computed_at = datetime.fromisoformat(_proposal(output, RACE_10)["computed_at"])
+    assert confirmed <= computed_at <= CLOSE_10
+
+
+def test_a_race_without_a_confirmation_by_its_sales_close_is_held(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes(at=MORNING))
+    clock = _Clock(MORNING, [])
+
+    result, output = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert lines[RACE_09]["status"] == "proposed"
+    assert (lines[RACE_10]["status"], lines[RACE_10]["stage"], lines[RACE_10]["reason"]) == (
+        "held",
+        "proposal",
+        "ledger_unconfirmed",
+    )
+    assert lines[RACE_10]["race_remaining_yen"] is None
+    assert clock.now > CLOSE_10
+    assert sorted(path.name for path in output.iterdir()) == [RACE_09]
+
+
+def test_the_first_race_needs_a_confirmation_on_the_race_day(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    """A prediction found after sales close with an unconfirmed ledger is held too."""
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes(at=MIDNIGHT - timedelta(seconds=1)))
+    clock = _Clock(CLOSE_09 + timedelta(seconds=30), [])
+
+    result, _ = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert lines[RACE_09]["reason"] == "ledger_unconfirmed"
+    assert lines[RACE_10]["reason"] == "ledger_unconfirmed"
+
+
+@pytest.mark.parametrize(
+    ("damage", "reason"),
+    [
+        (lambda path: path.unlink(), "ledger_unavailable"),
+        (lambda path: path.write_bytes(b"not a ledger\n"), "ledger_invalid"),
+    ],
+)
+def test_a_ledger_broken_after_startup_holds_races_unless_repaired_by_sales_close(
+    tmp_path: Path,
+    proposals: Proposals,
+    damage: Callable[[Path], None],
+    reason: str,
+) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    original = _ledger_bytes()
+    ledger.write_bytes(original)
+    repaired = CLOSE_10 - timedelta(seconds=30)
+
+    def repair() -> None:
+        ledger.write_bytes(original)
+
+    clock = _Clock(
+        MORNING,
+        [(FREEZE_09 - timedelta(seconds=1), lambda: damage(ledger)), (repaired, repair)],
+    )
+
+    result, output = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert (lines[RACE_09]["status"], lines[RACE_09]["reason"]) == ("held", reason)
+    # The hold names no local path of the ledger.
+    assert "ledger.jsonl" not in lines[RACE_09]["detail"]
+    assert str(tmp_path) not in lines[RACE_09]["detail"]
+    assert lines[RACE_10]["status"] == "proposed"
+    assert sorted(path.name for path in output.iterdir()) == [RACE_10]
+
+
+def test_a_proposal_uses_the_ledger_read_that_made_the_race_ready(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    from cli.pl_prediction import _ProposalWatcher
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes((RACE_10, 700)))
+    original = _ProposalWatcher.published
+
+    def published_then_removed(self: _ProposalWatcher, target: Any) -> bool:
+        ready = original(self, target)
+        if ready:
+            ledger.unlink()
+        return ready
+
+    clock = _Clock(FREEZE_10 + timedelta(seconds=10), [])
+    with patch.object(_ProposalWatcher, "published", published_then_removed):
+        result, output = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    # Race 09 is proposed from the read that made it ready, after the file was removed;
+    # race 10 then finds no ledger until its sales close.
+    assert lines[RACE_09]["status"] == "proposed"
+    assert _proposal(output, RACE_09)["budget"]["annual_spent_yen"] == 700
+    assert (lines[RACE_10]["status"], lines[RACE_10]["reason"]) == ("held", "ledger_unavailable")
+
+
+@pytest.mark.parametrize(
+    ("prepare", "message"),
+    [
+        (lambda path: None, "No such file"),
+        (lambda path: path.write_bytes(b"{}\n"), "header"),
+    ],
+)
+def test_a_missing_or_invalid_ledger_fails_before_creating_the_output(
+    tmp_path: Path,
+    proposals: Proposals,
+    prepare: Callable[[Path], None],
+    message: str,
+) -> None:
+    ledger = tmp_path / "ledger.jsonl"
+    prepare(ledger)
+
+    result, output = _run(proposals, tmp_path, _Clock(MORNING, []), ledger=ledger)
+
+    assert result.exit_code == 1
+    assert message in result.stderr
+    assert not output.exists()
+
+
+def test_a_ledger_inside_another_root_fails_before_creating_the_output(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    root = tmp_path / "predictions"
+    shutil.copytree(proposals.predictions, root)
+    ledger = root / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes())
+
+    result, output = _run(proposals, tmp_path, _Clock(MORNING, []), predictions=root, ledger=ledger)
+
+    assert result.exit_code == 1
+    assert "--ledger must stay outside" in result.stderr
+    assert not output.exists()
+
+
+def test_an_earlier_graded_race_held_at_startup_still_sets_the_required_time() -> None:
+    from cli.pl_prediction import ledger_required_since
+    from models.experiments.pl_prediction import RaceTarget
+
+    start_09 = CLOSE_09 + SALES_CLOSE_BEFORE_START
+    start_10 = CLOSE_10 + SALES_CLOSE_BEFORE_START
+    held_start = start_10 - timedelta(minutes=10)
+    targets = [
+        RaceTarget(RACE_09, start_09, FREEZE_09, {}, "A"),
+        RaceTarget(RACE_10, start_10, FREEZE_10, {}, "B"),
+    ]
+    starts = {RACE_09: start_09, RACE_10: start_10, RACE_14: held_start}
+
+    required = ledger_required_since(DAY, targets, starts)
+
+    # Race 14 is not a target (held for its field size) but starts before race 10.
+    assert required == {
+        RACE_09: MIDNIGHT,
+        RACE_10: held_start - SALES_CLOSE_BEFORE_START,
+    }
+    same_start = ledger_required_since(DAY, targets, {**starts, RACE_14: start_10})
+    assert same_start[RACE_10] == CLOSE_09
+
+
+def test_a_symbolic_link_ledger_fails_before_creating_the_output(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    target = tmp_path / "real.jsonl"
+    target.write_bytes(_ledger_bytes())
+    ledger = tmp_path / "ledger.jsonl"
+    try:
+        ledger.symlink_to(target)
+    except OSError:
+        pytest.skip("symbolic links are not available")
+
+    result, output = _run(proposals, tmp_path, _Clock(MORNING, []), ledger=ledger)
+
+    assert result.exit_code == 1
+    assert "--ledger must not be a symbolic link" in result.stderr
+    assert not output.exists()
+
+
+def test_the_cli_requires_the_sales_close_of_an_earlier_race_held_at_startup(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    """Race 14 (held for its field size) is moved to start before race 10."""
+    import cli.pl_prediction as module
+
+    original = module.plan_race_day
+    held_start = CLOSE_10 + SALES_CLOSE_BEFORE_START - timedelta(minutes=10)
+    held_close = held_start - SALES_CLOSE_BEFORE_START
+
+    def plan(snapshot: FixedSnapshot, day: object) -> object:
+        targets, outcomes, starts = original(snapshot, day)  # type: ignore[arg-type]
+        assert RACE_14 in starts
+        return targets, outcomes, {**starts, RACE_14: held_start}
+
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes(at=CLOSE_09))
+    confirmed = held_close + timedelta(seconds=10)
+    clock = _Clock(MORNING, [(confirmed, _confirm(ledger, confirmed))])
+    with patch.object(module, "plan_race_day", side_effect=plan):
+        result, output = _run(proposals, tmp_path, clock, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert lines[RACE_10]["status"] == "proposed"
+    payload = _proposal(output, RACE_10)
+    assert payload["ledger"]["required_confirmed_since"] == held_close.isoformat()
+    assert datetime.fromisoformat(payload["computed_at"]) >= confirmed
+
+
+@pytest.mark.parametrize("root", ["output", "predictions", "features", "processed"])
+def test_a_ledger_inside_any_other_root_is_refused(tmp_path: Path, root: str) -> None:
+    from cli.pl_prediction import _check_ledger
+
+    roots = {name: tmp_path / name for name in ("output", "predictions", "features", "processed")}
+    ledger = roots[root] / "ledger.jsonl"
+
+    with pytest.raises(ValueError, match="--ledger must stay outside"):
+        _check_ledger(ledger, *roots.values())
+    _check_ledger(tmp_path / "ledger.jsonl", *roots.values())
+
+
+def test_a_ledger_hold_is_forgotten_when_the_prediction_disappears(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    """Each check starts afresh: a stale ledger reason does not replace the missing prediction."""
+    root = tmp_path / "predictions"
+    shutil.copytree(proposals.predictions, root)
+    ledger = tmp_path / "ledger.jsonl"
+    ledger.write_bytes(_ledger_bytes(at=MIDNIGHT - timedelta(seconds=1)))
+    clock = _Clock(
+        MORNING,
+        [(FREEZE_09 + timedelta(seconds=5), lambda: shutil.rmtree(root / RACE_09))],
+    )
+
+    result, _ = _run(proposals, tmp_path, clock, predictions=root, ledger=ledger)
+
+    assert result.exit_code == 0, result.stderr
+    lines = _lines(result)
+    assert lines[RACE_09]["reason"] == "prediction_not_published"
+    assert lines[RACE_10]["reason"] == "ledger_unconfirmed"

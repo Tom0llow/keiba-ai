@@ -2,9 +2,9 @@
 
 ## 目的と範囲
 
-開催日の各レースの参考特徴量とJRA平地重賞のPL確率、重賞の0円の購入案を、発走前に公開するための手順である（ADR-041、ADR-045）。実行順序は、前日の夜の`latest`、当日のrace-day-odds、特徴量の常駐CLI、予測の常駐CLI、購入案の常駐CLIとする。
+開催日の各レースの参考特徴量とJRA平地重賞のPL確率、重賞の0円の購入案を、発走前に公開するための手順である（ADR-041、ADR-045、ADR-046）。実行順序は、前日の夜の`latest`、当日のrace-day-odds、特徴量の常駐CLI、予測の常駐CLI、購入案の常駐CLIとする。
 
-この手順は人が実行する。4本のCLIを自動化せず、別々の端末から順に起動する。購入案の提示額は常に0円で、参考額（`reference_stake_yen`）を購入の根拠にしない。freezeは発走5分前、提示期限は発売締切（発走2分前）である。発売締切の後に計算した予測は`after_sales_close: true`として記録されるが、購入の判断には使わない。
+この手順は人が実行する。race-day-odds、特徴量・予測・購入案の常駐CLI、購入の記録（`model record-purchases`）を自動化せず、race-day-oddsと常駐CLIは別々の端末から順に起動する。購入案の提示額は常に0円で、参考額（`reference_stake_yen`）を購入の根拠にしない。freezeは発走5分前、提示期限は発売締切（発走2分前）である。発売締切の後に計算した予測は`after_sales_close: true`として記録されるが、購入の判断には使わない。
 
 ## 前提
 
@@ -15,7 +15,7 @@ Get-FileHash <学習用datamart>\manifest.json -Algorithm SHA256
 Get-FileHash <PLモデル>\manifest.json -Algorithm SHA256
 ```
 
-学習用datamartのmanifestの値は`--reference-datamart-manifest-sha256`へ、PLモデルのmanifestの値は`--pl-model-manifest-sha256`へ渡す。購入案の常駐CLIには、その年の推定器（`model fit-betting-estimator`の出力）のパスと、その`manifest.json`のSHA-256（`--estimator-manifest-sha256`）も渡す。推定器は年に1回、開催日より前に作る（README「当日の購入案の推定器を年ごとに保存する」）。年の違う推定器では起動しない。特徴量と予測のCLIには、前日の夜に`latest`が公開して控えた同じsnapshotのIDを、それぞれ`--snapshot-id`で渡す。race-day-oddsは`--snapshot-id`を受け取らない。
+学習用datamartのmanifestの値は`--reference-datamart-manifest-sha256`へ、PLモデルのmanifestの値は`--pl-model-manifest-sha256`へ渡す。購入案の常駐CLIには、その年の推定器（`model fit-betting-estimator`の出力）のパスと、その`manifest.json`のSHA-256（`--estimator-manifest-sha256`）も渡す。推定器は年に1回、開催日より前に作る（README「当日の購入案の推定器を年ごとに保存する」）。年の違う推定器では起動しない。購入案の常駐CLIには、実購入額の台帳（`model record-purchases`が書くJSON Lines）のパスも`--ledger`で渡す。台帳は個人の購入履歴なので、git対象外の`data/`の下（例: `data/purchases/ledger.jsonl`）かリポジトリの外に置く。特徴量と予測のCLIには、前日の夜に`latest`が公開して控えた同じsnapshotのIDを、それぞれ`--snapshot-id`で渡す。race-day-oddsは`--snapshot-id`を受け取らない。
 
 ## 前日の夜
 
@@ -24,6 +24,12 @@ Get-FileHash <PLモデル>\manifest.json -Algorithm SHA256
 ```powershell
 $t0 = Get-Date; uv run python src/main.py --retrieve --mode=latest; $t1 = Get-Date; "$t0 -> $t1 ($(($t1 - $t0).TotalSeconds) s)"
 Get-Content data/processed/CURRENT
+```
+
+台帳がまだなければ、開催日より前に作る（作るときの時刻が最初の確認になる）。台帳は年をまたいで1つでよい。年の途中で作る場合は、その年に既に買った馬券もすべて`--bet`で同時に記録する（記録しないと年間の残りの枠が実際より多くなる）。
+
+```powershell
+uv run python src/main.py model record-purchases --ledger data/purchases/ledger.jsonl --create
 ```
 
 翌朝に`latest`や`preprocess rebuild`を実行しない。前日の夜に控えたCURRENTのIDを、当日の特徴量と予測のCLIで`--snapshot-id`に指定して固定して使う。race-day-oddsには指定しない。
@@ -95,12 +101,27 @@ uv run python src/main.py model propose-bets-live `
   --estimator <推定器> --estimator-manifest-sha256 <manifestのSHA-256> `
   --pl-model <PLモデル> --pl-model-manifest-sha256 <manifestのSHA-256> `
   --date <開催日> --processed-root data/processed --snapshot-id <CURRENTのID> `
-  --output <購入案の出力先> 2>&1 |
+  --output <購入案の出力先> --ledger data/purchases/ledger.jsonl 2>&1 |
   ForEach-Object { "{0:o} {1}" -f (Get-Date), $_ } | Tee-Object -Append -FilePath <購入案のログ>
 ```
 
 予測の常駐CLIを新しい`--output`で再起動した場合は、購入案の常駐CLIも新しい`--predictions-root`と新しい`--output`で再起動する。
 購入案のCLIの`prediction_not_published`の本当の理由（特徴量の保留など）は、同じ`race_id`の予測のログの行で確かめる。
+
+### 購入の記録と確認
+
+購入案の常駐CLIは、各重賞の台帳の最新の確認が「そのレースより前に発走する当日の重賞の発売締切」以後（最初の重賞は当日0時（JST）以後）になるまで待ち、発売締切までに確認されなければ`ledger_unconfirmed`で保留する。台帳が読めない・不正なら`ledger_unavailable`・`ledger_invalid`で保留する。参考額の上限は、5,000円からそのレースの実購入額、100,000円からその年（開催日の年）の実購入額を引いた残りの小さい方である。提示額は0円のままである。
+
+- 当日の最初の重賞の前に、前日までの購入がすべて記録済みなら確認だけを足す（`--bet`なし）。
+- 各重賞の発売締切の後、次の重賞の発売締切までに、その間に買った馬券をすべて記録する（買わなければ確認だけを足す）。重賞以外のレースやシステム外の購入も年間の枠に数えるため、同じく記録する。
+
+```powershell
+uv run python src/main.py model record-purchases --ledger data/purchases/ledger.jsonl `
+  --bet <race_id>:place:07:1000 --bet <race_id>:win:07:500
+uv run python src/main.py model record-purchases --ledger data/purchases/ledger.jsonl
+```
+
+`race_id`は開催年月日（8桁）・競馬場コード・回次・日次・レース番号（各2桁）の16桁である（購入案・予測のログの`race_id`と同じ）。券種と組合せの書き方はREADME「実購入額を台帳に記録する」に従う。誤記は台帳を手で直し、検査に通ることを確かめる（直した後に確認だけを足すと`record-purchases`が検査する）。台帳を書く`record-purchases`は同時に1つだけ実行する。手で直すときは値だけを書き換えるか行を消し、キーの順序と区切り（`, `と`: `）、数値の書き方（`1000`）、改行（LF）を変えない（正確な規則はADR-046の決定1）。JSONの整形機能を使うと、台帳が`ledger_invalid`になり、以後の重賞が保留される。
 
 ## 当日の流れと所要時間の目安
 
@@ -137,11 +158,11 @@ race-day-oddsの実行中は、`latest`、`preprocess rebuild`、対象日の`--
 
 - 時計のずれ、前日の夜の`latest`の開始・終了時刻、公開したsnapshotのCURRENTのID。
 - race-day-oddsの端末出力、各取得の記録（`ARCHIVE_CAPTURE_LOG`と`data/processed/realtime/<開催日のレースディレクトリ>/`）、失敗時の隔離先。
-- 特徴量・予測・購入案の時刻付きログ（`<特徴量のログ>`、`<予測のログ>`、`<購入案のログ>`）、各CLIの最後の要約、公開・保留されたレースの出力。購入案の`publication_age_seconds`（古い発表、#78）。
+- 特徴量・予測・購入案の時刻付きログ（`<特徴量のログ>`、`<予測のログ>`、`<購入案のログ>`）、各CLIの最後の要約、公開・保留されたレースの出力。購入案の`publication_age_seconds`（古い発表、#78）。`record-purchases`の出力と、`ledger_*`の保留の有無。
 - 予測用の取得の`HappyoTime`、`features_not_published`や`race_day_fetch_failed: jvlink_error`などの保留理由、`after_sales_close`の有無。
 
 取得記録やログにサービスキーを含めない。
 
 ## 自動化しないこと
 
-前日の夜の`latest`、当日のrace-day-odds、特徴量の常駐CLI、予測の常駐CLI、購入案の常駐CLIは、人が別々の端末から順に起動する。起動スクリプトや自動集計はこの手順の対象外である。
+前日の夜の`latest`、当日のrace-day-odds、特徴量の常駐CLI、予測の常駐CLI、購入案の常駐CLIは、人が別々の端末から順に起動する。購入の記録と確認も人が行う。起動スクリプトや自動集計はこの手順の対象外である。

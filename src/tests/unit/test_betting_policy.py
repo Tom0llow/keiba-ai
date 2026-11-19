@@ -184,3 +184,94 @@ def test_an_exact_kelly_multiple_is_not_rounded_down_by_floating_point_error() -
     (bet,) = select_bets([_candidate(probability=0.3, estimated_odds=4.5)])
 
     assert bet.requested_stake_yen == 2_500
+
+
+def test_empty_prior_spending_keeps_every_decision_unchanged() -> None:
+    candidates = [
+        _candidate(race_id="2025-1", freeze_at=_at(2025, 1, 1), horse_number="01"),
+        _candidate(race_id="2025-1", freeze_at=_at(2025, 1, 1), horse_number="02"),
+        _candidate(race_id="2025-2", freeze_at=_at(2025, 2, 1), horse_number="03"),
+    ]
+
+    assert decide_races(candidates) == decide_races(
+        candidates, annual_spent_yen={}, race_spent_yen={}
+    )
+
+
+def test_prior_race_spending_lowers_the_race_cap() -> None:
+    (decision,) = decide_races(
+        [_candidate(probability=0.2, estimated_odds=11.0)],
+        race_spent_yen={"2025010101010101": 4_000},
+    )
+
+    assert (decision.outcome, decision.scaled) == ("purchased", True)
+    assert [bet.stake_yen for bet in decision.bets] == [1_000]
+
+
+def test_prior_annual_spending_lowers_the_cap_and_is_not_modified() -> None:
+    spent = {2025: 98_000}
+    first, second = decide_races(
+        [
+            _candidate(race_id="2025-1", freeze_at=_at(2025, 1, 1), horse_number="01"),
+            _candidate(race_id="2025-2", freeze_at=_at(2025, 2, 1), horse_number="02"),
+        ],
+        annual_spent_yen=spent,
+    )
+
+    assert (first.outcome, [bet.stake_yen for bet in first.bets]) == ("purchased", [2_000])
+    assert (second.outcome, second.scaled) == ("budget_exhausted", False)
+    assert spent == {2025: 98_000}
+
+
+def test_a_cap_below_one_unit_or_negative_exhausts_the_budget_without_scaling() -> None:
+    for race_spent in (4_950, 6_000):
+        (decision,) = decide_races([_candidate()], race_spent_yen={"2025010101010101": race_spent})
+
+        assert (decision.outcome, decision.scaled, decision.bets) == (
+            "budget_exhausted",
+            False,
+            (),
+        )
+
+
+def test_a_cap_of_one_unit_that_floors_every_bet_to_zero_is_scaled_and_exhausted() -> None:
+    (decision,) = decide_races(
+        [
+            _candidate(horse_number="01"),
+            _candidate(horse_number="02"),
+        ],
+        race_spent_yen={"2025010101010101": 4_900},
+    )
+
+    assert (decision.outcome, decision.scaled, decision.bets) == ("budget_exhausted", True, ())
+
+
+@pytest.mark.parametrize(
+    ("annual", "race"),
+    [
+        ({2025: -1}, None),
+        ({2025: True}, None),
+        ({2025: 100.0}, None),
+        ({"2025": 100}, None),
+        ({True: 100}, None),
+        (None, {"race": -100}),
+        (None, {1: 100}),
+        (None, {"": 100}),
+    ],
+)
+def test_malformed_prior_spending_is_rejected_even_without_candidates(
+    annual: dict[object, object] | None, race: dict[object, object] | None
+) -> None:
+    with pytest.raises(ValueError, match="spent_yen"):
+        decide_races([], annual_spent_yen=annual, race_spent_yen=race)  # type: ignore[arg-type]
+
+
+def test_annual_spending_already_includes_the_race_spending() -> None:
+    # 300 yen on this race is part of the 99,500 yen of the year: the cap is 500, not 200.
+    (decision,) = decide_races(
+        [_candidate()],
+        annual_spent_yen={2025: 99_500},
+        race_spent_yen={"2025010101010101": 300},
+    )
+
+    assert (decision.outcome, [bet.stake_yen for bet in decision.bets]) == ("purchased", [500])
