@@ -18,6 +18,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import Literal, cast
+from zoneinfo import ZoneInfo
 
 from models.artifacts.betting_estimator import BettingEstimator
 from models.betting.policy import (
@@ -29,6 +30,7 @@ from models.betting.policy import (
     place_probability,
     requested_bet,
 )
+from models.betting.purchase_ledger import PurchaseLedger
 from models.experiments.betting_backtest import method_probabilities, race_bet_candidates
 from models.experiments.betting_estimator import year_estimators
 from models.experiments.pl_prediction import (
@@ -43,7 +45,7 @@ from models.serialization.final_odds_observations import ObservationHold
 from models.serialization.race_subsets import JRA_FLAT_GRADED_STAKES_V1
 
 PROPOSAL_FORMAT = "ev_race_proposal"
-PROPOSAL_FORMAT_VERSION = 1
+PROPOSAL_FORMAT_VERSION = 2
 PROPOSAL_STAGE = "proposal"
 O1_TABLE = "ARCHIVE_O1_ODDS_TANFUKUWAKU"
 _HORSE_NUMBER = re.compile(r"[0-9]{2}")
@@ -51,6 +53,12 @@ _HEX64 = re.compile(r"[0-9a-f]{64}")
 _HEX32 = re.compile(r"[0-9a-f]{32}")
 _SUM_TOLERANCE = 1e-6
 _ORDER_TOLERANCE = 1e-12
+_JST = ZoneInfo("Asia/Tokyo")
+_OUTCOMES = {
+    "purchased": "reference_bets",
+    "budget_exhausted": "budget_exhausted",
+    "no_eligible_bet": "no_eligible_bet",
+}
 
 
 class ProposalHold(Exception):
@@ -94,6 +102,8 @@ class RaceProposal:
     after_sales_close: bool
     bets: int
     reference_stake_yen: int
+    race_remaining_yen: int
+    annual_remaining_yen: int
     payload: Mapping[str, object]
 
 
@@ -181,24 +191,46 @@ def build_race_proposal(
     computed_at: datetime,
     snapshot: Mapping[str, object],
     provenance: Mapping[str, object],
+    ledger: PurchaseLedger,
+    ledger_required_since: datetime,
 ) -> RaceProposal:
     """Build one race's proposal from its prediction, features' market and freeze O1.
 
     ``market_win_odds`` maps each horse ID of the race's features to the win odds the
     model saw; ``o1_rows`` are the race-day fetch's O1 rows. ``computed_at`` is the one
-    clock reading taken just before this calculation.
+    clock reading taken just before this calculation. The reference stakes are capped
+    by the race and calendar-year budgets less the actual purchases in ``ledger``
+    (ADR-046), whose latest confirmation must reach ``ledger_required_since``.
 
     Raises:
-        ProposalHold: For ADR-042's freeze-quote holds, ``entrant_mismatch``,
-            ``market_odds_mismatch``, ``blend_market_incomplete`` and
-            ``blend_zero_probability``, as in the backtest.
-        ValueError: If ``computed_at`` is not timezone-aware.
+        ProposalHold: ``ledger_unconfirmed`` when the ledger's latest confirmation is
+            missing or earlier than ``ledger_required_since``; ADR-042's freeze-quote
+            holds, ``entrant_mismatch``, ``market_odds_mismatch``,
+            ``blend_market_incomplete`` and ``blend_zero_probability``, as in the
+            backtest.
+        ValueError: If ``computed_at`` or ``ledger_required_since`` is not
+            timezone-aware, or the race ID's date is not the freeze's JST date.
     """
     if computed_at.utcoffset() is None:
         raise ValueError("computed_at must be timezone-aware")
+    if ledger_required_since.utcoffset() is None:
+        raise ValueError("ledger_required_since must be timezone-aware")
     record = estimator.record
     race_id = target.race_id
     freeze = target.freeze_at
+    freeze_day = freeze.astimezone(_JST).date()
+    if race_id[:8] != freeze_day.strftime("%Y%m%d"):
+        raise ValueError("the race ID's date differs from the freeze's JST date")
+    confirmed = ledger.latest_confirmation
+    if confirmed is None or confirmed < ledger_required_since:
+        raise ProposalHold(
+            "ledger_unconfirmed",
+            "the purchase ledger is not confirmed since "
+            f"{ledger_required_since.astimezone(UTC).isoformat()}",
+        )
+    year = freeze_day.year
+    race_spent = ledger.race_spent_yen(race_id)
+    annual_spent = ledger.annual_spent_yen(year)
     try:
         quotes = freeze_quotes(
             race_id,
@@ -233,8 +265,17 @@ def build_race_proposal(
     candidates, _, _ = race_bet_candidates(
         race_id, freeze, quotes, probabilities, method, estimators
     )
-    decisions = decide_races(candidates, policy=record.policy)
-    requested, funded, scaled = _reference(candidates, decisions, record.policy)
+    policy = record.policy
+    decisions = decide_races(
+        candidates,
+        policy=policy,
+        annual_spent_yen={year: annual_spent},
+        race_spent_yen={race_id: race_spent},
+    )
+    requested, funded, scaled = _reference(candidates, decisions, policy)
+    outcome = _OUTCOMES[decisions[0].outcome] if decisions else "no_eligible_bet"
+    race_remaining = max(0, policy.race_budget_yen - race_spent)
+    annual_remaining = max(0, policy.annual_budget_yen - annual_spent)
     after = is_after_sales_close(target, computed_at)
     bets = [_bet_payload(bet, funded.get((bet.bet_type, bet.horse_number), 0)) for bet in requested]
     reference_total = sum(funded.values())
@@ -277,15 +318,29 @@ def build_race_proposal(
         },
         "horses": _horse_payloads(prediction, probabilities, candidates, quotes, method),
         "bets": bets,
+        "ledger": {
+            "sha256": ledger.sha256,
+            "latest_confirmation_at": _iso(confirmed),
+            "required_confirmed_since": _iso(ledger_required_since),
+        },
+        "budget": {
+            "race_spent_yen": race_spent,
+            "annual_spent_yen": annual_spent,
+            "race_remaining_yen": race_remaining,
+            "annual_remaining_yen": annual_remaining,
+            "cap_yen": min(race_remaining, annual_remaining),
+        },
         "decision": {
-            "outcome": "reference_bets" if requested else "no_eligible_bet",
+            "outcome": outcome,
             "scaled": scaled,
             "reference_stake_yen": reference_total,
             "stake_yen": 0,
         },
         "provenance": dict(provenance),
     }
-    return RaceProposal(race_id, after, len(bets), reference_total, payload)
+    return RaceProposal(
+        race_id, after, len(bets), reference_total, race_remaining, annual_remaining, payload
+    )
 
 
 def proposal_json(payload: Mapping[str, object]) -> bytes:

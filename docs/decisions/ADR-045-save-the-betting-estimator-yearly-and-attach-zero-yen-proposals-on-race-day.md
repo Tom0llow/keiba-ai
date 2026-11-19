@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #81、Refs #57・#36・#56・#78・#82
 - Supersedes: N/A（ADR-042のRollbackの「保存された成果物はない」は、このADRで成果物を保存するため当てはまらなくなる）
-- Superseded by: N/A
+- Superseded by: N/A（決定4の最後の項・待ちと保留の理由、決定5のformat_version・`decision.outcome`・stdoutのキーは[ADR-046](ADR-046-record-actual-purchases-and-cap-proposals-by-them.md)が改めた）
 
 ---
 
@@ -197,7 +197,7 @@ Reason not selected: 人間が単勝・複勝だけを選んだ。
 
 ## Follow-up Actions
 
-- [ ] 実購入額の記録と年間の枠（#56）。
+- [x] 実購入額の記録と年間の枠（#56、[ADR-046](ADR-046-record-actual-purchases-and-cap-proposals-by-them.md)）。
 - [ ] 古い発表の扱い（#78）。
 
 ## Decision History
@@ -205,3 +205,4 @@ Reason not selected: 人間が単勝・複勝だけを選んだ。
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-17 | Accepted | GATE 1で人間が方法の延長・0円の提示・券種・常駐CLIを決め、2026年の成果物と2026-11-15の再生で確かめた |
+| 2026-11-18 | Accepted | ADR-046が実購入額の台帳による上限と`ev_race_proposal` format_version 2で決定4・5の一部を改めた（人間の承認、#56） |

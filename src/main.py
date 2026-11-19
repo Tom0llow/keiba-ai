@@ -13,6 +13,7 @@ from cli.pl_evaluation import model_evaluate_pl
 from cli.pl_prediction import model_predict_pl_live, model_propose_bets_live
 from cli.pl_training import model_train_pl
 from cli.preprocessor import preprocess_rebuild
+from cli.purchase_ledger import model_record_purchases
 from cli.real_market import model_prepare_real_input
 from cli.reference_datamart import (
     datamart_build_reference,
@@ -56,6 +57,7 @@ model_app.command("propose-bets-live")(model_propose_bets_live)
 model_app.command("evaluate-final-odds")(model_evaluate_final_odds)
 model_app.command("backtest-betting")(model_backtest_betting)
 model_app.command("fit-betting-estimator")(model_fit_betting_estimator)
+model_app.command("record-purchases")(model_record_purchases)
 datamart_app.command("build")(datamart_build)
 datamart_app.command("build-reference")(datamart_build_reference)
 datamart_app.command("build-reference-prediction")(datamart_build_reference_prediction)

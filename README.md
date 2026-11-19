@@ -742,11 +742,44 @@ uv run python src/main.py model fit-betting-estimator `
 - reportの`config`の検査・PLの評価の2ファイルとsnapshotの3表のhashの照合に失敗すると、何も読まずに・何も残さずに終了コード1で終わる。
   実データでは約3〜3.5分かかる。年が変わったら、その年のバックテストから作り直す。
 
+## 実購入額を台帳に記録する
+
+`model record-purchases`は、人が実際に買った馬券を、提案額と区別して台帳（`purchase_ledger`、ASCIIのJSON Lines）へ追記する
+（[ADR-046](docs/decisions/ADR-046-record-actual-purchases-and-cap-proposals-by-them.md)）。実行のたびに最後に確認の行
+（「この時刻までの購入はすべて台帳にある」）を足し、`--bet`なしの実行は確認の行だけを足す。台帳は個人の購入履歴なので、
+git対象外の`data/`の下かリポジトリの外に置く。
+
+```powershell
+uv run python src/main.py model record-purchases --ledger data/purchases/ledger.jsonl --create
+uv run python src/main.py model record-purchases --ledger data/purchases/ledger.jsonl `
+  --bet 2026111505050811:place:07:1000 --bet 2026111505050811:trifecta:07-03-12:300
+```
+
+- `--bet`は`<race_id>:<bet_type>:<selection>:<stake_yen>`である。`race_id`は開催年月日（8桁）・競馬場コード（`01`〜`10`）・回次・日次・
+  レース番号（`01`〜`12`）の16桁で、購入案・予測の`race_id`と同じである。
+- `bet_type`は`win`（単勝）・`place`（複勝）・`bracket_quinella`（枠連）・`quinella`（馬連）・`quinella_place`（ワイド）・`exacta`（馬単）・
+  `trio`（3連複）・`trifecta`（3連単）。`selection`は2桁の馬番（`01`〜`18`、枠連は枠番`01`〜`08`）を`-`でつなぎ、馬連・ワイド・3連複は
+  昇順、枠連は同枠を含む昇順、馬単・3連単は着順の順に書く。`stake_yen`は100円単位の額面である。
+- 重賞以外のレースやシステムが提案していないレースの購入も、年間100,000円の枠に数えるため記録する。払戻・返還は記録しない。
+- 台帳は`--create`のときだけ作る。年の途中で作る場合は、その年に既に買った馬券もすべて`--create`と同時に`--bet`で記録する
+  （作るときの確認は「それまでの購入はすべて台帳にある」という宣言になる）。台帳は年をまたいで1つでよい（年は`race_id`の開催日で数える）。
+- 台帳を書くのは同時に1つの`record-purchases`だけとする（2つの端末から同時に実行しない）。既存の台帳は、読んだ内容のまま変わって
+  いないときだけ原子的に置き換える。不正な台帳・入力、
+  シンボリックリンク、時計の巻戻りでは何も書かずに終了コード1で終わる（Ctrl+Cは130）。
+- 誤記は台帳を手で直す。各行は`{"bet_type": "place", "kind": "purchase", …}`のように、キーを辞書順に並べ、区切りを`, `と`: `
+  （後に空白1つ）とした1行のJSONで、それ以外の空白を入れない。数値は`1000`のように既定の形（`1e3`・`1000.0`は不可）、文字列は
+  ASCIIでエスケープしない。改行はLFだけで最後の行も改行で終わり、BOMを付けない。1行目の見出しは変えず、`recorded_at`は行の順に
+  減らない。正確な規則はADR-046の決定1である。値だけを書き換えるか行を消し、JSONの整形機能を使わない。
+  直した後に`--bet`なしで実行すると、台帳を検査して確認を足す（書式が違えば何も書かずに行番号と規則を出す）。
+- stdoutには1行のJSON（`appended`・`confirmed_at`・`ledger_sha256`・`races`（今回のレースの累計）・`years`（年の累計））を出す。
+  レースの累計が5,000円、年の累計が100,000円を超えると、stderrに`warning:`を出す（記録はする）。
+
 ## 当日の重賞に0円の購入案を付ける
 
 `model propose-bets-live`は、[当日の運用手順](docs/race-day-operation.md)に従って`model predict-pl-live`の後に起動し、その出力を監視する。
 重賞の予測が公開されるたびに、freezeの単勝・複勝のオッズと推定器から期待受取倍率`R = P × Ô`を計算し、ADR-043の方策
 （`R ≥ 1.10`・1/4ケリー・1レース5,000円）の参考額を付けて公開する（[ADR-045](docs/decisions/ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)）。
+参考額の上限は、台帳の実購入額を差し引いたレース内・暦年の残りの枠である（[ADR-046](docs/decisions/ADR-046-record-actual-purchases-and-cap-proposals-by-them.md)）。
 **提示する購入額は常に0円である**。バックテストは損失を示しており、参考額を購入の根拠にしない。
 
 ```powershell
@@ -755,17 +788,22 @@ uv run python src/main.py model propose-bets-live `
   --estimator output/ev-betting-estimator-2026 --estimator-manifest-sha256 <manifestのSHA-256> `
   --pl-model output/pl-final-model-2006-2025 --pl-model-manifest-sha256 <manifestのSHA-256> `
   --date 2026-11-15 --processed-root data/processed --snapshot-id <CURRENTのID> `
-  --output output/ev-proposal-20261115
+  --output output/ev-proposal-20261115 --ledger data/purchases/ledger.jsonl
 ```
 
 - `--predictions-root`は`predict-pl-live`の`--output`で、`--features-root`・`--pl-model`・`--snapshot-id`は`predict-pl-live`と同じ値を渡す。
-  推定器の`target_year`が`--date`の年と違えば、`--output`を作らずに終了コード1で終わる。
-- `<output>/<race_id>/proposal.json`（`ev_race_proposal` format_version 1）には、馬ごとの確率・単勝と複勝のfreezeのオッズ・`Ô`・`R`、
-  `R ≥ 1.10`の買い目の要求額と1レースの上限で縮小した参考額（`reference_stake_yen`）、`stake_yen`（常に0）、推定器・予測・取得の識別と
-  発表の古さ（`publication_age_seconds`）を記録する。年間の枠の残り（#56）は扱わない。
+  推定器の`target_year`が`--date`の年と違えば、`--output`を作らずに終了コード1で終わる。`--ledger`の台帳がない・不正・シンボリック
+  リンク・他の入出力の中にある場合も同じである。
+- 各重賞は、台帳の最新の確認が、そのレースより前に発走する当日の重賞の発売締切以後（最初の重賞は当日0時（JST）以後）になるまで
+  待つ。発売締切までに届かなければ`ledger_unconfirmed`、台帳が読めない・不正なら`ledger_unavailable`・`ledger_invalid`で保留する。
+- `<output>/<race_id>/proposal.json`（`ev_race_proposal` format_version 2）には、馬ごとの確率・単勝と複勝のfreezeのオッズ・`Ô`・`R`、
+  `R ≥ 1.10`の買い目の要求額と残りの枠で縮小した参考額（`reference_stake_yen`）、`stake_yen`（常に0）、推定器・予測・取得の識別と
+  発表の古さ（`publication_age_seconds`）、台帳の識別（`ledger`）とレース・年の使用額と残り（`budget`）を記録する。`decision.outcome`は
+  `reference_bets`・`no_eligible_bet`・`budget_exhausted`（残りの枠で参考額がすべて0円）のいずれかである。
 - 発売締切までに予測が公開されない重賞は`prediction_not_published`で保留する（本当の理由は`predict-pl-live`のstdoutにある）。
   その他の保留の理由は`prediction_invalid`・`prediction_mismatch`・`features_invalid`・`market_source_unsupported`・
   `market_source_unavailable`・`market_source_mismatch`・`stale_publication`などのfreezeの気配の保留・`market_invalid`・
   `entrant_mismatch`・`market_odds_mismatch`・`blend_market_incomplete`・`blend_zero_probability`・`publish_failed`（公開の失敗）である。
 - stdoutには、レースごとに1行のJSON（`race_id`・`status`（`proposed`/`held`/`out_of_scope`）・`stage`・`reason`・`detail`・`output`・
-  `after_sales_close`・`bets`・`reference_stake_yen`）を出す。終了コードと再起動の規則は`predict-pl-live`と同じである。
+  `after_sales_close`・`bets`・`reference_stake_yen`・`race_remaining_yen`・`annual_remaining_yen`）を出す。終了コードと再起動の規則は
+  `predict-pl-live`と同じである。

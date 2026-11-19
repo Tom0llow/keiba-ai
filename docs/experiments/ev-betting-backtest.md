@@ -9,7 +9,9 @@
 Issue #36として、PLの着順確率（[ADR-035](../decisions/ADR-035-evaluate-top3-plackett-luce-probabilities-on-yearly-folds.md)の
 test年ごとのfoldの予測）と、確定オッズの補正（[ADR-042](../decisions/ADR-042-correct-closing-odds-to-hit-conditional-final-odds.md)）から
 単勝・複勝の買い目の期待値を計算し、REQ-04〜06の予算を守る方策で平地重賞の過去の購入時点（freeze、発走5分前）を再現して評価する。
-方策は計測の前に固定し、評価期間の結果で値を変えない。当日の購入案への適用（#81）と実購入額の管理（#56）は扱わない。
+方策は計測の前に固定し、評価期間の結果で値を変えない。当日の購入案への適用（#81）と実購入額の管理（#56）はこの計測の範囲外である（後にADR-045・ADR-046で加えた）。
+
+注記（2026-11-18）: 実購入額の管理は[ADR-046](../decisions/ADR-046-record-actual-purchases-and-cap-proposals-by-them.md)で加えた。下の「当日の推定器と購入案」の再生のコマンドは、今は`--ledger`（実購入額の台帳）が必要である。以下の記録は書き換えない。
 
 下の「手順」〜「再現の情報」はADR-043（format_version 1）の計測の手順・件数・時間・結果である。現在のCLIは、これに加えて
 合成の当てはめのために`finish_position`を含む2つ目の投影を読み、`place_low`の的中も組み立てる。Issue #92の推定の方法の年ごとの選択

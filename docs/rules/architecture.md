@@ -123,6 +123,11 @@ coherent responsibility and have a name that describes that responsibility.
   and candidate functions in `models/experiments/betting_backtest.py` instead of copying
   them. `model fit-betting-estimator` lives in `cli/betting_backtest.py` and
   `model propose-bets-live` in `cli/pl_prediction.py`, so no CLI imports a sibling.
+- ADR-046's purchase ledger format, its parsing, totals and confirmation rule belong to
+  `models/betting/purchase_ledger.py` (pure, standard library only). Exclusive creation and
+  checked atomic replacement of the ledger file belong to `data/storage/file_replacer.py`.
+  Only `model record-purchases` (`cli/purchase_ledger.py`) writes the ledger;
+  `model propose-bets-live` only reads it.
 - Preserve acquisition locks and ledger/quarantine/reset/recovery/publication ordering.
   See ADR-025 and `docs/refactoring-pr21.md` for the complete responsibility mapping.
 - Share option definitions through `cli/options.py` and generic CLI JSON handling

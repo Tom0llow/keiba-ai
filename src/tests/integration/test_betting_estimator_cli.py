@@ -241,6 +241,7 @@ for name in (
     "models.experiments.betting_estimator",
     "models.experiments.bet_proposal",
     "models.betting.methods",
+    "models.betting.purchase_ledger",
     "models.probability.market_blend",
 ):
     assert name not in sys.modules, name

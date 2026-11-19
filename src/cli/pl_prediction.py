@@ -26,6 +26,7 @@ if TYPE_CHECKING:
     from domain.race_key import RaceKey
     from models.artifacts.betting_estimator import BettingEstimator
     from models.artifacts.pl_model import PLModel
+    from models.betting.purchase_ledger import PurchaseLedger
     from models.experiments.pl_prediction import RaceTarget
 
 _COMMAND = "model predict-pl-live"
@@ -107,7 +108,7 @@ def model_predict_pl_live(
         model = read_pl_model(pl_model, expected_manifest_sha256=pl_model_manifest_sha256)
         snapshot = FixedSnapshot(processed_root, snapshot_id=snapshot_id)
         snapshot.pin(_TABLES)
-        targets, startup = plan_race_day(snapshot, target_day)
+        targets, startup, _ = plan_race_day(snapshot, target_day)
         pinned = snapshot.manifest()
         if targets:
             model.require_prediction_after(min(target.freeze_at for target in targets))
@@ -159,13 +160,14 @@ def model_predict_pl_live(
 
 def plan_race_day(
     snapshot: FixedSnapshot, day: date
-) -> tuple[list[RaceTarget], list[PredictionOutcome]]:
-    """Return the date's graded races to watch, and the lines decided before watching.
+) -> tuple[list[RaceTarget], list[PredictionOutcome], dict[str, datetime]]:
+    """Return the date's graded races to watch, the lines decided before watching, and
+    the scheduled start of every graded race whose card gives one.
 
     Cards come from the feature build's own normalization (``label_free_target_cards``).
     A race outside ``jra_flat_graded_stakes_v1`` is ``out_of_scope``; a graded race whose
     card is held, whose grade or track rows differ, or that has fewer than three horses
-    is held at once.
+    is held at once. Only the last of those holds still has a known start.
     """
     from make_features.real_market import KEY_COLUMNS
     from make_features.reference_raw import CARD_RA_COLUMNS, CARD_SE_COLUMNS, race_identity
@@ -213,6 +215,7 @@ def plan_race_day(
     held = {str(item["race_id"]): item for item in card_holds}
     targets: list[RaceTarget] = []
     outcomes: list[PredictionOutcome] = []
+    graded_starts: dict[str, datetime] = {}
     for identity in sorted(codes):
         if not graded(identity):
             outcomes.append(PredictionOutcome(identity, "out_of_scope"))
@@ -235,6 +238,7 @@ def plan_race_day(
             )
             continue
         card = by_race[identity]
+        graded_starts[identity] = card.scheduled_start_at
         if len(card.horse_mapping) < MINIMUM_FIELD_SIZE:
             outcomes.append(
                 PredictionOutcome(
@@ -257,7 +261,7 @@ def plan_race_day(
                 str(grade),
             )
         )
-    return targets, outcomes
+    return targets, outcomes, graded_starts
 
 
 def watch_races[Outcome](
@@ -465,6 +469,18 @@ def _check_apart(
         raise ValueError("--output must stay outside processed_root")
 
 
+def _check_ledger(ledger_path: Path, *roots: Path) -> None:
+    if ledger_path.is_symlink():
+        raise ValueError("--ledger must not be a symbolic link")
+    ledger = ledger_path.expanduser().resolve()
+    for root in roots:
+        if ledger.is_relative_to(root.expanduser().resolve()):
+            raise ValueError(
+                "--ledger must stay outside --output, --predictions-root, "
+                "--features-root and processed_root"
+            )
+
+
 def _emit(outcome: PredictionOutcome) -> None:
     typer.echo(outcome.as_json())
 
@@ -494,6 +510,8 @@ class ProposalOutcome:
     after_sales_close: bool | None = None
     bets: int | None = None
     reference_stake_yen: int | None = None
+    race_remaining_yen: int | None = None
+    annual_remaining_yen: int | None = None
 
     def as_json(self) -> str:
         """Return the stdout line with sorted keys."""
@@ -508,6 +526,8 @@ class ProposalOutcome:
                 "after_sales_close": self.after_sales_close,
                 "bets": self.bets,
                 "reference_stake_yen": self.reference_stake_yen,
+                "race_remaining_yen": self.race_remaining_yen,
+                "annual_remaining_yen": self.annual_remaining_yen,
             },
             ensure_ascii=True,
             allow_nan=False,
@@ -527,6 +547,9 @@ def model_propose_bets_live(
     ],
     processed_root: Annotated[Path, typer.Option("--processed-root")],
     output_path: Annotated[Path, typer.Option("--output")],
+    ledger_path: Annotated[
+        Path, typer.Option("--ledger", help="Purchase ledger of model record-purchases.")
+    ],
     snapshot_id: Annotated[str | None, typer.Option("--snapshot-id")] = None,
     poll_interval_seconds: Annotated[int, typer.Option("--poll-interval-seconds")] = 2,
 ) -> None:
@@ -535,14 +558,16 @@ def model_propose_bets_live(
     ``--predictions-root`` is the ``--output`` of ``model predict-pl-live``; pass the same
     ``--features-root``, ``--pl-model`` and ``--snapshot-id`` as that command. A race
     whose prediction is not published by sales close is held as
-    ``prediction_not_published``.
+    ``prediction_not_published``. Reference stakes are capped by the actual purchases in
+    ``--ledger`` (ADR-046); a race waits until the ledger is confirmed since the sales
+    close of the day's earlier-starting graded races, and is held at its sales close.
     """
     # Keep NumPy, Arrow, LightGBM and the model modules out of imports and CLI help.
     import data.loader.race_version  # noqa: F401  (load Arrow before the first race)
     from data.loader.fixed_snapshot import FixedSnapshot
     from models.artifacts.betting_estimator import read_betting_estimator
     from models.artifacts.pl_model import read_pl_model
-    from models.experiments.bet_proposal import PROPOSAL_STAGE
+    from models.betting.purchase_ledger import parse_ledger
     from models.experiments.provenance import experiment_provenance
 
     started = perf_counter()
@@ -560,6 +585,8 @@ def model_propose_bets_live(
         _check_new_output(output_path)
         _check_apart(output_path, predictions_root, processed_root, option="--predictions-root")
         _check_apart(output_path, features_root, processed_root)
+        _check_ledger(ledger_path, output_path, predictions_root, features_root, processed_root)
+        parse_ledger(ledger_path.read_bytes())
         estimator = read_betting_estimator(
             estimator_path, expected_manifest_sha256=estimator_manifest_sha256
         )
@@ -571,7 +598,7 @@ def model_propose_bets_live(
         model = read_pl_model(pl_model, expected_manifest_sha256=pl_model_manifest_sha256)
         snapshot = FixedSnapshot(processed_root, snapshot_id=snapshot_id)
         snapshot.pin(_TABLES)
-        targets, startup = plan_race_day(snapshot, target_day)
+        targets, startup, graded_starts = plan_race_day(snapshot, target_day)
         pinned = snapshot.manifest()
         provenance = experiment_provenance()
         _check_new_output(output_path)
@@ -589,6 +616,7 @@ def model_propose_bets_live(
             outcomes.append(outcome)
         if not targets:
             typer.echo(f"no graded race to watch on {target_day.isoformat()}", err=True)
+        required = ledger_required_since(target_day, targets, graded_starts)
         watcher = _ProposalWatcher(
             predictions_root,
             features_root,
@@ -600,17 +628,9 @@ def model_propose_bets_live(
             snapshot=_snapshot_identity(pinned),
             provenance=provenance,
             now=_clock,
+            ledger_path=ledger_path,
+            ledger_required_since=required,
         )
-
-        def missing(target: RaceTarget) -> ProposalOutcome:
-            return ProposalOutcome(
-                target.race_id,
-                "held",
-                PROPOSAL_STAGE,
-                PREDICTION_NOT_PUBLISHED,
-                "the prediction was not published by sales close",
-            )
-
         outcomes += watch_races(
             targets,
             now=_clock,
@@ -618,7 +638,7 @@ def model_propose_bets_live(
             poll_seconds=poll_interval_seconds,
             published=watcher.published,
             complete=watcher.complete,
-            missing=missing,
+            missing=watcher.missing,
             report=_emit_proposal,
         )
     except KeyboardInterrupt as exc:
@@ -641,8 +661,38 @@ def model_propose_bets_live(
     )
 
 
+def ledger_required_since(
+    day: date, targets: Sequence[RaceTarget], graded_starts: Mapping[str, datetime]
+) -> dict[str, datetime]:
+    """Return each target's earliest acceptable ledger confirmation (ADR-046).
+
+    It is the latest sales close among the day's graded races with a known start that
+    start strictly earlier than the target, including races held at startup, or the
+    day's midnight (JST) when that is later or there is none.
+    """
+    from models.betting.purchase_ledger import required_confirmed_since
+    from models.experiments.pl_prediction import SALES_CLOSE_BEFORE_START
+
+    return {
+        target.race_id: required_confirmed_since(
+            day,
+            (
+                start - SALES_CLOSE_BEFORE_START
+                for start in graded_starts.values()
+                if start < target.scheduled_start_at
+            ),
+        )
+        for target in targets
+    }
+
+
 class _ProposalWatcher:
-    """Read one race's prediction, features and race-day O1, then publish its proposal."""
+    """Read one race's prediction, features and race-day O1, then publish its proposal.
+
+    A race is ready when its prediction is published and the purchase ledger, read once
+    per check, is valid and confirmed since the race's required time. The ledger read
+    that made a race ready is the one its proposal uses.
+    """
 
     def __init__(
         self,
@@ -657,6 +707,8 @@ class _ProposalWatcher:
         snapshot: Mapping[str, object],
         provenance: Mapping[str, object],
         now: Callable[[], datetime],
+        ledger_path: Path,
+        ledger_required_since: Mapping[str, datetime],
     ) -> None:
         source = cast(Mapping[str, object], model_manifest["source_datamart"])
         columns = cast(list[dict[str, str]], source["columns"])
@@ -670,14 +722,25 @@ class _ProposalWatcher:
         self.provenance = provenance
         self.now = now
         self.columns = tuple(_Column(**column) for column in columns)
+        self.ledger_path = ledger_path
+        self.ledger_required_since = ledger_required_since
         self._warned_missing_root = False
+        self._ledgers: dict[str, PurchaseLedger] = {}
+        self._ledger_holds: dict[str, tuple[str, str]] = {}
 
     def published(self, target: RaceTarget) -> bool:
-        """Return whether the race's prediction directory has been published.
+        """Return whether the race's prediction is published and the ledger is ready.
 
         The root is never listed: ``predict-pl-live`` stages unfinished races beside the
-        published ones. A missing root at a due race is reported once on stderr.
+        published ones. A missing root at a due race is reported once on stderr. When the
+        prediction is published but the ledger is not ready, the reason is kept for
+        ``missing``; every check starts afresh.
         """
+        from models.betting.purchase_ledger import LedgerError, parse_ledger
+
+        race_id = target.race_id
+        self._ledgers.pop(race_id, None)
+        self._ledger_holds.pop(race_id, None)
         if not self.predictions_root.is_dir():
             if not self._warned_missing_root:
                 typer.echo(
@@ -686,7 +749,43 @@ class _ProposalWatcher:
                 )
                 self._warned_missing_root = True
             return False
-        return (self.predictions_root / target.race_id).is_dir()
+        if not (self.predictions_root / race_id).is_dir():
+            return False
+        required = self.ledger_required_since[race_id]
+        try:
+            ledger = parse_ledger(self.ledger_path.read_bytes())
+        except OSError as exc:
+            # The OSError text names the ledger's local path; keep it out of the stdout log.
+            reason = exc.strerror or type(exc).__name__
+            self._ledger_holds[race_id] = (
+                "ledger_unavailable",
+                f"the ledger cannot be read: {reason}",
+            )
+            return False
+        except LedgerError as exc:
+            self._ledger_holds[race_id] = ("ledger_invalid", str(exc))
+            return False
+        confirmed = ledger.latest_confirmation
+        if confirmed is None or confirmed < required:
+            self._ledger_holds[race_id] = (
+                "ledger_unconfirmed",
+                f"the purchase ledger is not confirmed since {required.astimezone(UTC).isoformat()}",
+            )
+            return False
+        self._ledgers[race_id] = ledger
+        return True
+
+    def missing(self, target: RaceTarget) -> ProposalOutcome:
+        """Hold a race not ready by sales close, by its ledger reason when it has one."""
+        from models.experiments.bet_proposal import PROPOSAL_STAGE
+
+        reason, detail = self._ledger_holds.get(
+            target.race_id,
+            (PREDICTION_NOT_PUBLISHED, "the prediction was not published by sales close"),
+        )
+        return ProposalOutcome(
+            target.race_id, "held", PROPOSAL_STAGE, reason, " ".join(detail.split())
+        )
 
     def complete(self, target: RaceTarget) -> ProposalOutcome:
         """Propose one race, or hold it with a reason; other races keep being watched."""
@@ -709,6 +808,9 @@ class _ProposalWatcher:
                 target.race_id, "held", PROPOSAL_STAGE, reason, " ".join(detail.split())
             )
 
+        ledger = self._ledgers.pop(target.race_id, None)
+        if ledger is None:
+            return hold("ledger_unavailable", "the race was not made ready by a ledger read")
         try:
             # One read: the hash and the parse see the same bytes.
             data = (self.predictions_root / target.race_id / "prediction.json").read_bytes()
@@ -759,6 +861,8 @@ class _ProposalWatcher:
                 computed_at=self.now(),
                 snapshot=self.snapshot,
                 provenance=self.provenance,
+                ledger=ledger,
+                ledger_required_since=self.ledger_required_since[target.race_id],
             )
         except ProposalHold as exc:
             return hold(exc.reason, exc.detail)
@@ -779,6 +883,8 @@ class _ProposalWatcher:
             after_sales_close=proposal.after_sales_close,
             bets=proposal.bets,
             reference_stake_yen=proposal.reference_stake_yen,
+            race_remaining_yen=proposal.race_remaining_yen,
+            annual_remaining_yen=proposal.annual_remaining_yen,
         )
 
 
