@@ -152,7 +152,8 @@ prediction_offset_minutes = 5
 ```
 
 `execution_timeout_seconds`は、1回の取得でJVLinkToSQLiteを待つ上限の秒数で、必須である。超えた取得は
-`failed/jvlink_error`と記録して次の取得へ進む。2026-11-14・15の計測では、通常の取得の最大は約7秒であり、120秒で十分だった。2026-11-14・15に120秒に達したのは、JV-Linkの停止中だけだった。詳細は[当日の運用の実測](docs/experiments/race-day-operation.md)を参照する。
+`failed/jvlink_error`と記録して次の取得へ進む。ただし、`JVOpen`/`JVRTOpen`が`-211`・`-303`を返した取得は、記録した後に
+race-day-oddsを終了する（ADR-032 Amendment 3）。2026-11-14・15の計測では、通常の取得の最大は約7秒であり、120秒で十分だった。2026-11-14・15に120秒に達したのは、JV-Linkの停止中だけだった。詳細は[当日の運用の実測](docs/experiments/race-day-operation.md)を参照する。
 
 `prediction_offset_minutes`（任意、3〜5）があると、各レースの発走のその分前に、当日の特徴量のための0B41/0B42の
 時系列も取得する（ADR-032 Amendment 2、[ADR-037](docs/decisions/ADR-037-build-race-day-reference-features-after-freeze.md)）。
@@ -248,6 +249,7 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   `skipped_late`とし、発走時刻の変更には追従しない。最初の取得の前に実行XMLを一度生成して検証し、設定に誤りが
   あれば取得を始めずに、stderrへ`race-day-odds setup failed: ...`、stdoutへ要約を出して終了コード1で終わる。
   seedのファイル自体がない場合は、従来どおり起動時に例外で終わる（`--recover`も同じ）。
+  `JVOpen`または`JVRTOpen`が`-211`・`-303`を返した取得は記録した後に残りの取得を実行せず、stderrへ`race-day-odds stopped: <stop_reason>; see docs/race-day-operation.md`を出してstdoutへ要約JSONを出し、終了コード1で終わる。`--date`で起動し直すと、予定時刻を過ぎた取得は`skipped_late`となる。
   取得の途中で止まった場合は、取得記録の`running`が残り、他の取得モードは復旧するまで拒否される。
   `ARCHIVE_CAPTURE_*`は完全なParquetには公開しないので、`preprocess rebuild`などの完全な再構築で出力する。
   `prediction_offset_minutes`の予測用の取得は、終了するたびにそのレースのParquet（`data/processed/realtime/<race-id>/`）を

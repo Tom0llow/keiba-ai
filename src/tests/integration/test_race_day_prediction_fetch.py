@@ -67,6 +67,7 @@ class FakeRunner:
         self.fail: set[tuple[str, str]] = set()
         self.foreign_row: set[tuple[str, str]] = set()
         self.empty: dict[tuple[str, str], frozenset[str]] = {}
+        self.api_results: dict[tuple[str, str], dict[str, tuple[str, int]]] = {}
         self.assert_not_running = Mock()
 
     def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
@@ -91,7 +92,13 @@ class FakeRunner:
         self.clock.now += timedelta(seconds=2)
         if (race, kind) in self.fail:
             raise JVLinkToSQLiteError("JV-Link failed", returncode=1)
-        return JVLinkExecutionResult({}, process_returncode=0)
+        api_results = self.api_results.get((race, kind), {})
+        return JVLinkExecutionResult(
+            {},
+            fatal_specs=frozenset(api_results),
+            api_results=api_results,
+            process_returncode=0,
+        )
 
 
 def _key(race: str) -> tuple[str, ...]:
@@ -396,6 +403,25 @@ def test_a_failed_or_foreign_prediction_fetch_archives_nothing_and_is_still_publ
     assert _staging_rows(database) == 0
     assert list((tmp_path / "runtime" / "race-day-odds-quarantine").glob("*.db"))
     assert result.failed
+
+
+def test_jvlink_agent_down_prediction_fetch_publishes_before_stopping(tmp_path: Path) -> None:
+    retriever, runner, _, database = _retriever(
+        tmp_path, datetime(2026, 11, 15, 5, 0, tzinfo=UTC), offsets=(2,)
+    )
+    runner.api_results[("11", "prediction")] = {"0B42": ("JVOpen", -303)}
+    publisher = Publisher(tmp_path, database)
+
+    result = retriever.retrieve(RACE_DATE, publisher=publisher)
+
+    assert runner.calls == [("11", "prediction")]
+    assert publisher.races == ["11"]
+    assert result.stop_reason == (
+        "JV-Link returned 0B42 JVOpen -303; the JVLinkAgent service may have stopped; "
+        "remaining captures were not run"
+    )
+    statuses = {(row[0], row[1]): str(row[3]) for row in _log(database)}
+    assert statuses == {("11", "0B41"): "archived", ("11", "0B42"): "failed"}
 
 
 @pytest.mark.parametrize(

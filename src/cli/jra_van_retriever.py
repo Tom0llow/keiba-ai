@@ -379,8 +379,13 @@ def retrieve_race_day_odds(
         typer.echo(f"race-day-odds setup failed: {_one_line(exc)}", err=True)
         typer.echo(json.dumps(partial_summary, separators=(",", ":")))
         raise typer.Exit(code=1) from None
+    if result.stop_reason is not None:
+        typer.echo(
+            f"race-day-odds stopped: {result.stop_reason}; see docs/race-day-operation.md",
+            err=True,
+        )
     typer.echo(json.dumps(result.summary, separators=(",", ":")))
-    if result.failed:
+    if result.failed or result.stop_reason is not None:
         raise typer.Exit(code=1)
 
 

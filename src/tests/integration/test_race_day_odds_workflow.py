@@ -76,6 +76,8 @@ class FakeRunner:
         self.fail_calls: set[int] = set()
         self.failure_message = "JV-Link failed"
         self.failure_returncode: int | None = 1
+        self.failure_api_results: dict[str, tuple[str, int]] = {}
+        self.normal_api_results: dict[str, tuple[str, int]] = {}
         self.assert_not_running = Mock()
 
     def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
@@ -106,8 +108,14 @@ class FakeRunner:
             raise JVLinkToSQLiteError(
                 self.failure_message,
                 returncode=self.failure_returncode,
+                api_results=self.failure_api_results,
             )
-        return JVLinkExecutionResult({}, process_returncode=0)
+        return JVLinkExecutionResult(
+            {},
+            fatal_specs=frozenset(self.normal_api_results),
+            api_results=self.normal_api_results,
+            process_returncode=0,
+        )
 
 
 _race_numbers_by_order: list[str] = []
@@ -399,6 +407,77 @@ def test_jvlink_failure_is_recorded_and_later_captures_continue(
     assert returncode == (None if process_returncode is None else str(process_returncode))
     assert result.summary["failed"] == 6
     assert result.failed
+    assert result.stop_reason is None
+
+
+@pytest.mark.parametrize(
+    ("failure", "failure_returncode", "api_results", "expected_failed", "stop_reason"),
+    [
+        (
+            False,
+            None,
+            {"0B31": ("JVOpen", -303)},
+            1,
+            "JV-Link returned 0B31 JVOpen -303; the JVLinkAgent service may have stopped; "
+            "remaining captures were not run",
+        ),
+        (
+            True,
+            1,
+            {"0B32": ("JVOpen", -211)},
+            6,
+            "JV-Link returned 0B32 JVOpen -211; the JVLinkAgent service may have stopped; "
+            "remaining captures were not run",
+        ),
+        (
+            True,
+            None,
+            {spec: ("JVOpen", -303) for spec in ("0B34", "0B33", "0B32", "0B31")},
+            6,
+            "JV-Link returned 0B31 JVOpen -303, 0B32 JVOpen -303, 0B33 JVOpen -303, "
+            "0B34 JVOpen -303; the JVLinkAgent service may have stopped; "
+            "remaining captures were not run",
+        ),
+    ],
+    ids=["execution_result", "execution_error", "execution_timeout"],
+)
+def test_jvlink_agent_down_stops_after_recording_the_current_capture(
+    tmp_path: Path,
+    failure: bool,
+    failure_returncode: int | None,
+    api_results: dict[str, tuple[str, int]],
+    expected_failed: int,
+    stop_reason: str,
+) -> None:
+    retriever, runner, _, _, database = _retriever(
+        tmp_path, datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    )
+    if failure:
+        runner.fail_calls = {0}
+        runner.failure_returncode = failure_returncode
+        if failure_returncode is None:
+            runner.failure_message = "JVLinkToSQLite timed out after 120.0 seconds"
+        runner.failure_api_results = api_results
+    else:
+        runner.normal_api_results = api_results
+
+    result = retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11"]
+    assert len(result.captures) == 1
+    assert result.summary["failed"] == expected_failed
+    assert result.stop_reason == stop_reason
+    assert _statuses(database) == [("11", "10", "failed")]
+    with sqlite3.connect(database) as connection:
+        failed_reasons = list(
+            connection.execute("SELECT reason FROM ARCHIVE_CAPTURE_LOG WHERE status = 'failed'")
+        )
+        running = connection.execute(
+            "SELECT COUNT(*) FROM ARCHIVE_CAPTURE_LOG WHERE status = 'running'"
+        ).fetchone()[0]
+    assert failed_reasons
+    assert all(str(reason[0]).startswith("jvlink_error") for reason in failed_reasons)
+    assert running == 0
 
 
 def test_persistence_failure_after_begin_stops_and_recovery_releases_the_lock(
@@ -414,6 +493,7 @@ def test_persistence_failure_after_begin_stops_and_recovery_releases_the_lock(
 
     assert runner.calls == ["11"]
     assert result.failed
+    assert result.stop_reason is None
     assert {status for _, _, status in _statuses(database)} == {"running"}
     with sqlite3.connect(database) as connection:
         staged = connection.execute('SELECT COUNT(*) FROM "RT_O6_ODDS_SANRENTAN"').fetchone()[0]

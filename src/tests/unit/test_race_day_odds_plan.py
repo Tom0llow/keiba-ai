@@ -12,6 +12,7 @@ from jra_van_retriever.config.validation import validate_race_day_odds_profile
 from jra_van_retriever.workflows.race_day_odds_plan import (
     classify_capture,
     is_capture_late,
+    jvlink_agent_down_results,
     plan_captures,
 )
 
@@ -132,6 +133,27 @@ def test_classification_follows_the_existing_provider_evidence_rules() -> None:
     assert (rejected.status, rejected.reason) == ("failed", "staging_multiple_rows")
     missing = classify_capture("0B33", None, archived=False, observed_rows=0)
     assert missing.reason == "empty_response_unverified"
+
+
+def test_jvlink_agent_down_results_match_only_the_relevant_open_returncodes() -> None:
+    execution = JVLinkExecutionResult(
+        {},
+        api_results={
+            "0B36": ("JVRead", -303),
+            "0B34": ("JVOpen", -502),
+            "0B32": ("JVOpen", -211),
+            "0B31": ("JVOpen", -1),
+            "0B35": ("JVRTOpen", -303),
+            "0B33": ("JVRTOpen", -211),
+        },
+    )
+
+    assert list(jvlink_agent_down_results(execution).items()) == [
+        ("0B32", ("JVOpen", -211)),
+        ("0B33", ("JVRTOpen", -211)),
+        ("0B35", ("JVRTOpen", -303)),
+    ]
+    assert jvlink_agent_down_results(JVLinkExecutionResult({})) == {}
 
 
 def test_race_day_profile_validation_accepts_the_repository_shape() -> None:

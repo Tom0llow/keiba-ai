@@ -196,11 +196,12 @@ ADR-032のrace-day-oddsは、指定日の`NL_RA_RACE`の`HassoTime`から`[race_
 0B31〜0B36を1回のJVLinkToSQLite実行で取得し、既存O1/O2 archiveとは別の`ARCHIVE_CAPTURE_*`表へ保存する。
 実行は`execution_timeout_seconds`をタイムアウトとするrace-day-odds専用のrunnerで行い、タイムアウトは`failed/jvlink_error`とする。
 ADR-032 Amendment 2（ADR-037）により、`prediction_offset_minutes`があるときは各レースに予測用の取得を1件加える。発走のその分前（リポジトリの値5＝freeze）に`[realtime_history]`の0B41/0B42を取得し、同じ予定時刻の0B31〜0B36の取得より先に実行する。時系列はレースキーを確かめて`ARCHIVE_O1`/`ARCHIVE_O2`へ全行の重複除去で保存し、終了状態になるたびにロックを持ったまま、CLIから受け取ったpublisher（`SnapshotBuilder.update_race`）でレース別のParquetを公開する。公開の失敗は取得記録のreasonへ追記し、その日の取得は続ける。
+`JVOpen`/`JVRTOpen`が`-211`または`-303`を返した取得は記録した後に残りの取得を実行せず終了し、stderrへ`race-day-odds stopped: <stop_reason>; see docs/race-day-operation.md`を出し、要約のJSONと終了コード1を返す（`--date`で起動し直したとき、予定時刻を過ぎた取得は`skipped_late`になる）。
 
 | モジュール | 責務 |
 | --- | --- |
-| workflows/race_day_odds_plan.py | 取得予定の純粋な計画（種類`capture`/`prediction`）、遅延判定、ADR-013と同じ規則の結果分類。 |
-| workflows/race_day_odds.py | 起動時復旧（`--recover`も使う公開の`recover`）、実行XMLの起動時検証、予定時刻までの待機、ロック内の1件ずつの取得の組立（XMLの生成は`running`の確定より前）。時計とsleepは注入可能。 |
+| workflows/race_day_odds_plan.py | 取得予定の純粋な計画（種類`capture`/`prediction`）、遅延判定、ADR-013と同じ規則の結果分類、`JVOpen`/`JVRTOpen`の`-211`・`-303`（`JVLinkAgent`の停止）の判定。 |
+| workflows/race_day_odds.py | 起動時復旧（`--recover`も使う公開の`recover`）、実行XMLの起動時検証、予定時刻までの待機、ロック内の1件ずつの取得の組立（XMLの生成は`running`の確定より前）、`-211`・`-303`の取得を記録した後の停止と停止理由の返却。時計とsleepは注入可能。 |
 | acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化（0B31/0B41が共有する`RT_O1`などは1回だけ）、取得記録`ARCHIVE_CAPTURE_LOG`、DataSpec別SAVEPOINTでのarchive（予測用の0B41/0B42は複数行の時系列として`ARCHIVE_O1`/`O2`へ）、種類ごとの終了済みの判定。 |
 | acquisition/acquisition_lock.py | 取得記録の`running`行がある間、全取得モードを拒否する。race-day-oddsの起動時復旧と`--recover`だけが解除する。 |
 | acquisition/setting_xml.py | 実行XMLの生成と、生成した実時間XMLが対象のDataSpecとレースキーを有効にしていることの検証。 |

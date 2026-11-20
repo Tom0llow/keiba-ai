@@ -184,7 +184,7 @@ Reason not selected:
 
 - [x] 2026-11-15の計測後に、2日分の計測記録と運用文書の所要時間を更新する。
 - [ ] freeze後、提示期限前に発走6分前の発表が届いた場合に予測用の取得へ反映する（後続Issue）。
-- [ ] `JVLinkAgent`の停止を検知し、取得がtimeoutまで待ち続けないようにする（後続Issue）。
+- [x] `JVLinkAgent`の停止を検知し、取得がtimeoutまで待ち続けないようにする（#79、ADR-032 Amendment 3）。
 
 ---
 
