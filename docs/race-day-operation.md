@@ -145,7 +145,7 @@ race-day-oddsの実行中は、`latest`、`preprocess rebuild`、対象日の`--
 
 ## 終わり方
 
-- race-day-oddsは、対象日の取得を終えると、最後に件数の要約をJSONで出す。失敗があれば終了コード1、Ctrl+Cは130である。
+- race-day-oddsは、対象日の取得を終えると、最後に件数の要約をJSONで出す。`JVOpen`/`JVRTOpen`の`-211`・`-303`では途中で終了し、失敗があれば終了コード1、Ctrl+Cは130である。
 - 特徴量の常駐CLIは、対象レースごとに`published`または`held`を決めると終了し、stderrに`targets`・`published`・`held`を含む要約を出す。
 - 予測の常駐CLIは、重賞を`predicted`または`held`、重賞でないレースを`out_of_scope`として決めると終了し、stderrに`graded`・`predicted`・`held`・`out_of_scope`を含む要約を出す。
 - 購入案の常駐CLIは、重賞を`proposed`または`held`、重賞でないレースを`out_of_scope`として決めると終了し、stderrに`graded`・`proposed`・`held`・`out_of_scope`を含む要約を出す。
@@ -155,7 +155,7 @@ race-day-oddsの実行中は、`latest`、`preprocess rebuild`、対象日の`--
 ## 失敗時の対応
 
 - race-day-oddsが途中で止まった場合は、`--recover`で`running`の取得を`interrupted`にしてから、`--date <開催日>`で再起動する。常駐CLIを再起動する場合は、新しい`--output`を指定し、後に続く常駐CLIの`--features-root`・`--predictions-root`を端末3・4の節のとおりに付け替える。
-- `JVOpen -211`や`-303`が続く場合: 2026-11-14・15の原因は、JV-Linkのサービス`JVLinkAgent`の異常終了だった。JV-Link側の不具合であり、JRA-VANも同じ事象を確認している。サービス停止後は`JVOpen -211`が返り、その後の取得で`-303`が続く。`Get-Service JVLinkAgent`が`Stopped`を示すことと、WindowsのApplicationログに`JVLinkAgent.exe`のApplication Errorがあることを確認する。JV-Linkを使うのはrace-day-oddsだけで、特徴量・予測・購入案の常駐CLIはJV-Linkを使わない。race-day-oddsを止め、特徴量・予測・購入案の常駐CLIは動かしたままにする。管理者として起動したPowerShellで`Start-Service JVLinkAgent`を試す（実機の運用PCではまだ試していない）。JV-Linkの設定画面が開くことを確認し、開かない場合またはサービスが起動しない場合はPCを再起動する。PCを再起動しない場合は、race-day-oddsだけを`--date <開催日>`で起動し直す。PCを再起動した場合は、race-day-oddsと特徴量・予測・購入案の常駐CLIを起動し直す。常駐CLIは新しい`--output`を指定し、予測CLIと購入案CLIの`--features-root`には特徴量CLIの新しい出力先、購入案CLIの`--predictions-root`には予測CLIの新しい出力先を指定する。購入案CLIの`--ledger`は同じ台帳のパスのまま使う。race-day-oddsは`--date <開催日>`で起動すると、開始時に`running`の取得を復旧する。サービスキーは記録しない。エラーコード、最後の取得、停止・復旧の時刻を残す。停止中は、各取得が`execution_timeout_seconds`の上限（120秒）まで待つことがある。
+- `JVOpen`/`JVRTOpen`が`-211`や`-303`を返す場合: race-day-oddsはその取得を記録した後、残りの取得を実行せずに終了し、stderrに`race-day-odds stopped: <stop_reason>; see docs/race-day-operation.md`の1行を出してstdoutに要約のJSONを出す。終了コードは1であり、人がrace-day-oddsを止める必要はない。停止を検知した取得そのものは、`execution_timeout_seconds`の上限（120秒）まで待つことがある。2026-11-14・15の原因は、JV-Linkのサービス`JVLinkAgent`の異常終了だった。JV-Link側の不具合であり、JRA-VANも同じ事象を確認している。サービス停止後は`JVOpen -211`が返り、その後の取得で`-303`が続く。`Get-Service JVLinkAgent`が`Stopped`を示すことと、WindowsのApplicationログに`JVLinkAgent.exe`のApplication Errorがあることを確認する。JV-Linkを使うのはrace-day-oddsだけで、特徴量・予測・購入案の常駐CLIはJV-Linkを使わない。特徴量・予測・購入案の常駐CLIは動かしたままにする。管理者として起動したPowerShellで`Start-Service JVLinkAgent`を試す（実機の運用PCではまだ試していない）。JV-Linkの設定画面が開くことを確認し、開かない場合またはサービスが起動しない場合はPCを再起動する。PCを再起動しない場合は、race-day-oddsだけを`--date <開催日>`で起動し直す。PCを再起動した場合は、race-day-oddsと特徴量・予測・購入案の常駐CLIを起動し直す。常駐CLIは新しい`--output`を指定し、予測CLIと購入案CLIの`--features-root`には特徴量CLIの新しい出力先、購入案CLIの`--predictions-root`には予測CLIの新しい出力先を指定する。購入案CLIの`--ledger`は同じ台帳のパスのまま使う。race-day-oddsは`--date <開催日>`で起動すると、開始時に`running`の取得を復旧する。サービスキーは記録しない。エラーコード、最後の取得、停止・復旧の時刻を残す。
 - `features_not_published`は、特徴量の計算が遅れた場合だけでなく、予測用の取得が`jvlink_error`などで失敗した場合にも起きる。予測のログだけで判断せず、特徴量のログの保留理由（`race_day_fetch_failed: ...`など）と取得記録を照合する。
 
 ## 記録として残すもの

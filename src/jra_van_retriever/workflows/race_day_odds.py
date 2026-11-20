@@ -45,6 +45,7 @@ from jra_van_retriever.workflows.race_day_odds_plan import (
     CapturePlan,
     classify_capture,
     is_capture_late,
+    jvlink_agent_down_results,
     plan_captures,
 )
 
@@ -73,6 +74,7 @@ class RaceDayOddsRunResult:
 
     captures: tuple[CaptureReport, ...]
     summary: dict[str, int]
+    stop_reason: str | None = None
 
     @property
     def failed(self) -> bool:
@@ -84,6 +86,7 @@ class RaceDayOddsRunResult:
 class _CaptureStep:
     report: CaptureReport
     stop: bool = False
+    stop_reason: str | None = None
 
 
 class RaceDayOddsRetriever:
@@ -154,6 +157,7 @@ class RaceDayOddsRetriever:
         reports: list[CaptureReport] = []
         summary = dict.fromkeys(_CAPTURE_STATUSES, 0)
         summary["interrupted"] = interrupted
+        stop_reason: str | None = None
         with tempfile.TemporaryDirectory(prefix="keiba-ai-race-day-odds-") as temporary:
             settings = {
                 "capture": Path(temporary) / "race-day-odds.xml",
@@ -171,8 +175,9 @@ class RaceDayOddsRetriever:
                 if reporter is not None:
                     reporter(step.report)
                 if step.stop:
+                    stop_reason = step.stop_reason
                     break
-        return RaceDayOddsRunResult(tuple(reports), summary)
+        return RaceDayOddsRunResult(tuple(reports), summary, stop_reason)
 
     def _verify_setting(self, setting_path: Path, race_key: RaceKey, kind: str) -> None:
         """Generate and check the execution XML once before any capture is recorded."""
@@ -306,8 +311,21 @@ class RaceDayOddsRetriever:
                     classifier=classify_capture,
                 )
                 self._publish(plan, capture_id, publisher)
+                agent_down_results = jvlink_agent_down_results(execution)
+                stop_reason = None
+                if agent_down_results:
+                    details = ", ".join(
+                        f"{data_spec} {api} {returncode}"
+                        for data_spec, (api, returncode) in agent_down_results.items()
+                    )
+                    stop_reason = (
+                        f"JV-Link returned {details}; the JVLinkAgent service may have stopped; "
+                        "remaining captures were not run"
+                    )
                 return _CaptureStep(
-                    CaptureReport(capture_id, plan.race_key, plan.offset_minutes, results)
+                    CaptureReport(capture_id, plan.race_key, plan.offset_minutes, results),
+                    stop=stop_reason is not None,
+                    stop_reason=stop_reason,
                 )
         except KeyboardInterrupt:
             raise

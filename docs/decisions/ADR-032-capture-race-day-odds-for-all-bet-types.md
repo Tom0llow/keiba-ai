@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-08
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: #27, #29（Amendment 1）, #37（Amendment 2）
+- Related Issues/PRs: #27, #29（Amendment 1）, #37（Amendment 2）, #79（Amendment 3）
 - Supersedes: N/A
 - Superseded by: N/A
 
@@ -108,6 +108,14 @@ historical-oddsは`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`の行�
   追記し、その日の取得は続ける。
 - 再開時の終了済みの判定は（レース、分前、種類）で行い、同じ分前の予測用の取得と0B31〜0B36の取得を区別する。
 - 帰結: historical-oddsは、予測用の取得で行のあるレースを取得済みとみなし、発走後の発表をbackfillしない（#66）。
+
+### Amendment 3: JV-Linkの-211・-303での停止（2026-11-20）
+
+- 2026-11-20に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #79。
+- `JVOpen`または`JVRTOpen`の戻り値が`-211`または`-303`だった取得は、従来どおり取得記録を確定した後、残りの取得を実行せずに`race-day-odds`を終了する。判定は取得結果のAPI名と戻り値だけで行い、その他の失敗はAmendment 1の規則に従う。
+- 終了時はstderrに`race-day-odds stopped: <stop_reason>; see docs/race-day-operation.md`の1行を出し、stdoutに要約のJSONを出して終了コード1とする。
+- `--date`で起動し直したとき、予定時刻を過ぎた取得は従来どおり`skipped_late`になる。`JVLinkAgent`の自動開始とサービス状態のコードからの照会は行わず、人が運用手順書のとおりサービスを確認・開始する。
+- 根拠は2026-11-14・15の実測である。サービス停止後の取得は120秒のtimeoutになり、`-211`・`-303`は他の日には記録されていない。
 
 ---
 
@@ -228,7 +236,8 @@ Reason not selected:
 | 発走前の中間オッズで子表が全組合せを返すか未確認 | 一部の組合せが欠ける | `child_observed_rows`で事後に確認する |
 | 発走時刻の変更に追従しない | 変更レースの取得時点がずれる | 基準時刻と実測時計を記録し、事後に補正する |
 | 常駐中のスリープ・認証切れ・ネットワーク断 | 取得が欠ける | 失敗を記録し、復旧は行わない |
-| JVLinkToSQLiteが応答しない | その時点の取得が欠ける | `execution_timeout_seconds`で打ち切り、`failed/jvlink_error`として次の取得へ進む（Amendment 1） |
+| `JVLinkAgent`の停止 | 停止後の取得が失敗し、後続の取得が遅れる | `JVOpen`/`JVRTOpen`の`-211`・`-303`を検知した取得を記録して`race-day-odds`を終了し、stderrで通知する。人がサービスを確認・開始し、`--date`で起動し直す（Amendment 3） |
+| JVLinkToSQLiteが応答しない | その時点の取得が欠ける | `execution_timeout_seconds`で打ち切り、`failed/jvlink_error`として次の取得へ進む（Amendment 1）。途中の出力に`JVOpen`/`JVRTOpen`の`-211`・`-303`があれば、記録した後に終了する（Amendment 3） |
 | タイムアウトでkillした後にJV-Linkの別のプロセスが残るかが未確認 | 次の取得のstagingに前の行が混ざる | 取得前の退避・初期化と同一レース1行の検査で、archiveには入れない |
 | TTYでない実行で、killした後もJVLinkToSQLiteの出力を握る別のプロセスが残る | 出力の読取が終わらず、タイムアウトが戻らずに常駐が止まる | 未確認。kill後の待機に上限を設けるか、プロセスツリーごと終了するかは後続課題とする |
 | 完全なParquet出力との重なり | 書込みが`database is locked`で失敗し、取得が欠けるか当日の取得が止まる | 運用で重ねない。出力側との排他は後続課題とする |
@@ -292,3 +301,4 @@ Reason not selected:
 | 2026-11-08 | Accepted | 開催日の発走前複数時点で全券種の速報オッズをarchiveすることを決定 |
 | 2026-11-11 | Accepted | Amendment 1: 実行タイムアウト、実行XMLの起動時検証と`running`確定前の生成、`--recover`を追加 |
 | 2026-11-12 | Accepted | Amendment 2: freezeの時刻の0B41/0B42の予測用の取得と、レース別Parquetへの公開を追加（ADR-037） |
+| 2026-11-20 | Accepted | Amendment 3: `JVOpen`/`JVRTOpen`の`-211`・`-303`で残りの取得を実行せずに停止する挙動を追加（#79） |

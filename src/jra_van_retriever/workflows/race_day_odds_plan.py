@@ -15,6 +15,8 @@ from jra_van_retriever.parsing.race_key import race_key_from_row
 
 _JST = ZoneInfo("Asia/Tokyo")
 _JRA_JYO_CODES = frozenset(f"{value:02d}" for value in range(1, 11))
+_JVLINK_OPEN_APIS = frozenset({"JVOpen", "JVRTOpen"})
+JVLINK_AGENT_DOWN_RETURNCODES = frozenset({-211, -303})
 
 
 type CaptureKind = Literal["capture", "prediction"]
@@ -138,6 +140,15 @@ def classify_capture(
             return CaptureClassification("no_data", "jvopen_no_data")
         return CaptureClassification("failed", "empty_response_unverified")
     return CaptureClassification("failed", "archive_not_committed")
+
+
+def jvlink_agent_down_results(execution: JVLinkExecutionResult) -> dict[str, tuple[str, int]]:
+    """Return JV-Link Agent stop results in DataSpec order."""
+    return {
+        data_spec: (api, returncode)
+        for data_spec, (api, returncode) in sorted(execution.api_results.items())
+        if api in _JVLINK_OPEN_APIS and returncode in JVLINK_AGENT_DOWN_RETURNCODES
+    }
 
 
 def _validate_offsets(offsets_minutes: tuple[int, ...]) -> None:

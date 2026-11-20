@@ -437,7 +437,7 @@ def test_preprocess_rebuild_can_run_without_retrieval() -> None:
 _BUILDER = Mock()
 
 
-def _race_day_result(failed: int) -> Mock:
+def _race_day_result(failed: int, *, stop_reason: str | None = None) -> Mock:
     report = CaptureReport(
         "abc",
         RaceKey(date(2026, 11, 15), "05", "05", "04", "11"),
@@ -454,7 +454,7 @@ def _race_day_result(failed: int) -> Mock:
         assert publisher is _BUILDER.update_race
         recovery_reporter(0)  # type: ignore[operator]
         reporter(report)  # type: ignore[operator]
-        return RaceDayOddsRunResult((report,), summary)
+        return RaceDayOddsRunResult((report,), summary, stop_reason)
 
     retriever.retrieve_race_day_odds.side_effect = retrieve
     return retriever
@@ -479,6 +479,29 @@ def test_race_day_odds_cli_reports_each_capture_then_summary(failed: int, exit_c
         "skipped_late": 0,
         "interrupted": 0,
     }
+    assert result.stderr == ""
+
+
+def test_race_day_odds_cli_reports_a_jvlink_agent_stop_to_stderr() -> None:
+    stop_reason = (
+        "JV-Link returned 0B32 JVOpen -211; the JVLinkAgent service may have stopped; "
+        "remaining captures were not run"
+    )
+    retriever = _race_day_result(0, stop_reason=stop_reason)
+    with (
+        patch("cli.jra_van_retriever.SnapshotBuilder.from_toml", return_value=_BUILDER),
+        patch("cli.jra_van_retriever.DataRetriever.from_toml", return_value=retriever),
+    ):
+        result = runner.invoke(app, ["--retrieve", "--mode=race-day-odds", "--date=2026-11-15"])
+
+    assert result.exit_code == 1
+    assert result.stdout.strip().splitlines() == [
+        "race-day-odds capture abc 2026-11-15/05/05/04/11 -5m 0B31=archived",
+        '{"archived":1,"no_data":0,"failed":0,"skipped_late":0,"interrupted":0}',
+    ]
+    assert result.stderr == (
+        f"race-day-odds stopped: {stop_reason}; see docs/race-day-operation.md\n"
+    )
 
 
 def test_race_day_odds_cli_exits_130_on_interrupt_with_recovery_count() -> None:
