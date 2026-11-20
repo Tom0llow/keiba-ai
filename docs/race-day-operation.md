@@ -164,6 +164,7 @@ race-day-oddsの実行中は、`latest`、`preprocess rebuild`、対象日の`--
 - race-day-oddsの端末出力、各取得の記録（`ARCHIVE_CAPTURE_LOG`と`data/processed/realtime/<開催日のレースディレクトリ>/`）、失敗時の隔離先。
 - 特徴量・予測・購入案の時刻付きログ（`<特徴量のログ>`、`<予測のログ>`、`<購入案のログ>`）、各CLIの最後の要約、公開・保留されたレースの出力。購入案の`publication_age_seconds`（古い発表、#78）。`record-purchases`の出力と、`ledger_*`の保留の有無。
 - 予測用の取得の`HappyoTime`、`features_not_published`や`race_day_fetch_failed: jvlink_error`などの保留理由、`after_sales_close`の有無。
+- [ADR-047](decisions/ADR-047-connect-wide-and-exacta-race-day-odds-to-expected-value-decisions.md)の評価のため、特徴量の常駐CLIの出力（全レースの参考特徴量）とrace-day-oddsの取得記録を消さずに残す。
 
 取得記録やログにサービスキーを含めない。
 
