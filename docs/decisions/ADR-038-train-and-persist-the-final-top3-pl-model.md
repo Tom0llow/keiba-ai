@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-12
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: Closes #52、Refs #57・#53・#54・#55・#35・#36・#48・#49
+- Related Issues/PRs: Closes #52、Refs #57・#53・#54・#55・#35・#36・#48・#49・#72
 - Supersedes: ADR-035のDecision 3のうち「モデルは永続化しない」のみ
 - Superseded by: N/A
 
@@ -76,6 +76,24 @@ ADR-035の`model evaluate-pl`は、年単位のfoldでtop-3 PLの学習・温度
    - 全体の読込と学習の後、stagingに書いた成果物を読み直し、validのスコアが学習直後と一致することを確かめてから公開する。
 6. **MLflowとの関係。** PLのモデルはMLflowで管理しない。manifestのSHA-256で固定するファイルの成果物とする。これは、
    ADR-027の「モデルの版をMLflowで管理する」に対する、人間が承認した意図した例外である（2026-11-12）。ADR-027は置き換えない。
+
+### Amendment 1: 再学習で欠損の枝の照合に拒否されたときの方針（2026-11-21）
+
+- 2026-11-21に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #72。
+- Decision 3の欠損の枝の照合で、再学習（#55）の書込みが拒否されたとき、`configs/pl_training/final.yaml`だけを変えない。
+  Decision 2の「LightGBMの引数は評価と同じにする」を保ち、次の順に行う。
+  1. `configs/pl_evaluation/measure.yaml`と`configs/pl_training/final.yaml`の`lightgbm`に、同じ`bin_construct_sample_cnt`を入れる。
+     値は最終学習のtrainの行数以上とする。評価の各foldのtrainの年は、最終学習のtrainの年に含まれるので、これで足りる。
+  2. `model evaluate-pl` → `model backtest-betting` → `model fit-betting-estimator`をこの順に計測し直し、実験の記録を更新する。
+     結果がADR-043〜045の方策や採否を変えるときは、人間が判断する。
+  3. その後で`model train-pl`により新しいモデルを学習し、当日の運用を切り替える。それまでは、今のモデルと推定器で運用を続ける
+     （拒否された成果物は公開されない）。
+- 根拠: `bin_construct_sample_cnt`は欠損の扱いだけでなく、全列のビンの境界を変える。最終学習だけを変えると、運用のモデルは
+  評価・バックテスト・推定器（ADR-044のα・β）を計測した手順と別のものになる。
+- 2026-11-21の実データでは、今の36列のままなら、この拒否は事実上起きない。train 2006〜2025年の835,398行で、学習で欠損のある
+  32列のうち最も欠損が少ない`trainer_performance__trainer_smoothed_win_rate`でも2,232行あり、既定の20万行の標本に
+  その欠損が1件も入らない確率は、上限のexp(−200,000×2,232/835,398)でも約8.6e−233である（[最終モデルの学習](../experiments/pl-final-model.md)）。
+  起きうるのは、欠損のまれな列を加えたときであり、そのときは列の変更のために評価をやり直す必要がある。
 
 ---
 
@@ -248,3 +266,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-12 | Accepted | top-3 PLの最終モデルの学習・成果物・ラベルなしの予測のAPIを決定。ADR-035のDecision 3の非永続化だけを置き換える |
 | 2026-11-12 | Accepted | #71: `predict_scores`の±infの拒否と、書込みの前のmanifestの検証を追記。成果物の形式は変えない |
+| 2026-11-21 | Accepted | Amendment 1: 再学習で欠損の枝の照合に拒否されたら、評価と最終学習の両方に同じ`bin_construct_sample_cnt`を入れ、評価・バックテスト・推定器を計測し直してから学習する（#72） |
