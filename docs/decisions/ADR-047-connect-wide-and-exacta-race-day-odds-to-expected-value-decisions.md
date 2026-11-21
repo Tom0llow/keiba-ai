@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #67、Refs #57・#35・#36・#37
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: N/A（決定6の「その年の固定したPLモデル」は、[ADR-048](ADR-048-rebuild-and-retrain-once-a-year-after-the-last-race-day.md)の決定7が「その開催日に結び付いたPLモデル」に改めた）
 
 ---
 
@@ -193,3 +193,4 @@ ADR-047の評価のために消さずに残す。払戻は次の`latest`で取�
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-20 | Accepted | 人間が成果物・対象の券種・評価の範囲を決め、GATE 1でfreezeのオッズの選び方・補正・評価・蓄積の目標を承認した（#67） |
+| 2026-11-21 | Accepted | ADR-048の決定7が、決定6の「その年の固定したPLモデル」を「その開催日に結び付いたPLモデル」に改めた（年1回の切替・前年の版での運用・臨時の作り直しで、同じ年に複数のモデルがありうるため。#55） |

@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #52、Refs #57・#53・#54・#55・#35・#36・#48・#49・#72
 - Supersedes: ADR-035のDecision 3のうち「モデルは永続化しない」のみ
-- Superseded by: N/A
+- Superseded by: [ADR-048](ADR-048-rebuild-and-retrain-once-a-year-after-the-last-race-day.md)（決定2の運用の年（train 2006〜2024年・valid 2025年）の固定のみ。あわせて、Amendment 1の手順3を年明けの作り直しについてADR-048の決定9が改めた）
 
 ---
 
@@ -256,7 +256,7 @@ Reason not selected:
 ## Follow-up Actions
 
 - [ ] 当日の予測のCLIで、このモデルを使う（#53）。
-- [ ] 学習データの更新と再学習の手順を定める（#55）。
+- [x] 学習データの更新と再学習の手順を定める（#55）。[ADR-048](ADR-048-rebuild-and-retrain-once-a-year-after-the-last-race-day.md)で、年1回の全期間の作り直しと3成果物の切替手順を定めた。
 
 ---
 
@@ -267,3 +267,4 @@ Reason not selected:
 | 2026-11-12 | Accepted | top-3 PLの最終モデルの学習・成果物・ラベルなしの予測のAPIを決定。ADR-035のDecision 3の非永続化だけを置き換える |
 | 2026-11-12 | Accepted | #71: `predict_scores`の±infの拒否と、書込みの前のmanifestの検証を追記。成果物の形式は変えない |
 | 2026-11-21 | Accepted | Amendment 1: 再学習で欠損の枝の照合に拒否されたら、評価と最終学習の両方に同じ`bin_construct_sample_cnt`を入れ、評価・バックテスト・推定器を計測し直してから学習する（#72） |
+| 2026-11-21 | Accepted | ADR-048が決定2の運用の年の固定を、年1回の作り直しの規則（train 2006〜`Y−2`・valid `Y−1`）に置き換えた。Amendment 1の手順3（今のモデルと推定器で運用を続ける）は、年明けの作り直しでは年`Y−1`の推定器を使えないため、ADR-048の決定9が改めた（#55） |

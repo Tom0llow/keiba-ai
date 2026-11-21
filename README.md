@@ -636,6 +636,7 @@ boostingは`gbdt`だけを許す（反復数とearly stoppingは`num_boost_round
 
 `model train-pl`は、評価と同じ手順（validでearly stoppingと温度を決める）で最終モデルを学習し、成果物
 `pl_top3_model`として新しいディレクトリへ公開する（[ADR-038](docs/decisions/ADR-038-train-and-persist-the-final-top3-pl-model.md)）。
+年1回の作り直しと切替の手順は[年次の再学習手順](docs/retraining-operation.md)を参照する。
 
 ```powershell
 uv run python src/main.py model train-pl --config-name final --override datamart_path=<datamart> --override datamart_manifest_sha256=<manifestのSHA-256> --output output/pl-final-model-2006-2025
@@ -739,6 +740,7 @@ uv run python src/main.py model backtest-betting --config-name measure --overrid
 推定器を成果物として保存する（[ADR-045](docs/decisions/ADR-045-save-the-betting-estimator-yearly-and-attach-zero-yen-proposals-on-race-day.md)）。
 複勝の補正（`place_mid`と幅の帯ごと）は最後のtest年までの全レースの的中で、PLと市場の合成はPLの評価の全test年の予測で当てはめ、
 推定の方法はADR-044の規則（前の年の重賞の定額の回収率）をその年へ延長して選ぶ。値はすべてバックテストのreportから取る。
+年1回の作り直しと切替の手順は[年次の再学習手順](docs/retraining-operation.md)を参照する。
 
 ```powershell
 uv run python src/main.py model fit-betting-estimator `
