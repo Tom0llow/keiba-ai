@@ -161,7 +161,7 @@ race-day-oddsを終了する（ADR-032 Amendment 3）。2026-11-14・15の計測
 発売締切（発走2分前）までに計算を終える必要があるためである。
 この取得は`[realtime_history]`（0B41/0B42ちょうど）を使い、同じ予定時刻の0B31〜0B36の取得より先に実行する。
 時系列は`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`へ保存し、そのレースのO1/O2と取得記録を
-レース別のParquetへ公開する。その結果、historical-oddsはこのレースを取得済みとみなす（#66）。
+レース別のParquetへ公開する。そのレースに確定の発表がないためhistorical-oddsは取得済みとせず、次のhistorical-oddsで確定までの時系列をbackfillする（ADR-013 Amendment 1、#66）。
 
 race-day-oddsの実行中に、`latest`や`preprocess rebuild`による完全なParquet出力を重ねない。raw DBは
 ロールバックジャーナル方式のため、長い読取の間は取得の書込みが`database is locked`で失敗し、
@@ -231,7 +231,8 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
 
   既定ではO1/O2（`0B41`/`0B42`）の両方を確認する。一方だけを確認するには、`--data-spec 0B41`
   または`--data-spec 0B42`を使う。このコマンドは、失敗した`empty_response_unverified`の項目の
-  うち、現在のarchiveの件数がまだ0のものだけを受け付ける。
+  うち、現在のarchiveに確定の行（`headDataKubun`の`4`・`5`）がないものだけを受け付ける。当日の予測用の取得の行だけがある
+  項目も受け付ける（ADR-013 Amendment 1）。
 - `--retrieve --mode=latest`: rawデータを更新してから、更新した完全なParquet snapshotを
   公開する。RACEに加えて、当日の特徴量が読む坂路調教（SLOP→`NL_HC_HANRO`）・ウッドチップ調教
   （WOOD→`NL_WC_WOOD`）・競走馬マスタ（DIFN→`NL_UM_UMA`）も差分取得する（ADR-040）。BLDN・DIFFは取得しない（特徴量は

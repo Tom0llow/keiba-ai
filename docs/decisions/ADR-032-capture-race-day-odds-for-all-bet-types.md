@@ -107,7 +107,7 @@ historical-oddsは`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`の行�
   レース別のParquetへ公開する（`SnapshotBuilder.update_race`）。公開の失敗は、取得記録のreasonに`publish_failed`として
   追記し、その日の取得は続ける。
 - 再開時の終了済みの判定は（レース、分前、種類）で行い、同じ分前の予測用の取得と0B31〜0B36の取得を区別する。
-- 帰結: historical-oddsは、予測用の取得で行のあるレースを取得済みとみなし、発走後の発表をbackfillしない（#66）。
+- 帰結: Amendment 2の時点では、historical-oddsは予測用の取得で行のあるレースを取得済みとみなし、発走後の発表をbackfillしなかった（#66）。ADR-013 Amendment 1で、確定の発表がない組を取得済みとしないことにより解消した。
 
 ### Amendment 3: JV-Linkの-211・-303での停止（2026-11-20）
 
