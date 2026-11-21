@@ -8,11 +8,12 @@
 
 ## 前提
 
-特徴量の常駐CLIには、学習用datamartのパスと、その`manifest.json`のSHA-256を渡す。予測の常駐CLIには、保存済みPLモデルのパスと、その`manifest.json`のSHA-256を渡す。SHA-256は次のように確認する。
+特徴量の常駐CLIには、学習用datamartのパスと、その`manifest.json`のSHA-256を渡す。予測の常駐CLIには、保存済みPLモデルのパスと、その`manifest.json`のSHA-256を渡す。SHA-256は次のように確認する。CLIは小文字の16進だけを受け付け、`Get-FileHash`は大文字を出すので、`.Hash.ToLower()`で小文字にする。
 
 ```powershell
-Get-FileHash <学習用datamart>\manifest.json -Algorithm SHA256
-Get-FileHash <PLモデル>\manifest.json -Algorithm SHA256
+(Get-FileHash <学習用datamart>\manifest.json -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash <PLモデル>\manifest.json -Algorithm SHA256).Hash.ToLower()
+(Get-FileHash <推定器>\manifest.json -Algorithm SHA256).Hash.ToLower()
 ```
 
 学習用datamartのmanifestの値は`--reference-datamart-manifest-sha256`へ、PLモデルのmanifestの値は`--pl-model-manifest-sha256`へ渡す。購入案の常駐CLIには、その年の推定器（`model fit-betting-estimator`の出力）のパスと、その`manifest.json`のSHA-256（`--estimator-manifest-sha256`）も渡す。推定器は年に1回、開催日より前に作る（[年次の再学習手順](retraining-operation.md)、README「当日の購入案の推定器を年ごとに保存する」）。年の違う推定器では起動しない。購入案の常駐CLIには、実購入額の台帳（`model record-purchases`が書くJSON Lines）のパスも`--ledger`で渡す。台帳は個人の購入履歴なので、git対象外の`data/`の下（例: `data/purchases/ledger.jsonl`）かリポジトリの外に置く。特徴量と予測のCLIには、前日の夜に`latest`が公開して控えた同じsnapshotのIDを、それぞれ`--snapshot-id`で渡す。race-day-oddsは`--snapshot-id`を受け取らない。
