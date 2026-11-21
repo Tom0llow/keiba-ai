@@ -5,7 +5,7 @@ from __future__ import annotations
 import hashlib
 import json
 import sqlite3
-from collections.abc import Iterator
+from collections.abc import Iterable, Iterator
 from contextlib import closing
 from datetime import date
 from pathlib import Path
@@ -16,7 +16,7 @@ from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked
 from jra_van_retriever.config.profiles import HistoricalOddsBatch, JVLinkProfile
 from jra_van_retriever.contracts.odds import ARCHIVE_TABLES, KEY_COLUMNS, RaceDayRaceRow
 from jra_van_retriever.parsing.race_key import race_key_from_row
-from jra_van_retriever.progress.state import RawSnapshot
+from jra_van_retriever.progress.state import RawSnapshot, race_key_from_id
 
 
 def read_raw_snapshot(
@@ -49,16 +49,61 @@ def read_raw_snapshot(
             ).fetchone():
                 continue
             schema = [(row[1], row[2]) for row in database.execute(f'PRAGMA table_info("{table}")')]
-            if not set(KEY_COLUMNS) <= {name for name, _ in schema}:
+            names = {name for name, _ in schema}
+            if not set(KEY_COLUMNS) <= names or "headDataKubun" not in names:
                 raise AcquisitionBlocked(f"archive key schema is invalid: {table}")
             schemas[spec] = hashlib.sha256(json.dumps(schema).encode()).hexdigest()
             for row in database.execute(
-                f'SELECT {columns}, COUNT(*) FROM "{table}" WHERE idYear || idMonthDay BETWEEN ? AND ? GROUP BY {columns}',
+                f'SELECT {columns}, COUNT(*) FROM "{table}" '
+                f"WHERE idYear || idMonthDay BETWEEN ? AND ? GROUP BY {columns}",
                 (lower, upper),
             ):
-                key = race_key_from_row(tuple(row[:6]))
+                key = race_key_from_row(row[:6])
                 counts[(key.race_id, spec)] = row[6]
     return RawSnapshot(races, counts, schemas)
+
+
+def read_confirmed_pairs(
+    database_path: Path, pairs: Iterable[tuple[str, str]]
+) -> frozenset[tuple[str, str]]:
+    """Return candidate archive pairs that contain a confirmed odds publication."""
+    candidates = tuple(pairs)
+    if not candidates:
+        return frozenset()
+
+    confirmed: set[tuple[str, str]] = set()
+    tables: dict[str, bool] = {}
+    with closing(
+        sqlite3.connect(f"{database_path.resolve().as_uri()}?mode=ro", uri=True)
+    ) as database:
+        database.execute("BEGIN")
+        for race_id, spec in candidates:
+            table = ARCHIVE_TABLES[spec]
+            if table not in tables:
+                tables[table] = bool(
+                    database.execute(
+                        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (table,)
+                    ).fetchone()
+                )
+            if not tables[table]:
+                continue
+            key = race_key_from_id(race_id)
+            row = database.execute(
+                f'SELECT 1 FROM "{table}" WHERE idYear=? AND idMonthDay=? AND idJyoCD=? '
+                "AND idKaiji=? AND idNichiji=? AND idRaceNum=? "
+                "AND headDataKubun IN ('4','5') LIMIT 1",
+                (
+                    f"{key.race_date:%Y}",
+                    f"{key.race_date:%m%d}",
+                    key.jyo_code,
+                    key.kaiji,
+                    key.nichiji,
+                    key.race_number,
+                ),
+            ).fetchone()
+            if row is not None:
+                confirmed.add((race_id, spec))
+    return frozenset(confirmed)
 
 
 _JRA_JYO_CODES = tuple(f"{code:02d}" for code in range(1, 11))

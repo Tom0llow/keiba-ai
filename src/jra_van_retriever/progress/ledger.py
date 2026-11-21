@@ -6,6 +6,7 @@ import json
 import sqlite3
 from collections.abc import Iterator
 from contextlib import closing, contextmanager
+from dataclasses import replace
 from datetime import date, datetime
 from pathlib import Path
 
@@ -15,6 +16,9 @@ from jra_van_retriever.config.profiles import HistoricalOddsBatch, JVLinkProfile
 from jra_van_retriever.contracts.odds import ARCHIVE_TABLES as ARCHIVE_TABLES
 from jra_van_retriever.contracts.odds import KEY_COLUMNS as KEY_COLUMNS
 from jra_van_retriever.progress.output import atomic_write as atomic_write
+from jra_van_retriever.progress.raw_observation import (
+    read_confirmed_pairs as read_confirmed_pairs,
+)
 from jra_van_retriever.progress.raw_observation import (
     read_raw_snapshot as read_raw_snapshot,
 )
@@ -26,6 +30,9 @@ from jra_van_retriever.progress.state import (
 )
 from jra_van_retriever.progress.state import (
     _legacy_policy_hash as _legacy_policy_hash,
+)
+from jra_van_retriever.progress.state import (
+    adoption_candidates as adoption_candidates,
 )
 from jra_van_retriever.progress.state import (
     candidate_hash as candidate_hash,
@@ -408,8 +415,14 @@ class ProgressLedger:
     def reconcile(self, snapshot: RawSnapshot, now: datetime) -> dict[str, int]:
         """Adopt external archive additions and refuse loss of acquired data."""
         states, _, _ = self.read()
+        confirmed = read_confirmed_pairs(
+            self.raw_db,
+            adoption_candidates(states, snapshot, self.profile.realtime_data_specs),
+        )
         proposed, changed_years, adopted = reconcile_states(
-            states, snapshot, self.profile.realtime_data_specs
+            states,
+            replace(snapshot, confirmed=confirmed),
+            self.profile.realtime_data_specs,
         )
         with self._transaction() as database:
             metadata = dict(database.execute("SELECT key,value FROM metadata"))
@@ -553,8 +566,15 @@ class ProgressLedger:
         self.read()
         if not specs or not specs <= self.profile.realtime_data_specs:
             raise ValueError("provider-missing confirmation contains unsupported DataSpecs")
-        if any(archive_counts.get(spec, 0) != 0 for spec in specs):
-            raise AcquisitionBlocked("provider-missing confirmation conflicts with archive rows")
+        # Rows without a confirmed publication (for example a race-day capture) do not
+        # contradict a provider-side gap in the complete time series (ADR-013 Amendment 1).
+        present = frozenset(
+            (key.race_id, spec) for spec in specs if archive_counts.get(spec, 0) != 0
+        )
+        if read_confirmed_pairs(self.raw_db, present):
+            raise AcquisitionBlocked(
+                "provider-missing confirmation conflicts with archive rows that contain confirmed odds"
+            )
         with self._transaction() as database:
             rows = {
                 spec: database.execute(

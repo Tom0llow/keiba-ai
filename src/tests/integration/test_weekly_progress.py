@@ -25,7 +25,14 @@ from jra_van_retriever.progress.ledger import (
     _legacy_policy_hash,
     read_raw_snapshot,
 )
+from jra_van_retriever.progress.raw_observation import read_confirmed_pairs
+from jra_van_retriever.progress.state import SpecState, reconcile_states
 from jra_van_retriever.workflows.historical_odds import WeeklyHistoricalOddsRetriever
+from jra_van_retriever.workflows.historical_odds_plan import (
+    plan_snapshot,
+    races_for_year,
+    select_year,
+)
 
 NOW = datetime(2026, 10, 6, 12, tzinfo=UTC)
 FRONTIER = RaceKey(date(2008, 1, 26), "06", "01", "07", "06")
@@ -119,20 +126,239 @@ def test_legacy_frontier_ledger_is_migrated_without_losing_raw_state(tmp_path: P
 def test_external_archive_is_adopted_and_missing_state_recovers(tmp_path: Path) -> None:
     ledger = ProgressLedger(tmp_path / "progress.db", tmp_path / "raw.db", PROFILE, BATCH)
     ledger.bootstrap(RawSnapshot((FRONTIER,), {}, {}), NOW)
+    columns = (
+        "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,"
+        "idNichiji TEXT,idRaceNum TEXT,headDataKubun TEXT"
+    )
+    with sqlite3.connect(ledger.raw_db) as database:
+        database.execute(f"CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU ({columns})")
+        database.execute(f"CREATE TABLE ARCHIVE_O2_ODDS_UMAREN ({columns})")
+        database.execute(
+            "INSERT INTO ARCHIVE_O1_ODDS_TANFUKUWAKU VALUES ('2008','0126','06','01','07','06','4')"
+        )
+        database.execute(
+            "INSERT INTO ARCHIVE_O2_ODDS_UMAREN VALUES ('2008','0126','06','01','07','06','1')"
+        )
 
-    adopted = ledger.reconcile(RawSnapshot((FRONTIER,), {(FRONTIER.race_id, "0B41"): 3}, {}), NOW)
+    adopted = ledger.reconcile(
+        RawSnapshot(
+            (FRONTIER,),
+            {(FRONTIER.race_id, "0B41"): 1, (FRONTIER.race_id, "0B42"): 1},
+            {},
+        ),
+        NOW,
+    )
     states, years, _ = ledger.read()
 
     assert adopted == {"0B41": 1, "0B42": 0}
     assert states[(FRONTIER.race_id, "0B41")].reason == "external_archive_observed"
     assert states[(FRONTIER.race_id, "0B41")].state == "acquired"
+    assert states[(FRONTIER.race_id, "0B42")].state == "pending"
     assert years[2008] == "pending"
-    assert ledger.reconcile(RawSnapshot((FRONTIER,), {(FRONTIER.race_id, "0B41"): 3}, {}), NOW) == {
-        "0B41": 0,
-        "0B42": 0,
-    }
+    assert ledger.reconcile(
+        RawSnapshot(
+            (FRONTIER,),
+            {(FRONTIER.race_id, "0B41"): 1, (FRONTIER.race_id, "0B42"): 1},
+            {},
+        ),
+        NOW,
+    ) == {"0B41": 0, "0B42": 0}
     with pytest.raises(AcquisitionBlocked, match="disappeared"):
         ledger.reconcile(RawSnapshot((FRONTIER,), {}, {}), NOW)
+
+
+def test_unconfirmed_archive_candidate_remains_pending_and_is_planned(tmp_path: Path) -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    snapshot = RawSnapshot((FRONTIER,), {pair: 1}, {})
+
+    states, changed_years, adopted = reconcile_states({}, snapshot, PROFILE.realtime_data_specs)
+
+    assert states[pair].state == "pending"
+    assert states[pair].reason == "new_candidate"
+    assert changed_years == {2008}
+    assert adopted == {"0B41": 0, "0B42": 0}
+    assert (
+        select_year(PROFILE.realtime_data_specs, states, snapshot.races, date(2026, 10, 5)) == 2008
+    )
+    assert races_for_year(PROFILE.realtime_data_specs, states, snapshot.races, 2008) == (FRONTIER,)
+
+    ledger = ProgressLedger(tmp_path / "progress.db", tmp_path / "raw.db", PROFILE, BATCH)
+    ledger.bootstrap(RawSnapshot((), {}, {}), NOW)
+    with sqlite3.connect(ledger.raw_db) as database:
+        database.execute(
+            "CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU "
+            "(idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,"
+            "idNichiji TEXT,idRaceNum TEXT,headDataKubun TEXT)"
+        )
+        database.execute(
+            "INSERT INTO ARCHIVE_O1_ODDS_TANFUKUWAKU VALUES ('2008','0126','06','01','07','06','1')"
+        )
+
+    plan = plan_snapshot(snapshot, date(2026, 10, 5), PROFILE.realtime_data_specs, ledger)
+
+    assert plan.adopted_races == {"0B41": 0, "0B42": 0}
+    assert plan.year == 2008
+    assert plan.requested_races == 1
+    assert plan.requested_specs == 2
+
+
+def test_confirmed_archive_candidate_is_adopted_and_unconfirmed_spec_is_planned(
+    tmp_path: Path,
+) -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    snapshot = RawSnapshot((FRONTIER,), {pair: 1}, {})
+
+    ledger = ProgressLedger(tmp_path / "progress.db", tmp_path / "raw.db", PROFILE, BATCH)
+    ledger.bootstrap(RawSnapshot((), {}, {}), NOW)
+    with sqlite3.connect(ledger.raw_db) as database:
+        database.execute(
+            "CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU "
+            "(idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,"
+            "idNichiji TEXT,idRaceNum TEXT,headDataKubun TEXT)"
+        )
+        database.execute(
+            "INSERT INTO ARCHIVE_O1_ODDS_TANFUKUWAKU VALUES ('2008','0126','06','01','07','06','4')"
+        )
+
+    plan = plan_snapshot(snapshot, date(2026, 10, 5), PROFILE.realtime_data_specs, ledger)
+
+    assert plan.adopted_races == {"0B41": 1, "0B42": 0}
+    assert plan.requested_races == 1
+    assert plan.requested_specs == 1
+
+
+def test_confirmed_archive_adopts_new_candidate() -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    snapshot = RawSnapshot((FRONTIER,), {pair: 1}, {}, frozenset({pair}))
+
+    states, changed_years, adopted = reconcile_states({}, snapshot, frozenset({"0B41"}))
+
+    assert states[pair].state == "acquired"
+    assert states[pair].reason == "external_archive_observed"
+    assert changed_years == {2008}
+    assert adopted == {"0B41": 1}
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        ("pending", "unrequested"),
+        ("failed", "jvlink_error"),
+        ("provider_missing", "jvopen_no_data"),
+    ],
+)
+def test_confirmed_archive_adopts_incomplete_state(state: str, reason: str) -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    prior = SpecState(FRONTIER.race_id, "0B41", state, reason, 0, 0)
+    snapshot = RawSnapshot((FRONTIER,), {pair: 1}, {}, frozenset({pair}))
+
+    states, changed_years, adopted = reconcile_states({pair: prior}, snapshot, frozenset({"0B41"}))
+
+    assert states[pair].state == "acquired"
+    assert states[pair].reason == "external_archive_observed"
+    assert changed_years == {2008}
+    assert adopted == {"0B41": 1}
+
+
+@pytest.mark.parametrize(
+    ("state", "reason"),
+    [
+        ("pending", "unrequested"),
+        ("failed", "jvlink_error"),
+        ("provider_missing", "jvopen_no_data"),
+    ],
+)
+def test_unconfirmed_archive_keeps_incomplete_state(state: str, reason: str) -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    prior = SpecState(FRONTIER.race_id, "0B41", state, reason, 0, 0)
+    snapshot = RawSnapshot((FRONTIER,), {pair: 1}, {})
+
+    states, changed_years, adopted = reconcile_states({pair: prior}, snapshot, frozenset({"0B41"}))
+
+    assert states[pair] == prior
+    assert changed_years == set()
+    assert adopted == {"0B41": 0}
+
+
+def test_unconfirmed_archive_keeps_acquired_state_without_updating_count() -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    prior = SpecState(FRONTIER.race_id, "0B41", "acquired", "initial_archive_observed", 1, 1)
+    snapshot = RawSnapshot((FRONTIER,), {pair: 2}, {})
+
+    states, changed_years, adopted = reconcile_states({pair: prior}, snapshot, frozenset({"0B41"}))
+
+    assert states[pair] == prior
+    assert changed_years == set()
+    assert adopted == {"0B41": 0}
+
+
+def test_confirmed_archive_refreshes_acquired_state_when_count_increases() -> None:
+    pair = (FRONTIER.race_id, "0B41")
+    prior = SpecState(FRONTIER.race_id, "0B41", "acquired", "external_archive_observed", 1, 1)
+    snapshot = RawSnapshot((FRONTIER,), {pair: 2}, {}, frozenset({pair}))
+
+    states, changed_years, adopted = reconcile_states({pair: prior}, snapshot, frozenset({"0B41"}))
+
+    assert states[pair] == SpecState(
+        FRONTIER.race_id, "0B41", "acquired", "external_archive_observed", 2, 2
+    )
+    assert changed_years == {2008}
+    assert adopted == {"0B41": 1}
+
+
+def test_read_confirmed_pairs_and_snapshot_rejects_missing_column(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
+    archive_columns = f"{columns},headDataKubun TEXT"
+    archive_rows = [
+        ("2008", "0127", "05", "02", "03", "01", "4"),
+        ("2008", "0127", "01", "01", "08", "02", "1"),
+        ("2008", "0127", "01", "01", "08", "03", "2"),
+        ("2008", "0127", "01", "01", "08", "04", "9"),
+    ]
+    with sqlite3.connect(raw) as database:
+        database.execute(f"CREATE TABLE NL_RA_RACE ({columns})")
+        database.executemany(
+            "INSERT INTO NL_RA_RACE VALUES (?,?,?,?,?,?)",
+            [row[:6] for row in archive_rows] + [("2008", "0127", "01", "01", "08", "05")],
+        )
+        database.execute(f"CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU ({archive_columns})")
+        database.execute(f"CREATE TABLE ARCHIVE_O2_ODDS_UMAREN ({archive_columns})")
+        database.executemany(
+            "INSERT INTO ARCHIVE_O1_ODDS_TANFUKUWAKU VALUES (?,?,?,?,?,?,?)", archive_rows
+        )
+        database.execute(
+            "INSERT INTO ARCHIVE_O2_ODDS_UMAREN VALUES ('2008','0127','01','01','08','05','5')"
+        )
+
+    pairs = frozenset(
+        {
+            (RaceKey(date(2008, 1, 27), "05", "02", "03", "01").race_id, "0B41"),
+            (RaceKey(date(2008, 1, 27), "01", "01", "08", "02").race_id, "0B41"),
+            (RaceKey(date(2008, 1, 27), "01", "01", "08", "03").race_id, "0B41"),
+            (RaceKey(date(2008, 1, 27), "01", "01", "08", "04").race_id, "0B41"),
+            (RaceKey(date(2008, 1, 27), "01", "01", "08", "05").race_id, "0B42"),
+        }
+    )
+    assert read_confirmed_pairs(raw, pairs) == {
+        (RaceKey(date(2008, 1, 27), "05", "02", "03", "01").race_id, "0B41"),
+        (RaceKey(date(2008, 1, 27), "01", "01", "08", "05").race_id, "0B42"),
+    }
+    assert read_confirmed_pairs(tmp_path / "missing.db", ()) == frozenset()
+
+    missing_table = tmp_path / "missing-table.db"
+    with sqlite3.connect(missing_table) as database:
+        database.execute(f"CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU ({archive_columns})")
+    assert read_confirmed_pairs(missing_table, {(FRONTIER.race_id, "0B42")}) == frozenset()
+
+    missing_column = tmp_path / "missing-head-data-kubun.db"
+    with sqlite3.connect(missing_column) as database:
+        database.execute(f"CREATE TABLE NL_RA_RACE ({columns})")
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08','01')")
+        database.execute(f"CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU ({columns})")
+
+    with pytest.raises(AcquisitionBlocked, match="archive key schema is invalid"):
+        read_raw_snapshot(missing_column, PROFILE, BATCH, date(2026, 10, 5))
 
 
 def test_new_past_candidate_is_pending_instead_of_provider_missing(tmp_path: Path) -> None:
@@ -252,6 +478,54 @@ def test_confirm_provider_missing_requires_owned_initialized_ledger(tmp_path: Pa
     with pytest.raises(AcquisitionBlocked, match="existing ledger"):
         missing.confirm_provider_missing(key, frozenset({"0B41"}), NOW, {"0B41": 0})
     assert not (tmp_path / "missing.db").exists()
+
+
+def _raw_with_archive_rows(raw: Path, key: RaceKey, head_data_kubun: str) -> None:
+    columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT"
+    values = (
+        f"{key.race_date:%Y}",
+        f"{key.race_date:%m%d}",
+        key.jyo_code,
+        key.kaiji,
+        key.nichiji,
+        key.race_number,
+    )
+    with closing(sqlite3.connect(raw)) as database, database:
+        database.execute(f"CREATE TABLE ARCHIVE_O1_ODDS_TANFUKUWAKU ({columns},headDataKubun TEXT)")
+        database.execute(
+            "INSERT INTO ARCHIVE_O1_ODDS_TANFUKUWAKU VALUES (?,?,?,?,?,?,?)",
+            (*values, head_data_kubun),
+        )
+
+
+@pytest.mark.parametrize(("head_data_kubun", "accepted"), [("1", True), ("4", False)])
+def test_confirm_provider_missing_accepts_only_unconfirmed_archive_rows(
+    tmp_path: Path, head_data_kubun: str, accepted: bool
+) -> None:
+    key = RaceKey(date(2008, 1, 26), "06", "01", "07", "07")
+    raw = tmp_path / "raw.db"
+    _raw_with_archive_rows(raw, key, head_data_kubun)
+    ledger = ProgressLedger(tmp_path / "progress.db", raw, PROFILE, BATCH)
+    ledger.bootstrap(RawSnapshot((key,), {}, {}), NOW)
+    ledger.start_run("run", 2008, date(2026, 10, 5), NOW, (key,), {})
+    ledger.request("run", key, frozenset({"0B41"}), {"0B41": 1}, NOW)
+    ledger.finish_request(
+        key,
+        {"0B41": ("failed", "empty_response_unverified", 0)},
+        NOW,
+        recovered=True,
+    )
+
+    if accepted:
+        ledger.confirm_provider_missing(key, frozenset({"0B41"}), NOW, {"0B41": 1})
+        states, _, _ = ledger.read()
+        assert states[(key.race_id, "0B41")].state == "provider_missing"
+        assert states[(key.race_id, "0B41")].reason == "provider_confirmed_missing"
+    else:
+        with pytest.raises(AcquisitionBlocked, match="conflicts with archive rows"):
+            ledger.confirm_provider_missing(key, frozenset({"0B41"}), NOW, {"0B41": 1})
+        states, _, _ = ledger.read()
+        assert states[(key.race_id, "0B41")].state == "failed"
 
 
 def test_ledger_refuses_unsupported_schema_and_wrong_database(tmp_path: Path) -> None:
@@ -418,11 +692,11 @@ def test_weekly_run_retrieves_one_year_and_resumes_without_repeating(tmp_path: P
             "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
         )
         database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08','01')")
-        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT"
+        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT,headDataKubun TEXT"
         database.execute(f"CREATE TABLE RT_O1_ODDS_TANFUKUWAKU ({columns})")
         database.execute(f"CREATE TABLE RT_O2_ODDS_UMAREN ({columns})")
         database.execute(
-            "INSERT INTO RT_O1_ODDS_TANFUKUWAKU VALUES ('2008','0127','01','01','08','01','110000')"
+            "INSERT INTO RT_O1_ODDS_TANFUKUWAKU VALUES ('2008','0127','01','01','08','01','110000','1')"
         )
 
     class Runner:
@@ -430,7 +704,7 @@ def test_weekly_run_retrieves_one_year_and_resumes_without_repeating(tmp_path: P
             with sqlite3.connect(raw) as database:
                 for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
                     database.execute(
-                        f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','01','120000')"
+                        f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','01','120000','4')"
                     )
 
     builder = Mock()
@@ -494,6 +768,65 @@ def test_weekly_run_retrieves_one_year_and_resumes_without_repeating(tmp_path: P
         assert database.execute("SELECT COUNT(*) FROM ARCHIVE_O2_ODDS_UMAREN").fetchone()[0] == 1
 
 
+def test_weekly_run_backfills_race_with_only_unconfirmed_race_day_rows(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    race_key = "'2008','0127','01','01','08','01'"
+    columns = (
+        "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,"
+        "HappyoTime TEXT,headDataKubun TEXT"
+    )
+    with closing(sqlite3.connect(raw)) as database, database:
+        database.execute(
+            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
+        )
+        for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns})")
+
+    class Runner:
+        def execute(self, setting: Path, *, skip_last_modified_update: bool) -> None:
+            with closing(sqlite3.connect(raw)) as database, database:
+                for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+                    database.execute(f"INSERT INTO {table} VALUES ({race_key},'115500','1')")
+                    database.execute(f"INSERT INTO {table} VALUES ({race_key},'120000','4')")
+
+    builder = Mock()
+    builder.build.side_effect = lambda profile, destination, **kwargs: destination
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, Runner()),
+        raw,
+        builder,
+        OddsArchive(raw),
+        PROFILE,
+        BATCH,
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    assert retriever.run(cutoff=date(2026, 10, 5), raw_only=True).status == "up_to_date"
+
+    # A race-day prediction capture stored the freeze-time series before historical-odds saw the race.
+    with closing(sqlite3.connect(raw)) as database, database:
+        database.execute(f"INSERT INTO NL_RA_RACE VALUES ({race_key})")
+        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns})")
+            database.execute(f"INSERT INTO {table} VALUES ({race_key},'115500','1')")
+
+    result = retriever.run(cutoff=date(2026, 10, 5), raw_only=True)
+
+    assert result.adopted_races == {"0B41": 0, "0B42": 0}
+    assert result.requested_races == 1
+    assert result.requested_specs == 2
+    assert result.new_rows == {"0B41": 1, "0B42": 1}
+    states, _, _ = retriever.ledger.read()
+    for spec in ("0B41", "0B42"):
+        state = states[("2008012701010801", spec)]
+        assert (state.state, state.reason) == ("acquired", "requested_archive_committed")
+        assert (state.before_rows, state.after_rows) == (1, 2)
+    with closing(sqlite3.connect(raw)) as database:
+        assert database.execute(
+            "SELECT HappyoTime, headDataKubun FROM ARCHIVE_O1_ODDS_TANFUKUWAKU ORDER BY HappyoTime"
+        ).fetchall() == [("115500", "1"), ("120000", "4")]
+
+
 def test_weekly_run_continues_after_no_data_response_and_marks_provider_missing(
     tmp_path: Path,
 ) -> None:
@@ -506,7 +839,7 @@ def test_weekly_run_continues_after_no_data_response_and_marks_provider_missing(
             "INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08',?)",
             [("01",), ("02",)],
         )
-        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT"
+        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT,headDataKubun TEXT"
         database.execute(f"CREATE TABLE RT_O1_ODDS_TANFUKUWAKU ({columns})")
         database.execute(f"CREATE TABLE RT_O2_ODDS_UMAREN ({columns})")
 
@@ -531,7 +864,7 @@ def test_weekly_run_continues_after_no_data_response_and_marks_provider_missing(
             with sqlite3.connect(raw) as database:
                 for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
                     database.execute(
-                        f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','02','120000')"
+                        f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','02','120000','4')"
                     )
             return JVLinkExecutionResult(
                 {"0B41": 0, "0B42": 0},
@@ -590,7 +923,7 @@ def test_weekly_run_reports_current_year_as_up_to_date_after_complete_request(
             "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
         )
         database.execute("INSERT INTO NL_RA_RACE VALUES ('2026','1004','01','01','01','01')")
-        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT"
+        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT,headDataKubun TEXT"
         database.execute(f"CREATE TABLE RT_O1_ODDS_TANFUKUWAKU ({columns})")
         database.execute(f"CREATE TABLE RT_O2_ODDS_UMAREN ({columns})")
 
@@ -601,7 +934,7 @@ def test_weekly_run_reports_current_year_as_up_to_date_after_complete_request(
             with sqlite3.connect(raw) as database:
                 for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
                     database.execute(
-                        f"INSERT INTO {table} VALUES ('2026','1004','01','01','01','01','120000')"
+                        f"INSERT INTO {table} VALUES ('2026','1004','01','01','01','01','120000','4')"
                     )
             return JVLinkExecutionResult(
                 {"0B41": 0, "0B42": 0},
@@ -672,7 +1005,7 @@ def test_weekly_run_does_not_promote_empty_table_without_no_data_code(
             "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
         )
         database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08','01')")
-        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT"
+        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT,headDataKubun TEXT"
         database.execute(f"CREATE TABLE RT_O1_ODDS_TANFUKUWAKU ({columns})")
         database.execute(f"CREATE TABLE RT_O2_ODDS_UMAREN ({columns})")
 
@@ -728,7 +1061,7 @@ def test_weekly_run_stops_after_jvlink_error_without_requesting_next_race(
             "INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08',?)",
             [("01",), ("02",)],
         )
-        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT"
+        columns = "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT,HappyoTime TEXT,headDataKubun TEXT"
         database.execute(f"CREATE TABLE RT_O1_ODDS_TANFUKUWAKU ({columns})")
         database.execute(f"CREATE TABLE RT_O2_ODDS_UMAREN ({columns})")
 
@@ -773,14 +1106,14 @@ def _retriever_with_staging_rows(
         database.execute(f"CREATE TABLE NL_RA_RACE ({columns})")
         database.execute("INSERT INTO NL_RA_RACE VALUES ('2008','0127','01','01','08','01')")
         for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
-            database.execute(f"CREATE TABLE {table} ({columns},HappyoTime TEXT)")
+            database.execute(f"CREATE TABLE {table} ({columns},HappyoTime TEXT,headDataKubun TEXT)")
 
     def execute(setting: Path, *, skip_last_modified_update: bool) -> JVLinkExecutionResult:
         with closing(sqlite3.connect(raw, timeout=0)) as database, database:
             database.execute("BEGIN EXCLUSIVE")
             for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
                 database.execute(
-                    f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','01','120000')"
+                    f"INSERT INTO {table} VALUES ('2008','0127','01','01','08','01','120000','4')"
                 )
         return execution
 

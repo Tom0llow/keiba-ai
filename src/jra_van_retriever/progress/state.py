@@ -19,6 +19,7 @@ class RawSnapshot:
     races: tuple[RaceKey, ...]
     counts: dict[tuple[str, str], int]
     schemas: dict[str, str]
+    confirmed: frozenset[tuple[str, str]] = frozenset()
 
 
 @dataclass(frozen=True)
@@ -70,6 +71,23 @@ def _legacy_policy_hash(
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
 
+def adoption_candidates(
+    states: dict[tuple[str, str], SpecState], snapshot: RawSnapshot, specs: frozenset[str]
+) -> frozenset[tuple[str, str]]:
+    """Return present pairs that may replace their prior ledger state."""
+    return frozenset(
+        (key.race_id, spec)
+        for key in snapshot.races
+        for spec in specs
+        if (count := snapshot.counts.get((key.race_id, spec), 0)) > 0
+        and (
+            (prior := states.get((key.race_id, spec))) is None
+            or prior.state != "acquired"
+            or count > prior.after_rows
+        )
+    )
+
+
 def reconcile_states(
     states: dict[tuple[str, str], SpecState], snapshot: RawSnapshot, specs: frozenset[str]
 ) -> tuple[dict[tuple[str, str], SpecState], set[int], dict[str, int]]:
@@ -80,6 +98,7 @@ def reconcile_states(
     proposed = dict(states)
     changed_years: set[int] = set()
     adopted = dict.fromkeys(sorted(specs), 0)
+    candidates = adoption_candidates(states, snapshot, specs)
     for key in snapshot.races:
         for spec in specs:
             pair = (key.race_id, spec)
@@ -91,7 +110,7 @@ def reconcile_states(
                 and (count == 0 or count < prior.after_rows)
             ):
                 raise AcquisitionBlocked(f"acquired archive rows disappeared: {key}/{spec}")
-            if count and (prior is None or prior.state != "acquired" or count > prior.after_rows):
+            if pair in candidates and pair in snapshot.confirmed:
                 entry = SpecState(
                     key.race_id,
                     spec,

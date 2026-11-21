@@ -54,6 +54,22 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
    更新時にAPI列だけを追加し、API証跡なしの既存`provider_missing/jvopen_no_data`は
    `provider_missing/legacy_provider_missing`へ移行する。
 
+### Amendment 1: 確定の発表がない別モードの行を取得済みとしない（2026-11-21）
+
+- 2026-11-21に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #66。
+- Decision 3の「後からアーカイブへ現れた行は外部観測として台帳へ取り込む」を次のとおり改める。
+  台帳の照合で、要求していない組を`acquired/external_archive_observed`として取り込むのは、その組のarchiveに
+  `headDataKubun`が`4`（確定オッズ）または`5`（確定オッズ（月曜））の行がある場合に限る。
+  確定の行がない組は取り込まず、`pending`・`failed`・`provider_missing`の状態を保つ。新しい候補は`pending/new_candidate`とする。
+- 既に`acquired`の組と、初回の台帳作成（Decision 3の初期スナップショット、ADR-015）の規則は変えない。
+- archiveに確定の行が1件もない`acquired`の組と、確定の行がない`provider_missing`の組では、追加行が現れても、その組と年のpublication状態を変えない。その行は次回の完全Parquet公開に含める。確定の行がある`acquired`の組は、行数が増えれば従来どおり取り込み直し、その年を公開待ちにする。
+- Decision 7の「確認時にもアーカイブ件数が0であることを検証する」を次のとおり改める。`failed/empty_response_unverified`の組を`provider_missing/provider_confirmed_missing`へ確定するとき、archiveに確定の行（`headDataKubun`の`4`・`5`）があれば拒否し、確定の行のない行（予測用の取得など）だけがある場合は受け付ける。予測用の取得の行があるレースを要求して、API戻り値のない空の応答になった組が、`failed`のまま年の取得を止め続けないためである。
+- 根拠: race-day-oddsの予測用の取得（ADR-032 Amendment 2）はfreezeの時刻に0B41/0B42を保存するため、
+  その行は確定の発表を含まず、freezeより後の発表と、freezeの時点で取得し損ねた発表を欠く。行の有無で取り込むと、
+  historical-oddsがこのレースをbackfillしない。2026-11-21の実データでは、historical-oddsで要求した2025年の
+  全3,456レースのO1・O2が`headDataKubun`の`4`を含み、2026-11-14・15に予測用の取得だけで保存した32レースは
+  `1`・`2`だけだった。
+
 ## Consequences
 
 ### Positive
@@ -79,3 +95,10 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
 しない失敗分類を検証する。実機の成功・正常空応答・メンテナンス失敗の判定は、
 一次仕様として [JRA-VANのエラーコード一覧](https://developer.jra-van.jp/t/topic/822) を参照し、
 実機のプロセス成功と空RT表を模したテストで`jvopen_no_data`の分類を検証する。
+
+## Decision History
+
+| Date | Status | Notes |
+| --- | --- | --- |
+| 2026-10-09 | Accepted | 作成 |
+| 2026-11-21 | Accepted | Amendment 1: 確定の発表がない別モードの行を取得済みとせず、確定の行のない行だけがある組の欠損の確認を受け付ける（#66） |

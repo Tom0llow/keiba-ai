@@ -2,13 +2,16 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from datetime import date
 
 from domain.race_key import RaceKey
 from jra_van_retriever.progress.ledger import ProgressLedger
+from jra_van_retriever.progress.raw_observation import read_confirmed_pairs
 from jra_van_retriever.progress.state import (
     RawSnapshot,
     SpecState,
+    adoption_candidates,
     reconcile_states,
 )
 from jra_van_retriever.progress.state import (
@@ -27,7 +30,15 @@ def plan_snapshot(
     """Observe committed progress and return a read-only year-scoped plan."""
     if ledger is not None:
         states, publications, _ = ledger.read()
-        states, _, adopted_races = reconcile_states(states, snapshot, data_specs)
+        confirmed = read_confirmed_pairs(
+            ledger.raw_db,
+            adoption_candidates(states, snapshot, data_specs),
+        )
+        states, _, adopted_races = reconcile_states(
+            states,
+            replace(snapshot, confirmed=confirmed),
+            data_specs,
+        )
     else:
         states = {
             (key.race_id, spec): SpecState(
