@@ -111,7 +111,7 @@ uv run python src/main.py model fit-betting-estimator `
 
 同じdatamartから、train 2006〜2025年、valid 2026年の最終PLモデルを作る。`<datamartのmanifest SHA-256>`は手順3と同じ値である。
 
-書込みが欠損の枝の照合で拒否された場合は、[ADR-038](decisions/ADR-038-train-and-persist-the-final-top3-pl-model.md) Amendment 1のとおり、`configs/pl_evaluation/measure.yaml`と`configs/pl_training/final.yaml`の`lightgbm`に同じ`bin_construct_sample_cnt`（最終学習のtrainの行数以上）を入れ、手順3〜6をやり直す。手順5の推定器は使わない。設定の変更は作り直しの後のPRに含める。やり直しが終わるまでは「間に合わないとき・切り戻し」に従う。2027年には2026年の推定器を使えないため、Amendment 1の「今の推定器」で運用を続けることはできない。
+書込みが欠損の枝の照合で拒否された場合は、[ADR-038](decisions/ADR-038-train-and-persist-the-final-top3-pl-model.md) Amendment 1のとおり、`configs/pl_evaluation/measure.yaml`と`configs/pl_training/final.yaml`の`lightgbm`に同じ`bin_construct_sample_cnt`（最終学習のtrainの行数以上）を入れ、手順3〜6をやり直す。手順3〜5の出力先は既にあり、各CLIは既存の出力先を拒否するので、やり直す段階の出力名の末尾に`-r2`のような版の番号を付ける（例: `output/pl-evaluation-2016-2026-r2`）。手順4〜6に渡すSHA-256は、やり直した出力から得る。最初の手順5の推定器は使わない。設定の変更は作り直しの後のPRに含める。やり直しが終わるまでは「間に合わないとき・切り戻し」に従う。2027年には2026年の推定器を使えないため、Amendment 1の「今の推定器」で運用を続けることはできない。
 
 ```powershell
 uv run python src/main.py model train-pl `
@@ -165,6 +165,8 @@ uv run python src/main.py model train-pl `
 - `configs/pl_evaluation/measure.yaml`と`configs/betting_backtest/measure.yaml`の`test_years`（`configs/betting_backtest/measure.yaml`の「計測の後に値を変えない」という注記は、ADR-043・044で固定した方策と補正の値についてのもので、`test_years`は対象ではない。初回のPRで注記の対象をそれらの値に限るよう書き直す）
 - `configs/pl_training/final.yaml`の`valid_year`
 - 上の値の年を書いた先頭のコメント（`configs/pl_evaluation/measure.yaml`の「test 2016-2025」、`configs/pl_training/final.yaml`の「train 2006-2024 ... 2025」）
+- 上の運用の年を固定して確かめるテスト（評価・バックテスト・最終学習のCLIの統合テストで、`measure.yaml`の`test_years`や`final.yaml`の`valid_year`の値を確かめているもの）。変えないと`Test`のCIが失敗する
+- READMEのPLの評価と最終学習の節に書いた年（`measure.yaml`のtest年、`final.yaml`のtrainとvalidの年）
 - 評価、バックテスト、最終学習の実験の記録
 - この文書の「版の履歴」の表（新しい行を足し、前の行は残す）と、「前年の版で運用した開催日」の表
 
@@ -175,7 +177,7 @@ uv run python src/main.py model train-pl `
 年の途中には通常の作り直しをしない。LightGBMの更新、閉じた数値列・計算契約・特徴量の定義（`configs/features.toml`）の変更、ADR-038 Amendment 1による`bin_construct_sample_cnt`の変更のときは、同じ年の範囲（datamartの対象〜前年、test年2016〜前年、推定器はその年、validは前年）でこの手順を臨時に行う（ADR-048の決定9）。
 
 - 年の途中に行うときは、新しい版へ切り替えるまで、今のdatamart、PLモデル、推定器で運用を続ける（購入案の常駐CLIも起動する）。切り戻しも今の3つへ戻す。
-- 臨時の作り直しの手順2〜6は、当日の運用に使うcheckoutと環境とは別のcheckout・環境（変更のブランチのworktreeなど）で行う。`data/`と`output/`はgitの対象外で、取得の設定（`configs/data.toml`）はデータのパスをcheckoutからの相対パスで決める。そのため、手順1の取得とsnapshotの固定は当日の運用のcheckoutで行う。別のcheckoutでは、`processed_root`・`--processed-root`・`datamart_path`・`pl_evaluation_path`・`--backtest`・`--pl-evaluation`・`--output`に、運用のcheckoutの`data/processed`と`output/`の下を絶対パス（`C:/.../data/processed`のように`/`で区切る）で指定する。`Get-FileHash`のパスも、同じ絶対パスにする。成果物を別のcheckoutの中に置かない（worktreeを消すと中の成果物も消える）。年明けと同じ年の範囲なので、出力名は運用中の成果物と重なる。各CLIは既存の出力先を拒否するため、出力名の末尾に`-r2`・`-r3`のように版の番号を付ける（例: `output/pl-final-model-2006-2025-r3`）。計算契約・閉じた数値列・特徴量の定義を変えたcheckoutでは、特徴量の常駐CLIが今の学習用datamartを拒否する。LightGBMを更新した環境では、前の版のPLモデルを読めない（学習時のLightGBMのversionとの違いで拒否する）。当日の運用のcheckoutと環境は、切替の夜まで前のコードと依存のままにする。切替の夜にコード・依存と3成果物を一緒に替え、切り戻しは両方を戻す。
+- 臨時の作り直しの手順2〜6は、当日の運用に使うcheckoutと環境とは別のcheckout・環境（変更のブランチのworktreeなど）で行う。`data/`と`output/`はgitの対象外で、取得の設定（`configs/data.toml`）はデータのパスをcheckoutからの相対パスで決める。そのため、手順1の取得とsnapshotの固定は当日の運用のcheckoutで行う。別のcheckoutでは、`processed_root`・`--processed-root`・`datamart_path`・`pl_evaluation_path`・`--backtest`・`--pl-evaluation`・`--output`に、運用のcheckoutの`data/processed`と`output/`の下を絶対パス（`C:/.../data/processed`のように`/`で区切る）で指定する。`Get-FileHash`のパスも、同じ絶対パスにする。成果物を別のcheckoutの中に置かない（worktreeを消すと中の成果物も消える）。年明けと同じ年の範囲なので、出力名は運用中の成果物と重なる。各CLIは既存の出力先を拒否するため、出力名の末尾に`-r2`・`-r3`のように版の番号を付ける（まだ使っていない次の番号を選ぶ。例: 運用中の`output/pl-final-model-2006-2026`に対して`output/pl-final-model-2006-2026-r2`）。計算契約・閉じた数値列・特徴量の定義を変えたcheckoutでは、特徴量の常駐CLIが今の学習用datamartを拒否する。LightGBMを更新した環境では、前の版のPLモデルを読めない（学習時のLightGBMのversionとの違いで拒否する）。当日の運用のcheckoutと環境は、切替の夜まで前のコードと依存のままにする。切替の夜にコード・依存と3成果物を一緒に替え、切り戻しは両方を戻す。
 - LightGBMの更新の後は、前の版のPLモデルで当日に残した特徴量を採点できない。ADR-047の評価のための後からの採点は、更新の前に済ませるか、前のLightGBMの環境で行う。
 - 年明けの作り直しの中での欠損の枝の照合による拒否は、手順6に従う。
 
