@@ -3,7 +3,7 @@
 - Status: Accepted
 - Date: 2026-11-09
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: Closes #34, Refs #33, Refs #48, Refs #49
+- Related Issues/PRs: Closes #34, Refs #33, Refs #48, Refs #49, Refs #72
 - Supersedes: N/A
 - Superseded by: ADR-038（Decision 3の「モデルは永続化しない」のみ）
 
@@ -102,6 +102,15 @@ datamartは閉じた数値列36列（freeze時点の単勝オッズ`market_chara
   `predictions.parquet`には`in_jra_flat_graded_stakes`（bool、非null）を追加する。追加フィールドは
   format_version 1の範囲内である。
 - CLIの失敗メッセージは改行を空白へ畳んだ1行とし、`???`が残る設定も終了コード1で拒否する。
+
+### Amendment 2: PLの予約キーの追加（2026-11-21）
+
+- 2026-11-21に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #72。
+- ADR-038（#52）は、PLのLightGBMの予約キーに`use_missing`と`zero_as_missing`を加えた。予約キーは評価と最終学習で共通
+  （`models/backends/lightgbm.py`の`fit_native_pl_booster`）なので、Decision 3の「objective・metric・反復数・
+  early stopping・verbosityを設定から上書きすることは拒否する」は、`model evaluate-pl`でもこの2つを含む。
+- 根拠: 最終モデルの欠損の検査（ADR-038 Decision 3・4）は、NaNをLightGBMの欠損として扱う既定の動作を前提とする。
+  評価と最終学習の引数を同じに保つ（ADR-038 Decision 2）ため、評価でもこの2つを変えられないようにした。
 
 ---
 
@@ -303,3 +312,4 @@ Reason not selected:
 | 2026-11-09 | Accepted | top-3 PLの微分・年単位fold・ラベル境界・温度校正・市場との比較の手順を決定 |
 | 2026-11-10 | Accepted | Amendment 1: 固定snapshotの`NL_RA_RACE`による平地重賞（GradeCD A・B・C × TrackCD 10〜24）の部分集合評価を追加 |
 | 2026-11-12 | Accepted | ADR-038が、同じ学習の手順で最終モデルを学習し、成果物として保存することを決めた。評価（`model evaluate-pl`）は引き続きモデルを永続化しない |
+| 2026-11-21 | Accepted | Amendment 2: ADR-038で加えた予約キー`use_missing`・`zero_as_missing`が評価の`model evaluate-pl`にも効くことを記録（#72） |
