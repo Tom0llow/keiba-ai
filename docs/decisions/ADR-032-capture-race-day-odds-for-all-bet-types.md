@@ -290,7 +290,7 @@ Reason not selected:
 ## Follow-up Actions
 
 - [ ] 発走時刻の変更情報を取得して、取得予定を更新する。
-- [ ] 蓄積したオッズを特徴量と期待値の判断へ接続する。
+- [ ] 蓄積したオッズを特徴量と期待値の判断へ接続する（方式と蓄積の目標は[ADR-047](ADR-047-connect-wide-and-exacta-race-day-odds-to-expected-value-decisions.md)。ワイド・馬単の実装はゲートAの後）。
 
 ---
 
