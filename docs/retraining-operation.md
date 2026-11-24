@@ -150,6 +150,27 @@ uv run python src/main.py model train-pl `
 
 `--snapshot-id`には、従来どおり当日の前日の夜に`latest`で固定したCURRENTのIDを渡す。学習に使ったsnapshot IDで置き換えない。開催日の途中には切り替えない。
 
+## historical-oddsの対象年を延ばす
+
+年`Y`の作り直しと切替を終えた後、年`Y`の最初の開催日の翌日（JST）以後で、年`Y`のレースをhistorical-oddsでbackfillする前に、対象年の終わりを`Y`へ延ばす。初回は、2027年の最初の開催日の翌日以後に行う。
+
+次の順に実行する。
+
+1. 進捗台帳`data/runtime/jvlink/historical-odds-progress.db`（`configs/data.toml`の`jvlink_runtime_dir`の下）を複製し、切り戻し用に保管する。
+2. 当日の運用のcheckoutで、`configs/jvlink.toml`の`[historical_odds.batch].last_year`を`Y`にする。
+3. `--plan-only`でhistorical-oddsを実行し、`policy differs`で拒否されずに予定が出ることを確かめる。この実行は台帳へ書き込まない。予定の年は未完了の最も古い年で、それより前の年がすべて取得済みのときに`Y`になる。
+4. `--plan-only`なしでhistorical-oddsを実行する。この実行で既存の台帳に年`Y`を`pending`として加え、`policy_hash`を新しい設定へ移す。
+5. `configs/jvlink.toml`の`last_year`と、それを確かめる`src/tests/integration/test_setting.py`の値を変えるPRを作る（作り直しの記録PRには含めない）。マージまで、当日の運用のcheckoutでは`configs/jvlink.toml`の変更を戻さない（戻すと延長した台帳が拒否される）。マージの後に当日の運用のcheckoutを更新するときは、historical-oddsのコマンドを実行していない間に、`git checkout -- configs/jvlink.toml`で手元の変更を捨ててから`git pull`する（手元の変更が残っていると`git pull`は上書きを拒否する）。
+
+```powershell
+uv run python src/main.py --retrieve --mode=historical-odds --plan-only
+uv run python src/main.py --retrieve --mode=historical-odds
+```
+
+年`Y`の最初の開催日より前に`last_year`を上げない。台帳へ書き込むhistorical-oddsのコマンドは、通常の実行だけでなく`--recover`と`--confirm-provider-missing`も延長を行う。延長で加えた年`Y`は公開待ち（`pending`）になり、年`Y`の候補がまだなくても、次の`--plan-only`なしの実行が完全Parquetの再構築を行う（rawデータベースが大きいため長い時間がかかる）。最初の開催日の後であれば、年`Y`のレースの取得によってどのみち再構築が必要になる。
+
+延長後は、古い設定や古いコードでは台帳の方針が一致せず拒否される。切り戻すときは、設定やコードだけでなく、手順1で複製した延長前の台帳も元の場所へ戻す。
+
 ## 間に合わないとき・切り戻し
 
 新しい3成果物が揃わない、常駐CLIが起動に失敗する、または新しいモデルのラベル利用境界が最初の開催日に届かない場合は、特徴量と予測の常駐CLIを前年のdatamartとPLモデルで動かす。購入案の常駐CLIは起動しない。前年の推定器は新しい年の`--date`に対して起動できないためである。

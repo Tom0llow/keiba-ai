@@ -208,6 +208,12 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   取得または公開に失敗しても、rawデータベースと進捗台帳は次回の手動実行で利用できる。
   このコマンドは、運用者が中断するか、対象の年がなくなると停止する。
   `--plan-only`を使うと、書き込みやJVLinkToSQLiteの起動をせずに次の年を確認できる。
+  既存の進捗台帳で`[historical_odds.batch].last_year`だけを大きくすると、台帳へ書き込む次の
+  historical-oddsのコマンド（通常の実行、`--recover`、`--confirm-provider-missing`）が、延長前の方針で台帳全体を
+  検証してから、延長した年を`pending`として台帳へ加え、`policy_hash`を新しい設定へ移す。`--plan-only`は台帳へ
+  書き込まず、延長後の方針で予定を示す（表示する年は、延長した年を含めた中で未完了の最も古い年である）。
+  `last_year`を下げる、`first_year`を変える、または他の取得方針も変える場合は、台帳を延長せず拒否する。
+  延長の時期と手順は[年次の再学習手順](docs/retraining-operation.md)の「historical-oddsの対象年を延ばす」に従う。
   このコマンドは一つの継続したプロセスを開始する。Task Schedulerへのジョブ登録や、
   曜日の規則の適用は行わない。有効な空のrealtime表で成功した実行は、取得したJVOpen/JVRTOpenの
   戻り値が`-1`の場合に限り`provider_missing/jvopen_no_data`として記録し、再試行しない。

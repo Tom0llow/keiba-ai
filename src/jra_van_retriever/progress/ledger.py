@@ -46,6 +46,9 @@ from jra_van_retriever.progress.state import (
 from jra_van_retriever.progress.state import (
     reconcile_states as reconcile_states,
 )
+from jra_van_retriever.progress.state import (
+    year_extension_source as year_extension_source,
+)
 
 LEDGER_FILENAME = "historical-odds-progress.db"
 TERMINAL_STATES = {"acquired", "provider_missing"}
@@ -237,61 +240,140 @@ class ProgressLedger:
             )
         return True
 
-    def read(self) -> tuple[dict[tuple[str, str], SpecState], dict[int, str], int]:
-        """Validate ledger ownership and return its committed states."""
-        with closing(sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)) as database:
-            database.execute("BEGIN")
+    def extend_last_year(self, snapshot: RawSnapshot, now: datetime) -> bool:
+        """Add pending years when the stored policy differs only by a larger final year."""
+        if not self.path.is_file():
+            return False
+        with closing(sqlite3.connect(self.path)) as database, database:
+            database.execute("BEGIN IMMEDIATE")
             metadata = dict(database.execute("SELECT key,value FROM metadata"))
             if (
                 database.execute("PRAGMA user_version").fetchone()[0] != 1
                 or metadata.get("schema_version") != "1"
             ):
                 raise AcquisitionBlocked("unsupported progress ledger schema version")
-            if (
-                metadata.get("raw_db") != canonical_path(self.raw_db)
-                or metadata.get("policy_hash") != self.policy_hash
-            ):
-                raise AcquisitionBlocked(
-                    "progress ledger raw database or policy differs; explicit migration is required"
-                )
-            if metadata.get("recovery_required") != "false":
-                raise AcquisitionBlocked("staging recovery is incomplete")
-            states: dict[tuple[str, str], SpecState] = {}
-            race_spec_columns = {
-                row[1] for row in database.execute("PRAGMA table_info(race_specs)")
-            }
-            has_api_columns = {"api_name", "api_returncode"} <= race_spec_columns
-            api_columns = ",api_name,api_returncode" if has_api_columns else ",NULL,NULL"
-            for row in database.execute(
-                "SELECT race_id,data_spec,state,reason,before_rows,after_rows,attempts"
-                f"{api_columns} FROM race_specs"
-            ):
-                key = race_key_from_id(row[0])
-                if (
-                    key.jyo_code not in {f"{code:02d}" for code in range(1, 11)}
-                    or not self.batch.first_year <= key.race_date.year <= self.batch.last_year
-                ):
-                    raise AcquisitionBlocked("progress ledger race lies outside the policy")
-                if (
-                    row[1] not in self.profile.realtime_data_specs
-                    or row[2] not in STATE_REASONS
-                    or row[3] not in STATE_REASONS[row[2]]
-                ):
-                    raise AcquisitionBlocked("unsupported or unresolved race/spec state")
-                _validate_api_observation(
-                    row[2], row[3], row[7], row[8], allow_legacy_no_data=not has_api_columns
-                )
-                if any(type(value) is not int or value < 0 for value in row[4:7]):
-                    raise AcquisitionBlocked("invalid progress row counts")
-                states[(row[0], row[1])] = SpecState(*row[:7])
+            if metadata.get("raw_db") != canonical_path(self.raw_db):
+                raise AcquisitionBlocked("progress ledger raw database or policy differs")
+            if metadata.get("policy_hash") == self.policy_hash:
+                return False
             years = dict(database.execute("SELECT year,publication FROM years"))
-            if set(years) != set(range(self.batch.first_year, self.batch.last_year + 1)) or not set(
-                years.values()
-            ) <= {"published", "pending", "failed"}:
-                raise AcquisitionBlocked("invalid publication year states")
-            revision = int(metadata["state_revision"])
-            if revision < 1:
-                raise AcquisitionBlocked("invalid ledger revision")
+            prior_last_year = year_extension_source(
+                metadata.get("policy_hash", ""), years, self.profile, self.batch
+            )
+            if prior_last_year is None:
+                return False
+            prior_batch = replace(self.batch, last_year=prior_last_year)
+            self._validate_ledger(
+                database,
+                prior_batch,
+                metadata["policy_hash"],
+                require_recovery_clear=False,
+            )
+            _validate_archive_schemas(metadata, snapshot)
+            database.executemany(
+                "INSERT INTO years VALUES (?,?,NULL)",
+                (
+                    (year, "pending")
+                    for year in range(prior_last_year + 1, self.batch.last_year + 1)
+                ),
+            )
+            database.execute(
+                "UPDATE metadata SET value=? WHERE key='policy_hash'", (self.policy_hash,)
+            )
+            database.execute(
+                "UPDATE metadata SET value=CAST(value AS INTEGER)+1 WHERE key='state_revision'"
+            )
+        return True
+
+    def read(
+        self, *, preview_year_extension: bool = False
+    ) -> tuple[dict[tuple[str, str], SpecState], dict[int, str], int]:
+        """Validate ledger ownership and return its committed states."""
+        with closing(sqlite3.connect(f"{self.path.as_uri()}?mode=ro", uri=True)) as database:
+            database.execute("BEGIN")
+            metadata = dict(database.execute("SELECT key,value FROM metadata"))
+            batch = self.batch
+            expected_policy_hash = self.policy_hash
+            prior_last_year: int | None = None
+            if preview_year_extension and metadata.get("policy_hash") != self.policy_hash:
+                years = dict(database.execute("SELECT year,publication FROM years"))
+                prior_last_year = year_extension_source(
+                    metadata.get("policy_hash", ""), years, self.profile, self.batch
+                )
+                if prior_last_year is not None:
+                    batch = replace(self.batch, last_year=prior_last_year)
+                    expected_policy_hash = metadata["policy_hash"]
+            states, years, revision = self._validate_ledger(
+                database,
+                batch,
+                expected_policy_hash,
+                require_recovery_clear=True,
+            )
+            if prior_last_year is not None:
+                years.update(
+                    (year, "pending")
+                    for year in range(prior_last_year + 1, self.batch.last_year + 1)
+                )
+        return states, years, revision
+
+    def _validate_ledger(
+        self,
+        database: sqlite3.Connection,
+        batch: HistoricalOddsBatch,
+        expected_policy_hash: str,
+        *,
+        require_recovery_clear: bool,
+    ) -> tuple[dict[tuple[str, str], SpecState], dict[int, str], int]:
+        """Return validated ledger values for one fixed policy."""
+        metadata = dict(database.execute("SELECT key,value FROM metadata"))
+        if (
+            database.execute("PRAGMA user_version").fetchone()[0] != 1
+            or metadata.get("schema_version") != "1"
+        ):
+            raise AcquisitionBlocked("unsupported progress ledger schema version")
+        if (
+            metadata.get("raw_db") != canonical_path(self.raw_db)
+            or metadata.get("policy_hash") != expected_policy_hash
+        ):
+            raise AcquisitionBlocked(
+                "progress ledger raw database or policy differs; explicit migration is required"
+            )
+        if require_recovery_clear and metadata.get("recovery_required") != "false":
+            raise AcquisitionBlocked("staging recovery is incomplete")
+        states: dict[tuple[str, str], SpecState] = {}
+        race_spec_columns = {row[1] for row in database.execute("PRAGMA table_info(race_specs)")}
+        has_api_columns = {"api_name", "api_returncode"} <= race_spec_columns
+        api_columns = ",api_name,api_returncode" if has_api_columns else ",NULL,NULL"
+        for row in database.execute(
+            "SELECT race_id,data_spec,state,reason,before_rows,after_rows,attempts"
+            f"{api_columns} FROM race_specs"
+        ):
+            key = race_key_from_id(row[0])
+            if (
+                key.jyo_code not in {f"{code:02d}" for code in range(1, 11)}
+                or not batch.first_year <= key.race_date.year <= batch.last_year
+            ):
+                raise AcquisitionBlocked("progress ledger race lies outside the policy")
+            if (
+                row[1] not in self.profile.realtime_data_specs
+                or row[2] not in STATE_REASONS
+                or row[3] not in STATE_REASONS[row[2]]
+            ):
+                raise AcquisitionBlocked("unsupported or unresolved race/spec state")
+            _validate_api_observation(
+                row[2], row[3], row[7], row[8], allow_legacy_no_data=not has_api_columns
+            )
+            if any(type(value) is not int or value < 0 for value in row[4:7]):
+                raise AcquisitionBlocked("invalid progress row counts")
+            states[(row[0], row[1])] = SpecState(*row[:7])
+        years = dict(database.execute("SELECT year,publication FROM years"))
+        if set(years) != set(range(batch.first_year, batch.last_year + 1)) or not set(
+            years.values()
+        ) <= {"published", "pending", "failed"}:
+            raise AcquisitionBlocked("invalid publication year states")
+        revision = int(metadata["state_revision"])
+        if revision < 1:
+            raise AcquisitionBlocked("invalid ledger revision")
         return states, years, revision
 
     def running_requests(self) -> tuple[tuple[str, RaceKey, frozenset[str]], ...]:
@@ -669,6 +751,21 @@ def _parse_legacy_frontier(value: object) -> RaceKey:
         return RaceKey(race_date, *race_components)
     except ValueError as exc:
         raise AcquisitionBlocked("invalid legacy frontier metadata") from exc
+
+
+def _validate_archive_schemas(metadata: dict[str, str], snapshot: RawSnapshot) -> None:
+    """Require archive schemas to remain unchanged across a policy migration."""
+    try:
+        prior_schemas = json.loads(metadata["archive_schemas"])
+    except (KeyError, TypeError, ValueError) as exc:
+        raise AcquisitionBlocked("invalid progress archive schema metadata") from exc
+    if not isinstance(prior_schemas, dict) or any(
+        not isinstance(spec, str) or not isinstance(schema, str)
+        for spec, schema in prior_schemas.items()
+    ):
+        raise AcquisitionBlocked("invalid progress archive schema metadata")
+    if any(snapshot.schemas.get(spec) != schema for spec, schema in prior_schemas.items()):
+        raise AcquisitionBlocked("archive schema disappeared or changed")
 
 
 def _validate_api_observation(

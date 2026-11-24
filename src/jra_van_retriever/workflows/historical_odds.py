@@ -134,6 +134,7 @@ class WeeklyHistoricalOddsRetriever:
                 self._odds_profile.realtime_data_specs,
                 self.ledger if self.ledger_path.exists() else None,
                 raw_only=raw_only,
+                preview_year_extension=True,
             )
 
         self._runtime_dir.mkdir(parents=True, exist_ok=True)
@@ -146,6 +147,7 @@ class WeeklyHistoricalOddsRetriever:
                 self._database, self._odds_profile, self._batch, effective_cutoff
             )
             if self.ledger_path.exists():
+                ledger.extend_last_year(snapshot, now)
                 ledger.migrate_legacy_frontier(snapshot, now)
             recovery_snapshot: RawSnapshot | None = None
             if recover and self.ledger_path.exists():
@@ -266,6 +268,7 @@ class WeeklyHistoricalOddsRetriever:
         with AcquisitionLock(self._database, self.ledger_path) as lock:
             lock.bind()
             snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+            ledger.extend_last_year(snapshot, now)
             ledger.migrate_legacy_frontier(snapshot, now)
             if key not in snapshot.races:
                 raise AcquisitionBlocked("provider-missing confirmation targets an unknown race")
