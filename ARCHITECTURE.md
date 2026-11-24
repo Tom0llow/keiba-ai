@@ -181,13 +181,13 @@ realtimeはhistoryの0B41/0B42を取得・archive後にcurrentの0B31/0B32を取
 | historical_odds_request.py | request intent確定、XML/実行/archive、結果分類、要求結果確定。 |
 | historical_odds_recovery.py | runner停止確認、staging隔離証拠の記録後のreset。 |
 | historical_odds_publication.py | 同じロック内で完全性を再照合し、callback後に公開状態と派生報告を更新。 |
-| progress/ledger.py | 台帳取引、旧版移行、所有権、取得証拠とAPI return codeの永続化。 |
+| progress/ledger.py | 台帳取引、対象年の延長と旧版移行、所有権、取得証拠とAPI return codeの永続化。 |
 | progress/state.py | 値型と純粋な突合。 |
 | progress/raw_observation.py | raw観測と接続を閉じた結果。 |
 | progress/output.py | 台帳確定後の派生JSON/TOML。取得・復旧の判断元にはしない。 |
 | contracts/odds.py / parsing/race_key.py | オッズ表・キー列の契約と、raw行から共有RaceKeyへの純粋変換。 |
 
-ロックbind → 必要時runner停止確認 → raw観測 → 旧台帳移行 → staging隔離証拠記録 → reset →
+ロックbind → 必要時runner停止確認 → raw観測 → 対象年の延長 → 旧台帳移行 → staging隔離証拠記録 → reset →
 復旧確定 → 再観測 → bootstrap/reconcile → 要求開始確定 → 実行/archive →
 失敗隔離/成功reset → 要求結果確定 → run確定 → 派生報告の順序を維持する。
 未解決要求は全取得モードでfail-closedとし、復旧なしの書込を拒否する。

@@ -26,10 +26,11 @@ def plan_snapshot(
     ledger: ProgressLedger | None,
     *,
     raw_only: bool = False,
+    preview_year_extension: bool = False,
 ) -> WeeklyBatchResult:
     """Observe committed progress and return a read-only year-scoped plan."""
     if ledger is not None:
-        states, publications, _ = ledger.read()
+        states, publications, _ = ledger.read(preview_year_extension=preview_year_extension)
         confirmed = read_confirmed_pairs(
             ledger.raw_db,
             adoption_candidates(states, snapshot, data_specs),

@@ -48,6 +48,22 @@ PROFILE = JVLinkProfile(
 BATCH = HistoricalOddsBatch(2003, 2026, 1)
 
 
+def _extension_ledger(
+    tmp_path: Path, *, last_year: int = 2027
+) -> tuple[ProgressLedger, ProgressLedger, RawSnapshot]:
+    """Return a pre-extension ledger, its extended view, and matching schemas."""
+    path = tmp_path / "progress.db"
+    raw = tmp_path / "raw.db"
+    snapshot = RawSnapshot((FRONTIER,), {}, {"0B41": "schema", "0B42": "schema"})
+    ledger = ProgressLedger(path, raw, PROFILE, BATCH)
+    ledger.bootstrap(snapshot, NOW)
+    return (
+        ledger,
+        ProgressLedger(path, raw, PROFILE, HistoricalOddsBatch(2003, last_year, 1)),
+        snapshot,
+    )
+
+
 def test_bootstrap_leaves_initial_archive_gaps_pending(tmp_path: Path) -> None:
     earlier = RaceKey(date(2003, 10, 4), "05", "04", "01", "01")
     later = RaceKey(date(2008, 1, 26), "06", "01", "07", "07")
@@ -110,6 +126,7 @@ def test_legacy_frontier_ledger_is_migrated_without_losing_raw_state(tmp_path: P
         )
         database.execute("UPDATE years SET publication='baseline' WHERE year=2003")
 
+    assert not ledger.extend_last_year(snapshot, NOW)
     assert ledger.migrate_legacy_frontier(snapshot, NOW)
     states, years, _ = ledger.read()
 
@@ -121,6 +138,210 @@ def test_legacy_frontier_ledger_is_migrated_without_losing_raw_state(tmp_path: P
     assert "frontier" not in metadata
     assert metadata["migration_reason"] == "remove_initial_gap_classification"
     assert not ledger.migrate_legacy_frontier(snapshot, NOW)
+
+
+def test_last_year_extension_adds_pending_years_without_changing_state(tmp_path: Path) -> None:
+    ledger, extended, snapshot = _extension_ledger(tmp_path)
+    with sqlite3.connect(ledger.path) as database:
+        database.execute("UPDATE years SET publication='published' WHERE year=2003")
+        database.execute(
+            "UPDATE race_specs SET state='failed',reason='jvlink_error',before_rows=1,"
+            "after_rows=1,attempts=2 WHERE data_spec='0B41'"
+        )
+        database.execute(
+            "UPDATE race_specs SET state='provider_missing',reason='provider_confirmed_missing',"
+            "before_rows=2,after_rows=2,attempts=3 WHERE data_spec='0B42'"
+        )
+        database.execute(
+            "INSERT INTO race_specs (race_id,data_spec,year,state,reason,before_rows,after_rows,"
+            "attempts,updated_at) VALUES ('2008012606010708','0B41',2008,'acquired',"
+            "'requested_archive_committed',4,4,1,?)",
+            (NOW.isoformat(),),
+        )
+        before_metadata = dict(database.execute("SELECT key,value FROM metadata"))
+        before_rows = database.execute(
+            "SELECT race_id,data_spec,year,state,reason,last_run,attempts,before_rows,after_rows,"
+            "requested_at,updated_at,returncode,api_name,api_returncode FROM race_specs"
+        ).fetchall()
+        before_years = database.execute(
+            "SELECT year,publication,snapshot_id FROM years WHERE year<=2026 ORDER BY year"
+        ).fetchall()
+
+    assert extended.extend_last_year(snapshot, NOW)
+    _, years, revision = extended.read()
+    assert set(years) == set(range(2003, 2028))
+    assert years[2027] == "pending"
+    assert revision == int(before_metadata["state_revision"]) + 1
+    with sqlite3.connect(ledger.path) as database:
+        after_metadata = dict(database.execute("SELECT key,value FROM metadata"))
+        after_rows = database.execute(
+            "SELECT race_id,data_spec,year,state,reason,last_run,attempts,before_rows,after_rows,"
+            "requested_at,updated_at,returncode,api_name,api_returncode FROM race_specs"
+        ).fetchall()
+        after_years = database.execute(
+            "SELECT year,publication,snapshot_id FROM years WHERE year<=2026 ORDER BY year"
+        ).fetchall()
+    assert after_rows == before_rows
+    assert after_years == before_years
+    assert after_metadata == {
+        **before_metadata,
+        "policy_hash": extended.policy_hash,
+        "state_revision": str(revision),
+    }
+    extended_bytes = ledger.path.read_bytes()
+    assert not extended.extend_last_year(snapshot, NOW)
+    assert ledger.path.read_bytes() == extended_bytes
+
+
+def test_last_year_extension_accepts_multiple_years(tmp_path: Path) -> None:
+    _, extended, snapshot = _extension_ledger(tmp_path, last_year=2028)
+
+    assert extended.extend_last_year(snapshot, NOW)
+
+    assert extended.read()[1][2027] == "pending"
+    assert extended.read()[1][2028] == "pending"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        "lower_last_year",
+        "first_year",
+        "data_specs",
+        "race_start_date",
+        "year_gap",
+    ],
+)
+def test_last_year_extension_refuses_other_policy_changes(tmp_path: Path, change: str) -> None:
+    ledger, extended, snapshot = _extension_ledger(tmp_path)
+    if change == "lower_last_year":
+        extended = ProgressLedger(
+            ledger.path, ledger.raw_db, PROFILE, HistoricalOddsBatch(2003, 2025, 1)
+        )
+    elif change == "first_year":
+        extended = ProgressLedger(
+            ledger.path, ledger.raw_db, PROFILE, HistoricalOddsBatch(2004, 2027, 1)
+        )
+    elif change == "data_specs":
+        changed_profile = JVLinkProfile(
+            False,
+            False,
+            True,
+            frozenset(),
+            frozenset(),
+            frozenset({"0B41"}),
+            race_start_date=date(2003, 10, 4),
+        )
+        extended = ProgressLedger(ledger.path, ledger.raw_db, changed_profile, extended.batch)
+    elif change == "race_start_date":
+        changed_profile = JVLinkProfile(
+            False,
+            False,
+            True,
+            frozenset(),
+            frozenset(),
+            PROFILE.realtime_data_specs,
+            race_start_date=date(2003, 10, 5),
+        )
+        extended = ProgressLedger(ledger.path, ledger.raw_db, changed_profile, extended.batch)
+    else:
+        with sqlite3.connect(ledger.path) as database:
+            database.execute("DELETE FROM years WHERE year=2010")
+    before = ledger.path.read_bytes()
+
+    assert not extended.extend_last_year(snapshot, NOW)
+    assert ledger.path.read_bytes() == before
+    with pytest.raises(AcquisitionBlocked, match="raw database or policy"):
+        extended.read()
+    with pytest.raises(AcquisitionBlocked, match="raw database or policy"):
+        extended.read(preview_year_extension=True)
+
+
+@pytest.mark.parametrize("last_year", [2027, 2028])
+def test_read_preview_adds_extended_years_without_writing(tmp_path: Path, last_year: int) -> None:
+    ledger, extended, _ = _extension_ledger(tmp_path, last_year=last_year)
+    with sqlite3.connect(ledger.path) as database:
+        database.execute("UPDATE years SET publication='published' WHERE year=2026")
+    before = ledger.path.read_bytes()
+
+    _, years, _ = extended.read(preview_year_extension=True)
+
+    assert set(years) == set(range(2003, last_year + 1))
+    assert years[2026] == "published"
+    assert all(years[year] == "pending" for year in range(2027, last_year + 1))
+    assert ledger.path.read_bytes() == before
+    with pytest.raises(AcquisitionBlocked, match="raw database or policy"):
+        extended.read()
+
+
+def test_last_year_extension_rejects_wrong_raw_database(tmp_path: Path) -> None:
+    ledger, _, snapshot = _extension_ledger(tmp_path)
+    wrong_database = ProgressLedger(
+        ledger.path,
+        tmp_path / "other.db",
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+    )
+    before = ledger.path.read_bytes()
+
+    with pytest.raises(AcquisitionBlocked, match="raw database or policy"):
+        wrong_database.extend_last_year(snapshot, NOW)
+
+    assert ledger.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("invalid", ["state", "counts", "schemas"])
+def test_last_year_extension_rejects_invalid_ledger_without_writing(
+    tmp_path: Path, invalid: str
+) -> None:
+    ledger, extended, snapshot = _extension_ledger(tmp_path)
+    if invalid == "state":
+        with sqlite3.connect(ledger.path) as database:
+            database.execute("UPDATE race_specs SET state='provider_missing',reason='jvlink_error'")
+    elif invalid == "counts":
+        with sqlite3.connect(ledger.path) as database:
+            database.execute("UPDATE race_specs SET before_rows=-1")
+    else:
+        snapshot = RawSnapshot(snapshot.races, snapshot.counts, {"0B41": "changed"})
+    before = ledger.path.read_bytes()
+    message = {
+        "state": "unsupported or unresolved race/spec state",
+        "counts": "invalid progress row counts",
+        "schemas": "archive schema disappeared or changed",
+    }[invalid]
+
+    with pytest.raises(AcquisitionBlocked, match=message):
+        extended.extend_last_year(snapshot, NOW)
+
+    assert ledger.path.read_bytes() == before
+
+
+@pytest.mark.parametrize("invalid", ["publication", "race_year"])
+def test_year_extension_preview_and_migration_refuse_ledger_invalid_under_prior_policy(
+    tmp_path: Path, invalid: str
+) -> None:
+    ledger, extended, snapshot = _extension_ledger(tmp_path)
+    with sqlite3.connect(ledger.path) as database:
+        if invalid == "publication":
+            database.execute("UPDATE years SET publication='baseline' WHERE year=2010")
+        else:
+            database.execute(
+                "INSERT INTO race_specs (race_id,data_spec,year,state,reason,updated_at) "
+                "VALUES ('2027010906010101','0B41',2027,'pending','unrequested',?)",
+                (NOW.isoformat(),),
+            )
+    before = ledger.path.read_bytes()
+    message = {
+        "publication": "invalid publication year states",
+        "race_year": "progress ledger race lies outside the policy",
+    }[invalid]
+
+    with pytest.raises(AcquisitionBlocked, match=message):
+        extended.read(preview_year_extension=True)
+    with pytest.raises(AcquisitionBlocked, match=message):
+        extended.extend_last_year(snapshot, NOW)
+
+    assert ledger.path.read_bytes() == before
 
 
 def test_external_archive_is_adopted_and_missing_state_recovers(tmp_path: Path) -> None:
@@ -683,6 +904,240 @@ def test_snapshot_includes_all_ten_venues_and_closes_reader(tmp_path: Path) -> N
     with sqlite3.connect(raw, timeout=0) as database:
         database.execute("BEGIN EXCLUSIVE")
         database.rollback()
+
+
+def _create_year_extension_raw_database(raw: Path) -> None:
+    """Create one acquired 2026 race and one pending 2027 race."""
+    columns = (
+        "idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,idKaiji TEXT,idNichiji TEXT,"
+        "idRaceNum TEXT,HappyoTime TEXT,headDataKubun TEXT"
+    )
+    with sqlite3.connect(raw) as database:
+        database.execute(
+            "CREATE TABLE NL_RA_RACE (idYear TEXT,idMonthDay TEXT,idJyoCD TEXT,"
+            "idKaiji TEXT,idNichiji TEXT,idRaceNum TEXT)"
+        )
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2026','1227','01','01','01','01')")
+        database.execute("INSERT INTO NL_RA_RACE VALUES ('2027','0109','01','01','01','01')")
+        for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns})")
+        for table in ("ARCHIVE_O1_ODDS_TANFUKUWAKU", "ARCHIVE_O2_ODDS_UMAREN"):
+            database.execute(f"CREATE TABLE {table} ({columns})")
+            database.execute(
+                f"INSERT INTO {table} VALUES ('2026','1227','01','01','01','01','120000','4')"
+            )
+
+
+def _bootstrap_year_extension_ledger(
+    retriever: WeeklyHistoricalOddsRetriever, raw: Path
+) -> ProgressLedger:
+    """Create the 2026 ledger at the runtime path used by an extended retriever."""
+    ledger = ProgressLedger(retriever.ledger_path, raw, PROFILE, BATCH)
+    ledger.bootstrap(read_raw_snapshot(raw, PROFILE, BATCH, date(2027, 12, 31)), NOW)
+    return ledger
+
+
+def test_plan_only_previews_year_extension_without_writing(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    _create_year_extension_raw_database(raw)
+    builder = Mock()
+    retriever = WeeklyHistoricalOddsRetriever(
+        Mock(),
+        raw,
+        builder,
+        OddsArchive(raw),
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    ledger = _bootstrap_year_extension_ledger(retriever, raw)
+    before = ledger.path.read_bytes()
+
+    plan = retriever.run(plan_only=True, cutoff=date(2027, 12, 31), raw_only=True)
+
+    assert plan.year == 2027
+    assert plan.requested_races == 1
+    assert ledger.path.read_bytes() == before
+
+
+def test_plan_only_preview_returns_earlier_incomplete_year_first(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    _create_year_extension_raw_database(raw)
+    with sqlite3.connect(raw) as database:
+        database.execute("DELETE FROM ARCHIVE_O1_ODDS_TANFUKUWAKU")
+        database.execute("DELETE FROM ARCHIVE_O2_ODDS_UMAREN")
+    retriever = WeeklyHistoricalOddsRetriever(
+        Mock(),
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    ledger = _bootstrap_year_extension_ledger(retriever, raw)
+    before = ledger.path.read_bytes()
+
+    plan = retriever.run(plan_only=True, cutoff=date(2027, 12, 31), raw_only=True)
+
+    assert plan.year == 2026
+    assert plan.requested_races == 1
+    assert ledger.path.read_bytes() == before
+
+
+def test_weekly_run_extends_ledger_and_requests_new_year(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    _create_year_extension_raw_database(raw)
+
+    class Runner:
+        def __init__(self) -> None:
+            self.calls = 0
+
+        def execute(self, setting: Path, *, skip_last_modified_update: bool) -> None:
+            self.calls += 1
+            with sqlite3.connect(raw) as database:
+                for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+                    database.execute(
+                        f"INSERT INTO {table} VALUES ('2027','0109','01','01','01','01','120000','4')"
+                    )
+
+    runner = Runner()
+    builder = Mock()
+    builder.build.side_effect = lambda profile, destination, **kwargs: destination
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, runner),
+        raw,
+        builder,
+        OddsArchive(raw),
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    _bootstrap_year_extension_ledger(retriever, raw)
+
+    result = retriever.run(cutoff=date(2027, 12, 31), raw_only=True)
+
+    assert result.year == 2027
+    assert result.requested_races == 1
+    assert runner.calls == 1
+    states, years, _ = retriever.ledger.read()
+    assert years[2027] == "pending"
+    assert all(
+        states[("2027010901010101", spec)].state == "acquired"
+        for spec in PROFILE.realtime_data_specs
+    )
+
+
+def test_recovery_run_extends_ledger_before_recovering_running_request(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    _create_year_extension_raw_database(raw)
+
+    class Runner:
+        def __init__(self) -> None:
+            self.recovery_checks = 0
+            self.calls = 0
+
+        def assert_not_running(self) -> None:
+            self.recovery_checks += 1
+
+        def execute(self, setting: Path, *, skip_last_modified_update: bool) -> None:
+            self.calls += 1
+            with sqlite3.connect(raw) as database:
+                for table in ("RT_O1_ODDS_TANFUKUWAKU", "RT_O2_ODDS_UMAREN"):
+                    database.execute(
+                        f"INSERT INTO {table} VALUES ('2027','0109','01','01','01','01','120000','4')"
+                    )
+
+    runner = Runner()
+    retriever = WeeklyHistoricalOddsRetriever(
+        cast(JVLinkToSQLiteRunner, runner),
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    ledger = _bootstrap_year_extension_ledger(retriever, raw)
+    key = RaceKey(date(2026, 12, 27), "01", "01", "01", "01")
+    with sqlite3.connect(ledger.path) as database:
+        database.execute(
+            "UPDATE race_specs SET state='pending',reason='unrequested' "
+            "WHERE race_id=? AND data_spec='0B41'",
+            (key.race_id,),
+        )
+    ledger.start_run("interrupted", 2026, date(2027, 12, 31), NOW, (key,), {})
+    ledger.request("interrupted", key, frozenset({"0B41"}), {"0B41": 1}, NOW)
+
+    result = retriever.run(recover=True, cutoff=date(2027, 12, 31), raw_only=True)
+
+    assert result.status == "up_to_date"
+    assert runner.recovery_checks == 1
+    assert runner.calls == 1
+    _, years, _ = retriever.ledger.read()
+    assert years[2027] == "pending"
+    with sqlite3.connect(retriever.ledger.path) as database:
+        assert (
+            database.execute("SELECT COUNT(*) FROM race_specs WHERE state='running'").fetchone()[0]
+            == 0
+        )
+
+
+def test_confirm_provider_missing_extends_last_year(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    _create_year_extension_raw_database(raw)
+    with sqlite3.connect(raw) as database:
+        database.execute("DELETE FROM ARCHIVE_O1_ODDS_TANFUKUWAKU")
+        database.execute("DELETE FROM ARCHIVE_O2_ODDS_UMAREN")
+    confirmation_time = datetime(2027, 1, 2, 12, tzinfo=UTC)
+    retriever = WeeklyHistoricalOddsRetriever(
+        Mock(),
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+        tmp_path / "runtime",
+        clock=lambda: confirmation_time,
+    )
+    ledger = _bootstrap_year_extension_ledger(retriever, raw)
+    key = RaceKey(date(2026, 12, 27), "01", "01", "01", "01")
+    with sqlite3.connect(ledger.path) as database:
+        database.execute(
+            "UPDATE race_specs SET state='failed',reason='empty_response_unverified' "
+            "WHERE race_id=? AND data_spec='0B41'",
+            (key.race_id,),
+        )
+
+    assert retriever.confirm_provider_missing(key, frozenset({"0B41"})) == 1
+
+    states, years, _ = retriever.ledger.read()
+    assert years[2027] == "pending"
+    assert states[(key.race_id, "0B41")].state == "provider_missing"
+
+
+def test_publication_preparation_extends_last_year(tmp_path: Path) -> None:
+    raw = tmp_path / "raw.db"
+    _create_year_extension_raw_database(raw)
+    retriever = WeeklyHistoricalOddsRetriever(
+        Mock(),
+        raw,
+        Mock(),
+        OddsArchive(raw),
+        PROFILE,
+        HistoricalOddsBatch(2003, 2027, 1),
+        tmp_path / "runtime",
+        clock=lambda: NOW,
+    )
+    _bootstrap_year_extension_ledger(retriever, raw)
+
+    retriever.prepare_publication(cutoff=date(2027, 12, 31))
+
+    assert retriever.ledger.read()[1][2027] == "pending"
 
 
 def test_weekly_run_retrieves_one_year_and_resumes_without_repeating(tmp_path: Path) -> None:

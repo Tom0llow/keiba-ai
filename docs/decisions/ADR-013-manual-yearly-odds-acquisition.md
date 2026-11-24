@@ -70,6 +70,15 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
   全3,456レースのO1・O2が`headDataKubun`の`4`を含み、2026-11-14・15に予測用の取得だけで保存した32レースは
   `1`・`2`だけだった。
 
+### Amendment 2: 対象年の終わりを延ばす（2026-11-24）
+
+- 2026-11-24に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #111。
+- 保存した`policy_hash`が、現在の設定の`last_year`だけを台帳の年の表の最後の年に置き換えた方針と一致するときに限り、`last_year`の延長を受け付ける。延長した範囲の年を`pending`で年の表へ加え、`metadata.policy_hash`を現在の設定へ移す。既存の年の公開状態と`race_specs`の行は変えない。
+- 延長前の方針で台帳全体を検証してから書き込む。台帳のスキーマ、`raw_db`、既存の年の範囲、状態と件数、archiveのスキーマに不一致があれば延長を拒否し、台帳を変更しない。台帳のスキーマversionは変えない。
+- `--plan-only`は台帳へ書き込まず、延長後の年を`pending`として予定に加えて示す。`last_year`の短縮、`first_year`・`race_start_date`・DataSpecなど他の取得方針の変更を伴う延長は、従来どおり拒否する。
+- 延長は自動で行い、明示の引数は設けない。`last_year`を上げた後、台帳へ書き込む最初のhistorical-oddsのコマンド（通常の実行、`--recover`、`--confirm-provider-missing`）が、旧frontier形式の移行の前に延長する。運用者は年`Y`の最初の開催日の翌日以後に`last_year`を`Y`へ上げる。加えた年は公開待ち（`pending`）になり、その年の候補がなくても次の実行が完全Parquetを再構築するためである。手順は`docs/retraining-operation.md`に従う。
+- 根拠: ADR-048決定8では、年`Y`の時系列オッズの取得に`last_year`を`Y`へ上げる台帳の移行が必要とし、Issue #111で別途行うとしていた。
+
 ## Consequences
 
 ### Positive
@@ -102,3 +111,4 @@ JRA-VANのオッズ履歴の取得は年単位で長時間になる。毎週の�
 | --- | --- | --- |
 | 2026-10-09 | Accepted | 作成 |
 | 2026-11-21 | Accepted | Amendment 1: 確定の発表がない別モードの行を取得済みとせず、確定の行のない行だけがある組の欠損の確認を受け付ける（#66） |
+| 2026-11-24 | Accepted | Amendment 2: `last_year`の延長時に新しい年を`pending`で台帳へ加え、`policy_hash`を移す（#111） |

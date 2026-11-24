@@ -65,6 +65,7 @@ class HistoricalOddsPublication:
     ) -> WeeklyBatchResult:
         """Reconcile and plan publication while the caller owns the common lock."""
         snapshot = read_raw_snapshot(self._database, self._odds_profile, self._batch, cutoff)
+        ledger.extend_last_year(snapshot, now)
         ledger.migrate_legacy_frontier(snapshot, now)
         ledger.reconcile(snapshot, now)
         return plan_snapshot(
@@ -112,6 +113,7 @@ class HistoricalOddsPublication:
                 self._batch,
                 now.date() - timedelta(days=1),
             )
+            ledger.extend_last_year(snapshot, now)
             ledger.migrate_legacy_frontier(snapshot, now)
             ledger.reconcile(snapshot, now)
             states, publications, _ = ledger.read()

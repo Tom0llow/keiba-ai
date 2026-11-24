@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import hashlib
 import json
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 
 from domain.race_key import RaceKey
 from jra_van_retriever.acquisition.acquisition_lock import AcquisitionBlocked
@@ -54,6 +54,25 @@ def policy_hash(profile: JVLinkProfile, batch: HistoricalOddsBatch) -> str:
         "data_specs": sorted(profile.realtime_data_specs),
     }
     return hashlib.sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def year_extension_source(
+    stored_policy_hash: str,
+    years: dict[int, str],
+    profile: JVLinkProfile,
+    batch: HistoricalOddsBatch,
+) -> int | None:
+    """Return the prior final year when a ledger only extends its policy range."""
+    if not years or any(type(year) is not int for year in years):
+        return None
+    prior_last_year = max(years)
+    if (
+        set(years) != set(range(batch.first_year, prior_last_year + 1))
+        or prior_last_year >= batch.last_year
+        or stored_policy_hash != policy_hash(profile, replace(batch, last_year=prior_last_year))
+    ):
+        return None
+    return prior_last_year
 
 
 def _legacy_policy_hash(
