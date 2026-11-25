@@ -3,6 +3,7 @@
 import typer
 
 from cli.betting_backtest import model_backtest_betting, model_fit_betting_estimator
+from cli.experiment_tracking import model_track_report
 from cli.final_odds_evaluation import model_evaluate_final_odds
 from cli.jra_van_retriever import main
 from cli.make_datamart import datamart_build
@@ -58,6 +59,7 @@ model_app.command("evaluate-final-odds")(model_evaluate_final_odds)
 model_app.command("backtest-betting")(model_backtest_betting)
 model_app.command("fit-betting-estimator")(model_fit_betting_estimator)
 model_app.command("record-purchases")(model_record_purchases)
+model_app.command("track-report")(model_track_report)
 datamart_app.command("build")(datamart_build)
 datamart_app.command("build-reference")(datamart_build_reference)
 datamart_app.command("build-reference-prediction")(datamart_build_reference_prediction)

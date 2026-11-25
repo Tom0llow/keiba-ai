@@ -774,6 +774,30 @@ uv run python src/main.py model fit-betting-estimator `
 - reportの`config`の検査・PLの評価の2ファイルとsnapshotの3表のhashの照合に失敗すると、何も読まずに・何も残さずに終了コード1で終わる。
   実データでは約3〜3.5分かかる。年が変わったら、その年のバックテストから作り直す。
 
+## 評価とバックテストの結果をMLflowに記録する
+
+`model track-report`は、公開済みの`model evaluate-pl`または`model backtest-betting`の出力ディレクトリの`report.json`を読み、
+ローカルのMLflowにrunとして記録する（[ADR-050](docs/decisions/ADR-050-record-evaluation-and-backtest-reports-in-mlflow.md)）。
+設定・datamart・variantの違いによる結果を、MLflowのUIで並べて比べるために使う。出力ディレクトリが正本で、MLflowは派生の索引である。
+
+```powershell
+uv run python src/main.py model track-report --report-dir output/pl-evaluation-2016-2025-graded-final3
+uv run python src/main.py model track-report --report-dir output/ev-betting-estimates-2016-2025-r6
+uv run mlflow ui --backend-store-uri sqlite:///output/mlflow/mlflow.db
+```
+
+- 対象は`pl_probability_evaluation` v1と`ev_betting_backtest` v2だけで、ほかの形式・版は何も記録せずに終了コード1で拒否する。
+  v1のPLの評価でも、重賞の集合（`race_subsets`）を持たない初期の出力（`pl-evaluation-2016-2025`・`-final`・`-pilot`）は拒否する。
+  出力ディレクトリにMLflowのキーにできない名前のファイル（`:`や`(`を含むものなど）があるときも、記録の前に拒否する。
+  実験はそれぞれ`pl-evaluation`・`betting-backtest`である。
+- PLの評価は親runとvariantごとの子runになり、子runに市場との比較（pooled・重賞）、段階別NLL、test年をstepとしたfoldごとの値が入る。
+  バックテストは1つのrunで、全test年・共通の年・年ごと・方法ごとの回収率などが入る。tag `pl_report_sha256`で元のPLの評価のrun
+  （tag `report_sha256`）をたどれる。
+- 同じreportをもう一度記録すると、何もせずに`already recorded`を出す。途中で失敗したrunは`FAILED`になり（終了コード1、Ctrl+Cは130）、
+  記録し直せる。
+- 既定の保存先は`output/mlflow/mlflow.db`と`output/mlflow/artifacts`で、`--database`・`--artifact-root`で変えられる（cwdの`output/`の下に限る）。
+  `--report-dir`のファイルは変えず、Parquetは複製しない。runのtagには出力ディレクトリの絶対パスが入るので、MLflowの内容は外へ共有しない。
+
 ## 実購入額を台帳に記録する
 
 `model record-purchases`は、人が実際に買った馬券を、提案額と区別して台帳（`purchase_ledger`、ASCIIのJSON Lines）へ追記する

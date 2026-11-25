@@ -123,6 +123,8 @@ configurationは業務機能へ依存しない。暗黙の設定読込とsinglet
 ADR-027により`configuration/experiments.py`が明示呼出し時にHydra Compose APIで
 `configs/experiments/`のYAMLとグループ・上書きを合成する。既存3 TOMLは変更しない。
 実験の相対パスは呼出時cwdから解決し、生成物とMLflowのSQLite/artifactはcwdの`output/`内に限定する。
+ADR-050により、PLの評価とバックテストの公開済み`report.json`も、`model track-report`で事後に同じMLflowの別の実験
+（`pl-evaluation`・`betting-backtest`）へ記録する。出力ディレクトリが正本で、MLflowは派生の索引である。PLのモデルは登録しない（ADR-038）。
 
 ## データI/O・変換・スナップショット
 
@@ -283,7 +285,8 @@ modelsのpackage公開名、学習値・既定値、score/rankだけを返す推
 | artifacts/native_model.py | native model/JSON metadataの保存・検証・原子的公開・復旧。 |
 | serialization/inputs.py / outputs.py | model専用の純粋JSON契約変換。 |
 | experiments/inputs.py / provenance.py | 明示JSONとhashの読込・監査、最大freeze日選択、ソース・lock・依存の識別記録。 |
-| experiments/tracking.py / runner.py | 明示したローカルMLflow SQLiteのrun/registry/native artifact管理と学習・予測の組立。 |
+| experiments/tracking.py / runner.py | 明示したローカルMLflow SQLiteのrun/registry/native artifact管理と学習・予測の組立。tracking.pyはパス指定のclientと実験の取得・作成も持つ。 |
+| experiments/report_tracking.py | ADR-050の、PLの評価（v1）とバックテスト（v2）の`report.json`の検査と、親run・variantごとの子runのtags・params・metrics・artifactの組立。I/Oなし。 |
 
 ラベルは1着3/2着2/3着1/他0、gainは0/1/3/7、groupはrace内行数とする。
 旧allow-listはability/historical_oddsを維持する。ADR-029のdataset/calculated.pyが追加の閉じた数値列と計算契約を所有し、
@@ -420,6 +423,7 @@ ADR-043の`model backtest-betting`はcli/betting_backtest.pyが、configuration/
 ADR-045の`model fit-betting-estimator`はcli/betting_backtest.pyが、バックテストの`report.json`をSHA-256で照合し、その`config`を`configuration/betting_backtest.py`と同じ規則で検査して設定とする（設定ファイルを持たず、reportの絶対パスは使わない）。出力が`--backtest`・`--processed-root`・`--pl-evaluation`・固定snapshotと同じかその中なら拒否する。PLの評価の2ファイルのSHA-256と、固定snapshotの`NL_RA_RACE`・`NL_HR_PAY`・O1のhashをreportの記録と照合してから、合成の当てはめ用の予測と、バックテストと同じ関数で最後のtest年までの的中と重賞の集合を読む。成果物をstagingに書いて読み直し、全的中の推定値と係数が一致することを確かめてから`publish_directory`で公開する。stdoutには要約1行（manifestのSHA-256・`target_year`・方法）を出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。
 ADR-045の`model propose-bets-live`はcli/pl_prediction.pyが、成果物の`target_year`が`--date`の年と一致することとPLのモデルを起動時に確かめ、`predict-pl-live`と同じ出馬表の重賞を同じ監視のループ（未公開の保留を引数で受け取る）で見る。起動時に`--ledger`の台帳を検査し、`plan_race_day`が返す発走時刻のわかる重賞から、各重賞の確認の要求時刻（先に発走する重賞の発売締切か当日0時（JST））を決める。予測が公開され、台帳を1回読んで検査に通り確認が要求時刻に届いたときだけ計算し、その読込の台帳を購入案に使う。届かなければ発売締切まで待ち、締切で`ledger_unavailable`・`ledger_invalid`・`ledger_unconfirmed`として保留する。`<predictions-root>/<race_id>/prediction.json`を1回だけ読んでhashと解析を同じバイト列で行い、特徴量を予測が記録するmanifestのSHA-256で読み、レース別の取得のversionを`read_race_version`でO1だけ読んで、experiments/bet_proposal.pyで購入案を組み立て、`<output>/<race_id>/proposal.json`を公開する。1レースの読込・検査・公開の失敗（`OSError`・`ValueError`を含む。公開の失敗は`publish_failed`）はそのレースの保留とし、発売締切までに公開されない予測は`prediction_not_published`で保留する。helpとimportは成果物・購入案・台帳のモジュールとLightGBMを読まない。
 ADR-046の`model record-purchases`はcli/purchase_ledger.pyが、時計を1回読んで`--bet`の購入と確認の行を台帳へ追記する。台帳は`--create`のときだけ排他的に作り、既存の台帳は読んだ内容のまま変わっていないときだけdata/storage/file_replacer.pyで原子的に置き換える。stdoutに要約1行、上限を超えた累計の警告をstderrへ出す。失敗は終了コード1で台帳を変えない。Ctrl+Cは130で、置換の後に割り込まれた場合は台帳を書いたことを、それ以外は台帳が変わっていないことをstderrに出す。台帳を書くのはこのCLIだけで、`propose-bets-live`は読むだけである。helpとimportは台帳と置換のモジュールを読まない。
+ADR-050の`model track-report`はcli/experiment_tracking.pyが、`--database`・`--artifact-root`をcwdの`output/`の下の異なるパスに限り、`--report-dir`直下の各ファイルのSHA-256と`report.json`をmodels/experiments/report_tracking.pyで検査してから、MLflowの親runと子runを作る。同じ`report_sha256`の`FINISHED`の親runがあれば記録せず終了コード0、途中の失敗では作ったrunを`FAILED`にして終了コード1（Ctrl+Cは130）とする。子runを先に、親runを最後に`FINISHED`にする。出力ディレクトリは読むだけで、MLflowは`--help`では読み込まない。
 
 ## 進化時の制約
 
