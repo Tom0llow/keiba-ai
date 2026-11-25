@@ -141,6 +141,27 @@ JVLinkToSQLiteの初期設定と`data/runtime/jvlink/latest.xml`のいずれも�
 過去の日付を要求する。raw DBには、速報の`WE`・`AV`・`JC`・`TC`・`CC`に対応する`RT_`または`NL_`の表はない。
 この取得は、同じPR #116でADR-040 Amendment 1としてやめた。
 
+## 実装後の実機確認（2026-11-25）
+
+ADR-049の実装（PR #116）のTC確認を、実機のJV-LinkとJVLinkToSQLiteで、一時のraw DBと一時のruntimeに対して実行した。
+`data/raw/race.db`と取得のロックには触れていない。実行は`RaceDayOddsRetriever`の`_verify_tc_setting`と`_check_tc`
+（`configs/jvlink.toml`の`[race_day_odds]`、上限20秒）をそのまま呼んだ。開催日の当日の観測ではない。
+
+| 対象日 | 結果 | 所要時間 | `ARCHIVE_TC_INFO`に入った行 | 採った変更後の発走時刻 |
+| --- | --- | --- | --- | --- |
+| 2026-11-22 | `ok`（`tc_rows` 1） | 0.86秒 | 京都R10（`HappyoTime` `11220820`、15:01） | 京都R10が15:01 |
+| 2026-11-21 | `ok`（`tc_rows` 2） | 0.64秒 | 京都R01（10:01）、京都R10（15:01）。どちらも`HappyoTime` `11210820` | 京都R01が10:01、R10が15:01 |
+| 2026-11-24（開催なし） | `no_data`（`JVOpen` -1） | 0.31秒 | なし（表を作らない） | なし |
+
+- 日付のキーの設定XMLは起動時の検証を通り、JVLinkToSQLiteは`0B14`の指定日（`読み出し開始ポイント日時`）を読んだ。
+- `ok`の確認の後に残った表は`ARCHIVE_TC_INFO`・`ARCHIVE_TC_CHECK_LOG`と、JVLinkToSQLiteが作る`SY_PROC_FILES`だけで、
+  `RT_TC_INFO`・`RT_AV_INFO`・`RT_WE_WEATHER`は削除された。`ARCHIVE_TC_INFO`の列はすべてTEXTだった。
+- 変更の行があるとき、JVLinkToSQLiteの出力には`0B14`のAPIの戻り値が出ず、`ARCHIVE_TC_CHECK_LOG`の`api_name`・
+  `api_returncode`はNULLだった。`no_data`では`JVOpen`・`-1`が残った。
+- 1回の確認は1秒未満で、上限20秒と各時点の40秒前という設定に対して十分に短い。
+- 未確認: 開催日の当日の日中の発表の届き方、取得と重なる時刻での所要時間、繰上げの実例。マージの後の最初の
+  開催日に、stderrと`ARCHIVE_TC_CHECK_LOG`を当日の発表と照合する。
+
 ## 限界と未観測範囲
 
 - この記録の「繰上げ0件」と「すべて繰下げ」は、最終RAの`HassoTime`/`HassoTimeBefore`の差分に限る。当日の途中状態を一般化しない。

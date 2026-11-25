@@ -323,6 +323,7 @@ PR #116で次の文書を更新した。
 ## Follow-up Actions
 
 - [x] Implementation Notesの1〜4をPR #116で実装し、このADRをAcceptedにした。
+- [x] 実装の後、開催日の前に、TC確認を実機のJV-Linkで直近の開催日（2026-11-21・22）と開催のない日に対して実行し、記録・変更後の時刻・受け皿の表の削除・所要時間（1秒未満）を確かめた（`docs/experiments/race-day-start-time-change.md`の「実装後の実機確認」）。
 - [ ] マージの後の最初の開催日に、TC確認の所要時間、日中の変更の発表、stderrと`ARCHIVE_TC_CHECK_LOG`を人が照合する。
 - [ ] 必要なら後続の実装前に、`0B14`の保持期間、当日の速報の到達時点、当日の途中状態を追加観測する。
 - [x] `latest`の固定日の速報設定は、ADR-040 Amendment 1で取得をやめた。
