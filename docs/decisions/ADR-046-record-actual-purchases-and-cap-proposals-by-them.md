@@ -6,7 +6,7 @@
 - Related Issues/PRs: Closes #56、Refs #57・#36・#81
 - Supersedes: N/A（ADR-045の決定4の最後の項（年間の残りは常に`annual_budget_yen`）・決定4の待ちと保留の理由・決定5の
   format_version・`decision.outcome`・stdoutのキーを改める）
-- Superseded by: N/A
+- Superseded by: [ADR-049](ADR-049-handle-race-day-start-time-changes.md)（置き換えなし。繰上げの保留を加えるのみ）
 
 ---
 
@@ -186,3 +186,4 @@ Reason not selected: 人間が確認時刻を選んだ。
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-18 | Accepted | GATE 1で人間が記録の方法・確認時刻・年間の範囲を決めた |
+| 2026-11-25 | Accepted | ADR-049が、繰上げの印があるレースの購入案の保留を加えた（予測がないため`prediction_not_published`で保留する）。要求時刻を出馬表の発走時刻から決める規則は変えない |

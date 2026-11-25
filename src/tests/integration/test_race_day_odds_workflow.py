@@ -6,6 +6,7 @@ import sys
 import xml.etree.ElementTree as ET
 from datetime import UTC, date, datetime, timedelta
 from pathlib import Path
+from typing import cast
 from unittest.mock import Mock
 
 import pytest
@@ -121,6 +122,118 @@ class FakeRunner:
 _race_numbers_by_order: list[str] = []
 
 
+class FakeTCRunner:
+    """Answer each 0B14 time-change check; by default JV-Link reports no data."""
+
+    def __init__(self, database: Path, clock: FakeClock) -> None:
+        self.database = database
+        self.clock = clock
+        self.calls: list[datetime] = []
+        # Seconds each check takes on the fake clock.
+        self.duration_seconds = 0
+        # Each call pops the next response: a list of TC rows, "no_data", or an exception.
+        self.responses: list[object] = []
+
+    def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
+        assert skip_last_modified_update is True
+        assert setting.name == "race-day-tc.xml"
+        self.calls.append(self.clock.now)
+        self.clock.now += timedelta(seconds=self.duration_seconds)
+        response = self.responses.pop(0) if self.responses else "no_data"
+        if isinstance(response, BaseException):
+            raise response
+        if isinstance(response, tuple):
+            # Write the TC rows, then fail the way a timed-out JVLinkToSQLite run does.
+            rows, error = response
+            self._write(rows)
+            raise error
+        if response == "no_data":
+            return JVLinkExecutionResult(
+                {"0B14": -1},
+                no_data_specs=frozenset({"0B14"}),
+                api_results={"0B14": ("JVRTOpen", -1)},
+                process_returncode=0,
+            )
+        if isinstance(response, JVLinkExecutionResult):
+            return response
+        assert isinstance(response, list)
+        self._write(response)
+        return JVLinkExecutionResult(
+            {"0B14": 0}, api_results={"0B14": ("JVRTOpen", 0)}, process_returncode=0
+        )
+
+    def _write(self, response: list[dict[str, str]]) -> None:
+        with sqlite3.connect(self.database) as connection:
+            connection.execute(
+                "CREATE TABLE IF NOT EXISTS RT_TC_INFO ("
+                + ", ".join(f'"{name}" TEXT' for name in TC_COLUMNS)
+                + ")"
+            )
+            for row in response:
+                connection.execute(
+                    "INSERT INTO RT_TC_INFO VALUES (" + ", ".join("?" for _ in TC_COLUMNS) + ")",
+                    tuple(row[name] for name in TC_COLUMNS),
+                )
+
+
+TC_COLUMNS = (
+    "headRecordSpec",
+    "headDataKubun",
+    "headMakeDate",
+    "idYear",
+    "idMonthDay",
+    "idJyoCD",
+    "idKaiji",
+    "idNichiji",
+    "idRaceNum",
+    "HappyoTime",
+    "TCInfoAfterJi",
+    "TCInfoAfterFun",
+    "TCInfoBeforeJi",
+    "TCInfoBeforeFun",
+)
+
+
+def _tc_row(
+    race: str, before: str, after: str, happyo: str, make: str = "20261115"
+) -> dict[str, str]:
+    return {
+        "headRecordSpec": "TC",
+        "headDataKubun": "1",
+        "headMakeDate": make,
+        "idYear": "2026",
+        "idMonthDay": "1115",
+        "idJyoCD": "05",
+        "idKaiji": "05",
+        "idNichiji": "04",
+        "idRaceNum": race,
+        "HappyoTime": happyo,
+        "TCInfoAfterJi": after[:2],
+        "TCInfoAfterFun": after[2:],
+        "TCInfoBeforeJi": before[:2],
+        "TCInfoBeforeFun": before[2:],
+    }
+
+
+class _RoutingBuilder:
+    """Send the 0B14 date-key build straight to the real builder.
+
+    The capture/prediction builds keep going through the recorded Mock, so existing
+    assertions about those builds are unchanged.
+    """
+
+    def __init__(self, recorded: Mock, real: JVLinkSettingBuilder) -> None:
+        self.recorded = recorded
+        self.real = real
+        self.date_builds = 0
+
+    def build(self, profile: object, destination: Path, **kwargs: object) -> Path:
+        if "race_date" in kwargs:
+            self.date_builds += 1
+            return self.real.build(profile, destination, **kwargs)  # type: ignore[arg-type]
+        return cast(Path, self.recorded.build(profile, destination, **kwargs))
+
+
 def _create_raw(database: Path) -> None:
     with sqlite3.connect(database) as connection:
         connection.execute(
@@ -159,7 +272,7 @@ def _stage(database: Path, race: str, happyo: str) -> None:
             )
 
 
-def _profile(offsets: tuple[int, ...] = (10, 2)) -> RaceDayOddsProfile:
+def _profile(offsets: tuple[int, ...] = (10, 2), lead: int = 40) -> RaceDayOddsProfile:
     return RaceDayOddsProfile(
         normal_update=False,
         setup_update=False,
@@ -169,11 +282,12 @@ def _profile(offsets: tuple[int, ...] = (10, 2)) -> RaceDayOddsProfile:
         realtime_data_specs=SPECS,
         offsets_minutes=offsets,
         late_tolerance_seconds=60,
+        tc_check_lead_seconds=lead,
     )
 
 
 def _retriever(
-    tmp_path: Path, start: datetime, offsets: tuple[int, ...] = (10, 2)
+    tmp_path: Path, start: datetime, offsets: tuple[int, ...] = (10, 2), lead: int = 40
 ) -> tuple[RaceDayOddsRetriever, FakeRunner, FakeClock, Mock, Path]:
     database = tmp_path / "race.db"
     if not database.exists():
@@ -192,16 +306,19 @@ def _retriever(
         return real_builder.build(profile, destination, **kwargs)  # type: ignore[arg-type]
 
     builder.build.side_effect = build
+    tc_runner = FakeTCRunner(database, clock)
+    builder.tc_runner = tc_runner
     retriever = RaceDayOddsRetriever(
         runner,  # type: ignore[arg-type]
-        builder,
+        _RoutingBuilder(builder, real_builder),  # type: ignore[arg-type]
         OddsArchive(database),
-        _profile(offsets),
+        _profile(offsets, lead),
         database,
         tmp_path / "runtime" / "historical-odds-progress.db",
         tmp_path / "runtime",
         clock=clock,
         sleeper=clock.sleep,
+        tc_runner=tc_runner,  # type: ignore[arg-type]
     )
     return retriever, runner, clock, builder, database
 
@@ -217,6 +334,10 @@ def _write_seed(path: Path, *, race_key: bool = True) -> None:
         f"<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>{spec}</DataSpec>{key}"
         "</JVDataSpecSetting>"
         for spec in sorted(SPECS)
+    ) + (
+        "<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>0B14</DataSpec>"
+        "<JVKaisaiDateKey><KaisaiDate>2026-03-02T00:00:00+09:00</KaisaiDate></JVKaisaiDateKey>"
+        "</JVDataSpecSetting>"
     )
     path.write_text(
         '<?xml version="1.0" encoding="utf-8"?><JVLinkToSQLiteSetting><Details>'
@@ -272,7 +393,10 @@ def test_captures_wait_for_each_planned_time_and_run_in_order(tmp_path: Path) ->
         ("12", "10", "archived"),
         ("12", "2", "archived"),
     ]
-    assert clock.sleeps[0] == pytest.approx(50 * 60)
+    # The 0B14 check runs 40 s (tc_check_lead_seconds) before the first time point.
+    assert clock.sleeps[0] == pytest.approx(50 * 60 - 40)
+    assert clock.sleeps[1] == pytest.approx(40)
+    assert builder.tc_runner.calls[0] == start + timedelta(minutes=50) - timedelta(seconds=40)
     # The first build is the startup check; each capture then builds before it is logged.
     assert [call.kwargs["race_key"].race_number for call in builder.build.call_args_list] == [
         "11",
@@ -289,6 +413,7 @@ def test_captures_wait_for_each_planned_time_and_run_in_order(tmp_path: Path) ->
         "archived": 24,
         "no_data": 0,
         "failed": 0,
+        "held": 0,
         "skipped_late": 0,
         "interrupted": 0,
     }
@@ -751,3 +876,244 @@ def test_recover_only_marks_unfinished_captures_interrupted_without_capturing(
     ledger = tmp_path / "runtime" / "historical-odds-progress.db"
     with AcquisitionLock(database, ledger):
         pass
+
+
+def _tc_checks(database: Path) -> list[tuple[str, str, str, str]]:
+    with sqlite3.connect(database) as connection:
+        return [
+            (str(row[0]), str(row[1]), str(row[2]), str(row[3]))
+            for row in connection.execute(
+                "SELECT time_point_at, result, tc_rows, adopted_starts FROM ARCHIVE_TC_CHECK_LOG "
+                "ORDER BY rowid"
+            )
+        ]
+
+
+def _table_exists(database: Path, table: str) -> bool:
+    with sqlite3.connect(database) as connection:
+        return (
+            connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+            ).fetchone()
+            is not None
+        )
+
+
+def test_a_delay_replans_unfinished_captures_in_time_order_and_records_the_check(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, runner, _, builder, database = _retriever(tmp_path, start)
+    # Race 11 is delayed 15:00 -> 15:25, so its captures move behind race 12's first one.
+    builder.tc_runner.responses = [[_tc_row("11", "1500", "1525", "11151449")]]
+    _race_numbers_by_order[:] = ["11", "12", "11", "12"]
+
+    result = retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "12", "11", "12"]
+    assert result.summary["archived"] == 24
+    with sqlite3.connect(database) as connection:
+        rows = connection.execute(
+            "SELECT idRaceNum, offset_minutes, scheduled_start_at, planned_at, effective_start_at "
+            "FROM ARCHIVE_CAPTURE_LOG WHERE data_spec = '0B31' ORDER BY planned_at"
+        ).fetchall()
+        archived_tc = connection.execute("SELECT COUNT(*) FROM ARCHIVE_TC_INFO").fetchone()[0]
+    assert rows == [
+        (
+            "11",
+            "10",
+            "2026-11-15T15:00:00+09:00",
+            "2026-11-15T06:15:00+00:00",
+            "2026-11-15T15:25:00+09:00",
+        ),
+        ("12", "10", "2026-11-15T15:30:00+09:00", "2026-11-15T06:20:00+00:00", None),
+        (
+            "11",
+            "2",
+            "2026-11-15T15:00:00+09:00",
+            "2026-11-15T06:23:00+00:00",
+            "2026-11-15T15:25:00+09:00",
+        ),
+        ("12", "2", "2026-11-15T15:30:00+09:00", "2026-11-15T06:28:00+00:00", None),
+    ]
+    assert archived_tc == 1
+    checks = _tc_checks(database)
+    assert checks[0][:3] == ("2026-11-15T05:50:00+00:00", "ok", "1")
+    assert '"2026111505050411"' in checks[0][3]
+    assert "15:25:00+09:00" in checks[0][3]
+    # Each later check is a no-data response; every check is made 40 s before its time point.
+    assert all(check[1] == "no_data" for check in checks[1:])
+    assert builder.tc_runner.calls[0] == datetime(2026, 11, 15, 5, 49, 20, tzinfo=UTC)
+    # The 0B14 response tables never stay in the raw database.
+    assert not _table_exists(database, "RT_TC_INFO")
+
+
+def test_a_stale_tc_response_from_an_earlier_run_is_not_read_as_this_one(tmp_path: Path) -> None:
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, runner, _, builder, database = _retriever(tmp_path, start)
+    # The first check answers with race 12's one-minute delay only.
+    builder.tc_runner.responses = [[_tc_row("12", "1530", "1531", "11150820")]]
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE RT_TC_INFO (" + ", ".join(f'"{name}" TEXT' for name in TC_COLUMNS) + ")"
+        )
+        row = _tc_row("11", "1500", "1525", "11151449")
+        connection.execute(
+            "INSERT INTO RT_TC_INFO VALUES (" + ", ".join("?" for _ in TC_COLUMNS) + ")",
+            tuple(row[name] for name in TC_COLUMNS),
+        )
+
+    retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "11", "12", "12"]
+    with sqlite3.connect(database) as connection:
+        moved = connection.execute(
+            "SELECT DISTINCT idRaceNum FROM ARCHIVE_CAPTURE_LOG "
+            "WHERE effective_start_at IS NOT NULL"
+        ).fetchall()
+        archived = connection.execute("SELECT idRaceNum FROM ARCHIVE_TC_INFO").fetchall()
+    # The leftover race 11 row was never read as this response.
+    assert moved == [("12",)]
+    assert archived == [("12",)]
+    assert _tc_checks(database)[0][1:3] == ("ok", "1")
+    assert not _table_exists(database, "RT_TC_INFO")
+
+
+def test_a_check_with_no_time_left_is_skipped_and_never_delays_the_capture(
+    tmp_path: Path,
+) -> None:
+    # Start inside the first time point's 40 s lead window.
+    start = datetime(2026, 11, 15, 5, 49, 50, tzinfo=UTC)
+    retriever, runner, clock, builder, database = _retriever(tmp_path, start)
+
+    retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "11", "12", "12"]
+    checks = _tc_checks(database)
+    assert checks[0][:2] == ("2026-11-15T05:50:00+00:00", "skipped")
+    assert all(check[1] == "no_data" for check in checks[1:])
+    assert clock.sleeps[0] == pytest.approx(10)
+    assert builder.tc_runner.calls
+    assert builder.tc_runner.calls[0] > start
+
+
+def test_a_failed_check_keeps_the_plan_and_an_agent_stop_stops_the_day(tmp_path: Path) -> None:
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, runner, _, builder, database = _retriever(tmp_path, start)
+    builder.tc_runner.responses = [JVLinkToSQLiteError("boom", returncode=1)]
+
+    result = retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "11", "12", "12"]
+    assert result.stop_reason is None
+    assert _tc_checks(database)[0][1] == "failed"
+
+    stopped = tmp_path / "stopped"
+    stopped.mkdir()
+    retriever, runner, _, builder, database = _retriever(stopped, start)
+    builder.tc_runner.responses = [
+        JVLinkExecutionResult(
+            {"0B14": -303},
+            fatal_specs=frozenset({"0B14"}),
+            api_results={"0B14": ("JVRTOpen", -303)},
+            process_returncode=1,
+        )
+    ]
+
+    result = retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == []
+    assert result.stop_reason is not None
+    assert "0B14 JVRTOpen -303" in result.stop_reason
+    assert _tc_checks(database)[0][1] == "agent_down"
+
+
+def test_a_restart_restores_the_accumulated_changes_before_the_first_check(
+    tmp_path: Path,
+) -> None:
+    # Started inside the first time point's lead window, so the first check is skipped
+    # and only the startup restore can move race 11's first capture.
+    start = datetime(2026, 11, 15, 5, 49, 50, tzinfo=UTC)
+    retriever, runner, _, _, database = _retriever(tmp_path, start)
+    with sqlite3.connect(database) as connection:
+        connection.execute(
+            "CREATE TABLE ARCHIVE_TC_INFO ("
+            + ", ".join(f'"{name}" TEXT' for name in TC_COLUMNS)
+            + ")"
+        )
+        row = _tc_row("11", "1500", "1505", "11150820")
+        connection.execute(
+            "INSERT INTO ARCHIVE_TC_INFO VALUES (" + ", ".join("?" for _ in TC_COLUMNS) + ")",
+            tuple(row[name] for name in TC_COLUMNS),
+        )
+
+    retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "11", "12", "12"]
+    with sqlite3.connect(database) as connection:
+        planned = connection.execute(
+            "SELECT planned_at, status FROM ARCHIVE_CAPTURE_LOG WHERE idRaceNum = '11' "
+            "AND data_spec = '0B31' ORDER BY planned_at"
+        ).fetchall()
+    assert planned == [
+        ("2026-11-15T05:55:00+00:00", "archived"),
+        ("2026-11-15T06:03:00+00:00", "archived"),
+    ]
+
+
+def test_tc_rows_left_by_a_failed_check_are_not_counted_by_the_next_check(
+    tmp_path: Path,
+) -> None:
+    start = datetime(2026, 11, 15, 5, 0, tzinfo=UTC)
+    retriever, runner, _, builder, database = _retriever(tmp_path, start)
+    builder.tc_runner.responses = [
+        ([_tc_row("11", "1500", "1525", "11151449")], JVLinkToSQLiteError("timed out")),
+    ]
+
+    retriever.retrieve(RACE_DATE)
+
+    assert runner.calls == ["11", "11", "12", "12"]
+    checks = _tc_checks(database)
+    assert [check[1] for check in checks] == ["failed", "no_data", "no_data", "no_data"]
+    with sqlite3.connect(database) as connection:
+        moved = connection.execute(
+            "SELECT COUNT(*) FROM ARCHIVE_CAPTURE_LOG WHERE effective_start_at IS NOT NULL"
+        ).fetchone()[0]
+    assert moved == 0
+    assert not _table_exists(database, "RT_TC_INFO")
+    assert not _table_exists(database, "ARCHIVE_TC_INFO")
+
+
+def test_a_skipped_check_does_not_skip_a_later_time_point_that_can_still_be_checked(
+    tmp_path: Path,
+) -> None:
+    # With a 90 s lead, race 11's 10- and 9-minute points (05:50, 05:51) share a window.
+    start = datetime(2026, 11, 15, 5, 49, tzinfo=UTC)
+    retriever, _, _, builder, database = _retriever(tmp_path, start, offsets=(10, 9), lead=90)
+
+    retriever.retrieve(RACE_DATE)
+
+    results = {check[0]: check[1] for check in _tc_checks(database)}
+    # 05:50 had no time left, but 05:51's check (05:49:30) still ran before 05:50's capture.
+    assert results["2026-11-15T05:50:00+00:00"] == "skipped"
+    assert results["2026-11-15T05:51:00+00:00"] == "no_data"
+    assert builder.tc_runner.calls[0] == datetime(2026, 11, 15, 5, 49, 30, tzinfo=UTC)
+
+
+def test_a_later_check_that_could_overrun_never_delays_the_next_capture(tmp_path: Path) -> None:
+    # Lead 70 s: 05:51's check would start at 05:49:50 and could last 20 s, past 05:50.
+    start = datetime(2026, 11, 15, 5, 48, 55, tzinfo=UTC)
+    retriever, _, _, builder, database = _retriever(tmp_path, start, offsets=(10, 9), lead=70)
+    builder.tc_runner.duration_seconds = 20
+
+    retriever.retrieve(RACE_DATE)
+
+    with sqlite3.connect(database) as connection:
+        started = connection.execute(
+            "SELECT started_at FROM ARCHIVE_CAPTURE_LOG WHERE idRaceNum = '11' "
+            "AND offset_minutes = '10' AND data_spec = '0B31'"
+        ).fetchone()[0]
+    assert started == "2026-11-15T05:50:00+00:00"
+    assert all(
+        call >= datetime(2026, 11, 15, 5, 50, tzinfo=UTC) for call in builder.tc_runner.calls
+    )

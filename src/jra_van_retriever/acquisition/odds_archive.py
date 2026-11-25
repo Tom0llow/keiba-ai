@@ -11,17 +11,19 @@ import tempfile
 import uuid
 from contextlib import closing
 from dataclasses import dataclass
-from datetime import UTC, datetime
+from datetime import UTC, date, datetime
 from pathlib import Path
 from typing import Protocol, cast
 
 from domain.race_key import RaceKey
 from jra_van_retriever.acquisition.jvlink_runner import JVLinkExecutionResult
 from jra_van_retriever.contracts.odds import ARCHIVE_CAPTURE_LOG as ARCHIVE_CAPTURE_LOG
+from jra_van_retriever.contracts.odds import ARCHIVE_TC_CHECK_LOG as ARCHIVE_TC_CHECK_LOG
+from jra_van_retriever.contracts.odds import ARCHIVE_TC_INFO as ARCHIVE_TC_INFO
 from jra_van_retriever.contracts.odds import CAPTURE_TABLES as CAPTURE_TABLES
 from jra_van_retriever.contracts.odds import KEY_COLUMNS as KEY_COLUMNS
 from jra_van_retriever.contracts.odds import ODDS_TABLES as ODDS_TABLES
-from jra_van_retriever.contracts.odds import PREDICTION_SPECS
+from jra_van_retriever.contracts.odds import PREDICTION_SPECS, TC_STAGING_TABLES
 
 
 class _ClassificationLike(Protocol):
@@ -104,6 +106,23 @@ _CAPTURE_LOG_COLUMNS = (
     "inserted_rows",
     "child_observed_rows",
     "child_inserted_rows",
+    "effective_start_at",
+)
+_TC_CHECK_LOG_COLUMNS = (
+    "check_id",
+    "idYear",
+    "idMonthDay",
+    "time_point_at",
+    "started_at",
+    "completed_at",
+    "result",
+    "reason",
+    "process_returncode",
+    "api_name",
+    "api_returncode",
+    "tc_rows",
+    "earlier_start_races",
+    "adopted_starts",
 )
 
 
@@ -173,6 +192,99 @@ class OddsArchive:
                 if _table_exists(database, source):
                     database.execute(f'DELETE FROM "{source}"')
 
+    def reset_tc_staging(self) -> None:
+        """Remove all 0B14 response tables before a fresh TC request."""
+        with closing(sqlite3.connect(self._database)) as database, database:
+            for table in TC_STAGING_TABLES:
+                database.execute(f'DROP TABLE IF EXISTS "{table}"')
+
+    def archive_tc_info(self) -> int:
+        """Append the current 0B14 TC rows to their all-TEXT archive."""
+        with closing(sqlite3.connect(self._database)) as database, database:
+            if not _table_exists(database, "RT_TC_INFO"):
+                return 0
+            source_schema = _table_schema(database, "RT_TC_INFO")
+            if not source_schema or any(
+                column_type.upper() != "TEXT" for _, column_type in source_schema
+            ):
+                raise sqlite3.IntegrityError("RT_TC_INFO schema is invalid")
+            if not _table_exists(database, ARCHIVE_TC_INFO):
+                declaration = ", ".join(f"{_quote(column)} TEXT" for column, _ in source_schema)
+                database.execute(f'CREATE TABLE "{ARCHIVE_TC_INFO}" ({declaration})')
+            if _table_schema(database, ARCHIVE_TC_INFO) != source_schema:
+                raise sqlite3.IntegrityError("TC info archive schema is invalid")
+            before = database.total_changes
+            database.execute(
+                f'INSERT INTO "{ARCHIVE_TC_INFO}" '
+                f'SELECT * FROM "RT_TC_INFO" EXCEPT SELECT * FROM "{ARCHIVE_TC_INFO}"'
+            )
+            return database.total_changes - before
+
+    def tc_staging_rows(self) -> int:
+        """Return the number of current RT_TC_INFO rows without creating tables."""
+        if not self._database.is_file():
+            return 0
+        with closing(sqlite3.connect(self._database)) as database:
+            if not _table_exists(database, "RT_TC_INFO"):
+                return 0
+            return int(database.execute('SELECT COUNT(*) FROM "RT_TC_INFO"').fetchone()[0])
+
+    def tc_rows(self, key_prefix: tuple[str, str]) -> list[dict[str, str | None]]:
+        """Return archived TC rows for one race date in source-column order."""
+        if not self._database.is_file():
+            return []
+        with closing(sqlite3.connect(self._database)) as database:
+            if not _table_exists(database, ARCHIVE_TC_INFO):
+                return []
+            database.row_factory = sqlite3.Row
+            rows = database.execute(
+                f'SELECT * FROM "{ARCHIVE_TC_INFO}" WHERE idYear = ? AND idMonthDay = ?',
+                key_prefix,
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def record_tc_check(
+        self,
+        check_id: str,
+        *,
+        race_date: date,
+        time_point_at: datetime,
+        started_at: datetime | None,
+        completed_at: datetime | None,
+        result: str,
+        reason: str,
+        execution: JVLinkExecutionResult | None,
+        tc_rows: int,
+        earlier_start_races: frozenset[str],
+        adopted_starts: str,
+    ) -> None:
+        """Persist one 0B14 check and its deterministic adoption audit trail."""
+        process_returncode = getattr(execution, "process_returncode", None)
+        api_name, api_returncode = getattr(execution, "api_results", {}).get("0B14", (None, None))
+        with closing(sqlite3.connect(self._database)) as database, database:
+            _ensure_tc_check_log(database)
+            columns = ", ".join(_quote(column) for column in _TC_CHECK_LOG_COLUMNS)
+            placeholders = ", ".join("?" for _ in _TC_CHECK_LOG_COLUMNS)
+            database.execute(
+                f'INSERT INTO "{ARCHIVE_TC_CHECK_LOG}" ({columns}) VALUES ({placeholders})',
+                (
+                    check_id,
+                    f"{race_date:%Y}",
+                    f"{race_date:%m%d}",
+                    _utc_iso(time_point_at),
+                    None if started_at is None else _utc_iso(started_at),
+                    None if completed_at is None else _utc_iso(completed_at),
+                    result,
+                    reason,
+                    None if process_returncode is None else str(process_returncode),
+                    api_name,
+                    None if api_returncode is None else str(api_returncode),
+                    str(tc_rows),
+                    " ".join(sorted(earlier_start_races)),
+                    adopted_starts,
+                ),
+            )
+
     def begin_capture(
         self,
         capture_id: str,
@@ -182,6 +294,7 @@ class OddsArchive:
         scheduled_start_at: datetime,
         offset_minutes: int,
         planned_at: datetime,
+        effective_start_at: datetime | None = None,
     ) -> None:
         """Commit one running log row per DataSpec before staging is changed."""
         values = _race_key_values(key)
@@ -212,6 +325,7 @@ class OddsArchive:
                         None,
                         None,
                         None,
+                        None if effective_start_at is None else effective_start_at.isoformat(),
                     ),
                 )
 
@@ -267,8 +381,56 @@ class OddsArchive:
         scheduled_start_at: datetime,
         offset_minutes: int,
         planned_at: datetime,
+        effective_start_at: datetime | None = None,
     ) -> None:
         """Persist a late capture without recording execution timestamps."""
+        self._record_terminal_capture(
+            capture_id,
+            key,
+            specs,
+            scheduled_start_at=scheduled_start_at,
+            offset_minutes=offset_minutes,
+            planned_at=planned_at,
+            status="skipped_late",
+            reason="late_tolerance_exceeded",
+            effective_start_at=effective_start_at,
+        )
+
+    def record_held_capture(
+        self,
+        capture_id: str,
+        key: RaceKey,
+        specs: frozenset[str],
+        *,
+        scheduled_start_at: datetime,
+        offset_minutes: int,
+        planned_at: datetime,
+    ) -> None:
+        """Persist a terminal prediction hold without starting the runner."""
+        self._record_terminal_capture(
+            capture_id,
+            key,
+            specs,
+            scheduled_start_at=scheduled_start_at,
+            offset_minutes=offset_minutes,
+            planned_at=planned_at,
+            status="held",
+            reason="start_moved_earlier",
+        )
+
+    def _record_terminal_capture(
+        self,
+        capture_id: str,
+        key: RaceKey,
+        specs: frozenset[str],
+        *,
+        scheduled_start_at: datetime,
+        offset_minutes: int,
+        planned_at: datetime,
+        status: str,
+        reason: str,
+        effective_start_at: datetime | None = None,
+    ) -> None:
         values = _race_key_values(key)
         with closing(sqlite3.connect(self._database)) as database, database:
             _ensure_capture_log(database)
@@ -286,8 +448,8 @@ class OddsArchive:
                         _utc_iso(planned_at),
                         None,
                         None,
-                        "skipped_late",
-                        "late_tolerance_exceeded",
+                        status,
+                        reason,
                         None,
                         None,
                         None,
@@ -297,6 +459,7 @@ class OddsArchive:
                         "0",
                         "0",
                         "0",
+                        None if effective_start_at is None else effective_start_at.isoformat(),
                     ),
                 )
 
@@ -855,12 +1018,27 @@ def _ensure_capture_log(database: sqlite3.Connection) -> None:
     declaration = ", ".join(f"{_quote(column)} TEXT" for column in _CAPTURE_LOG_COLUMNS)
     database.execute(f'CREATE TABLE IF NOT EXISTS "{ARCHIVE_CAPTURE_LOG}" ({declaration})')
     schema = _table_schema(database, ARCHIVE_CAPTURE_LOG)
+    old_schema = [(column, "TEXT") for column in _CAPTURE_LOG_COLUMNS[:-1]]
+    if schema == old_schema:
+        database.execute(
+            f'ALTER TABLE "{ARCHIVE_CAPTURE_LOG}" ADD COLUMN "effective_start_at" TEXT'
+        )
+        schema = _table_schema(database, ARCHIVE_CAPTURE_LOG)
     if schema != [(column, "TEXT") for column in _CAPTURE_LOG_COLUMNS]:
         raise sqlite3.IntegrityError("capture log schema is invalid")
     database.execute(
         f'CREATE INDEX IF NOT EXISTS "{ARCHIVE_CAPTURE_LOG}_status" '
         f'ON "{ARCHIVE_CAPTURE_LOG}" (status)'
     )
+
+
+def _ensure_tc_check_log(database: sqlite3.Connection) -> None:
+    declaration = ", ".join(f"{_quote(column)} TEXT" for column in _TC_CHECK_LOG_COLUMNS)
+    database.execute(f'CREATE TABLE IF NOT EXISTS "{ARCHIVE_TC_CHECK_LOG}" ({declaration})')
+    if _table_schema(database, ARCHIVE_TC_CHECK_LOG) != [
+        (column, "TEXT") for column in _TC_CHECK_LOG_COLUMNS
+    ]:
+        raise sqlite3.IntegrityError("TC check log schema is invalid")
 
 
 def _finish_capture_log(

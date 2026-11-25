@@ -472,9 +472,9 @@ def test_repository_config_raises_latest_workout_and_master_read_positions() -> 
         "DIFN": datetime(2026, 10, 1),
     }
     assert config.latest.setup_update is False
-    assert config.latest.realtime_data_specs == frozenset(
-        {"0B12", "0B15", "0B11", "0B14", "0B13", "0B17"}
-    )
+    # latest no longer requests realtime data (ADR-040 Amendment 1).
+    assert config.latest.realtime_update is False
+    assert config.latest.realtime_data_specs == frozenset()
     others = [
         config.historical,
         config.historical_odds,
@@ -617,6 +617,8 @@ def test_repository_config_loads_race_day_odds_profile() -> None:
     assert config.race_day_odds.late_tolerance_seconds == 60
     assert config.race_day_odds.execution_timeout_seconds == 120
     assert config.race_day_odds.prediction_offset_minutes == 5
+    assert config.race_day_odds.tc_check_timeout_seconds == 20
+    assert config.race_day_odds.tc_check_lead_seconds == 40
 
 
 def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> None:
@@ -652,6 +654,10 @@ def test_config_without_race_day_odds_section_still_loads(tmp_path: Path) -> Non
         ("prediction_offset_minutes = 5", "prediction_offset_minutes = 2", "3 through 5"),
         ("prediction_offset_minutes = 5", "prediction_offset_minutes = 6", "3 through 5"),
         ("prediction_offset_minutes = 5", 'prediction_offset_minutes = "5"', "positive integer"),
+        ("tc_check_timeout_seconds = 20", "", "positive integer"),
+        ("tc_check_timeout_seconds = 20", "tc_check_timeout_seconds = 0", "positive integer"),
+        ("tc_check_lead_seconds = 40", "", "positive integer"),
+        ("tc_check_lead_seconds = 40", "tc_check_lead_seconds = 20", "must exceed"),
     ],
 )
 def test_config_rejects_invalid_race_day_odds_section(
@@ -696,3 +702,73 @@ def test_prediction_offset_requires_a_0b41_0b42_realtime_history_profile(tmp_pat
 
     with pytest.raises(ValueError, match="exactly 0B41 and 0B42"):
         JVLinkConfig.from_toml(config_path)
+
+
+def test_the_tc_check_setting_enables_only_0b14_with_the_race_date(tmp_path: Path) -> None:
+    from jra_van_retriever.acquisition.setting_xml import verify_realtime_date_key
+    from jra_van_retriever.config.profiles import race_day_tc_profile
+
+    seed = tmp_path / "seed.xml"
+    seed.write_text(
+        '<?xml version="1.0" encoding="utf-8"?><JVLinkToSQLiteSetting><Details>'
+        "<JVNormalUpdateSetting><IsEnabled>true</IsEnabled><DataSpecSettings>"
+        "</DataSpecSettings></JVNormalUpdateSetting>"
+        "<JVSetupDataUpdateSetting><IsEnabled>true</IsEnabled><DataSpecSettings>"
+        "</DataSpecSettings></JVSetupDataUpdateSetting>"
+        "<JVRealTimeDataUpdateSetting><IsEnabled>false</IsEnabled><DataSpecSettings>"
+        "<JVDataSpecSetting><IsEnabled>true</IsEnabled><DataSpec>0B12</DataSpec>"
+        "<JVKaisaiDateKey><KaisaiDate>2026-03-02T00:00:00+09:00</KaisaiDate></JVKaisaiDateKey>"
+        "</JVDataSpecSetting>"
+        "<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>0B14</DataSpec>"
+        "<JVKaisaiDateKey><KaisaiDate>2026-03-02T00:00:00+09:00</KaisaiDate></JVKaisaiDateKey>"
+        "</JVDataSpecSetting>"
+        "</DataSpecSettings></JVRealTimeDataUpdateSetting>"
+        "</Details></JVLinkToSQLiteSetting>",
+        encoding="utf-8",
+    )
+    builder = JVLinkSettingBuilder(seed)
+    destination = tmp_path / "race-day-tc.xml"
+
+    builder.build(race_day_tc_profile(), destination, race_date=date(2026, 11, 15))
+
+    verify_realtime_date_key(destination, frozenset({"0B14"}), date(2026, 11, 15))
+    root = ET.parse(destination).getroot()
+    enabled = {
+        item.findtext("DataSpec"): item.findtext("IsEnabled")
+        for item in root.iter("JVDataSpecSetting")
+    }
+    assert enabled == {"0B12": "false", "0B14": "true"}
+    assert root.findtext("Details/JVNormalUpdateSetting/IsEnabled") == "false"
+    with pytest.raises(ValueError, match="does not match the date"):
+        verify_realtime_date_key(destination, frozenset({"0B14"}), date(2026, 11, 14))
+    with pytest.raises(ValueError, match="both a race key and a date key"):
+        builder.build(
+            race_day_tc_profile(),
+            destination,
+            race_date=date(2026, 11, 15),
+            race_key=RaceKey(date(2026, 11, 15), "05", "05", "04", "11"),
+        )
+
+
+def test_latest_turns_off_realtime_even_from_a_runtime_setting_that_enabled_it(
+    tmp_path: Path,
+) -> None:
+    config = JVLinkConfig.from_toml(Path(__file__).parents[3] / "configs" / "jvlink.toml")
+    seed = tmp_path / "setting.xml"
+    _write_seed(seed)
+    runtime = tmp_path / "runtime" / "latest.xml"
+    runtime.parent.mkdir()
+    tree = ET.parse(seed)
+    realtime = _child(tree.getroot(), "Details/JVRealTimeDataUpdateSetting")
+    _child(realtime, "IsEnabled").text = "true"
+    for node in realtime.iter("JVDataSpecSetting"):
+        _child(node, "IsEnabled").text = "true"
+    tree.write(runtime, encoding="utf-8", xml_declaration=True)
+
+    JVLinkSettingBuilder(seed).build(config.latest, runtime, source=runtime)
+
+    root = ET.parse(runtime).getroot()
+    built = _child(root, "Details/JVRealTimeDataUpdateSetting")
+    assert built.findtext("IsEnabled") == "false"
+    assert {node.findtext("IsEnabled") for node in built.iter("JVDataSpecSetting")} == {"false"}
+    assert _child(root, "Details/JVNormalUpdateSetting").findtext("IsEnabled") == "true"

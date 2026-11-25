@@ -2,7 +2,7 @@
 
 import sqlite3
 import xml.etree.ElementTree as ET
-from datetime import UTC, date, datetime, timedelta
+from datetime import UTC, date, datetime, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock
 
@@ -178,6 +178,10 @@ def _write_seed(path: Path, specs: frozenset[str]) -> None:
         f"<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>{spec}</DataSpec>{key}"
         "</JVDataSpecSetting>"
         for spec in sorted(specs)
+    ) + (
+        "<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>0B14</DataSpec>"
+        "<JVKaisaiDateKey><KaisaiDate>2026-03-02T00:00:00+09:00</KaisaiDate></JVKaisaiDateKey>"
+        "</JVDataSpecSetting>"
     )
     path.write_text(
         '<?xml version="1.0" encoding="utf-8"?><JVLinkToSQLiteSetting><Details>'
@@ -190,6 +194,54 @@ def _write_seed(path: Path, specs: frozenset[str]) -> None:
         "</Details></JVLinkToSQLiteSetting>",
         encoding="utf-8",
     )
+
+
+TC_COLUMNS = (
+    "headRecordSpec",
+    "headDataKubun",
+    "headMakeDate",
+    *KEYS,
+    "HappyoTime",
+    "TCInfoAfterJi",
+    "TCInfoAfterFun",
+    "TCInfoBeforeJi",
+    "TCInfoBeforeFun",
+)
+
+
+class NoChangeTCRunner:
+    """Answer 0B14 checks: queued TC rows first, then JV-Link's no-data return."""
+
+    def __init__(self, database: Path | None = None) -> None:
+        self.database = database
+        self.calls = 0
+        # Each check pops one response: TC rows, or None for JV-Link's no-data return.
+        self.responses: list[list[tuple[str, ...]] | None] = []
+
+    def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
+        assert setting.name == "race-day-tc.xml"
+        self.calls += 1
+        rows = self.responses.pop(0) if self.responses else None
+        if rows is not None and self.database is not None:
+            with sqlite3.connect(self.database) as connection:
+                connection.execute(
+                    "CREATE TABLE RT_TC_INFO ("
+                    + ", ".join(f'"{name}" TEXT' for name in TC_COLUMNS)
+                    + ")"
+                )
+                connection.executemany(
+                    "INSERT INTO RT_TC_INFO VALUES (" + ", ".join("?" for _ in TC_COLUMNS) + ")",
+                    rows,
+                )
+            return JVLinkExecutionResult(
+                {"0B14": 0}, api_results={"0B14": ("JVRTOpen", 0)}, process_returncode=0
+            )
+        return JVLinkExecutionResult(
+            {"0B14": -1},
+            no_data_specs=frozenset({"0B14"}),
+            api_results={"0B14": ("JVRTOpen", -1)},
+            process_returncode=0,
+        )
 
 
 def _profiles(
@@ -238,6 +290,7 @@ def _retriever(
         clock=clock,
         sleeper=clock.sleep,
         prediction_profile=prediction,
+        tc_runner=NoChangeTCRunner(database),  # type: ignore[arg-type]
     )
     return retriever, runner, clock, database
 
@@ -612,3 +665,165 @@ def test_a_prediction_offset_requires_an_exact_0b41_0b42_profile(tmp_path: Path)
     with pytest.raises(ValueError, match="exactly 0B41 and 0B42"):
         RaceDayOddsRetriever(*arguments, prediction_profile=wrong)
     RaceDayOddsRetriever(*arguments, prediction_profile=prediction)
+
+
+def test_an_earlier_start_holds_the_prediction_fetch_and_the_features_cli_holds_it(
+    tmp_path: Path,
+) -> None:
+    from types import SimpleNamespace
+    from typing import Any, cast
+
+    from cli.reference_datamart import find_prediction_fetch
+
+    retriever, runner, _, database = _retriever(tmp_path, datetime(2026, 11, 15, 5, 0, tzinfo=UTC))
+    tc_runner = cast(Any, retriever)._tc_runner
+    # Race 11 is announced earlier (15:00 -> 14:58) before its prediction fetch.
+    tc_runner.responses = [
+        [
+            (
+                "TC",
+                "1",
+                "20261115",
+                "2026",
+                "1115",
+                "05",
+                "05",
+                "04",
+                "11",
+                "11151400",
+                "14",
+                "58",
+                "15",
+                "00",
+            )
+        ]
+    ]
+    publisher = Publisher(tmp_path, database)
+
+    result = retriever.retrieve(RACE_DATE, publisher=publisher)
+
+    # The held prediction fetch never reaches the runner; the race version is published.
+    assert ("11", "prediction") not in runner.calls
+    assert ("12", "prediction") in runner.calls
+    assert publisher.races[0] == "11"
+    assert result.summary["held"] == 2
+    with sqlite3.connect(database) as connection:
+        connection.row_factory = sqlite3.Row
+        held = [
+            dict(row)
+            for row in connection.execute(
+                "SELECT capture_id, data_spec, status, reason, scheduled_start_at, started_at "
+                "FROM ARCHIVE_CAPTURE_LOG WHERE idRaceNum = '11' AND data_spec IN ('0B41','0B42')"
+            )
+        ]
+        notes = connection.execute(
+            "SELECT earlier_start_races FROM ARCHIVE_TC_CHECK_LOG ORDER BY rowid LIMIT 1"
+        ).fetchone()[0]
+    assert {(row["status"], row["reason"]) for row in held} == {("held", "start_moved_earlier")}
+    assert notes == "2026111505050411"
+    jst = timezone(timedelta(hours=9))
+    schedule = SimpleNamespace(
+        scheduled_start_at=datetime(2026, 11, 15, 15, 0, tzinfo=jst),
+        freeze_at=datetime(2026, 11, 15, 14, 55, tzinfo=jst),
+    )
+    lookup = find_prediction_fetch(
+        cast(Any, SimpleNamespace(rows={"ARCHIVE_CAPTURE_LOG": held})), cast(Any, schedule)
+    )
+    assert (lookup.kind, lookup.reason) == ("terminal", "race_day_fetch_held: start_moved_earlier")
+
+
+def test_one_check_covers_the_prediction_and_capture_of_the_same_time_point(
+    tmp_path: Path,
+) -> None:
+    from typing import Any, cast
+
+    retriever, _, _, _ = _retriever(tmp_path, datetime(2026, 11, 15, 5, 0, tzinfo=UTC))
+
+    retriever.retrieve(RACE_DATE, publisher=Publisher(tmp_path, retriever._database))
+
+    # Time points: 05:55 (prediction and capture of race 11), 05:58, 06:25, 06:28.
+    assert cast(Any, retriever)._tc_runner.calls == 4
+
+
+def test_an_earlier_start_found_after_the_prediction_fetch_withdraws_nothing(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    from typing import Any, cast
+
+    retriever, runner, _, database = _retriever(tmp_path, datetime(2026, 11, 15, 5, 0, tzinfo=UTC))
+    # No change before 05:55; before 05:58 race 11 is announced earlier (15:00 -> 14:59).
+    cast(Any, retriever)._tc_runner.responses = [
+        None,
+        [
+            (
+                "TC",
+                "1",
+                "20261115",
+                "2026",
+                "1115",
+                "05",
+                "05",
+                "04",
+                "11",
+                "11151456",
+                "14",
+                "59",
+                "15",
+                "00",
+            )
+        ],
+    ]
+
+    result = retriever.retrieve(RACE_DATE, publisher=Publisher(tmp_path, database))
+
+    assert ("11", "prediction") in runner.calls
+    assert result.summary["held"] == 0
+    with sqlite3.connect(database) as connection:
+        prediction = connection.execute(
+            "SELECT DISTINCT status FROM ARCHIVE_CAPTURE_LOG WHERE idRaceNum = '11' "
+            "AND data_spec IN ('0B41', '0B42')"
+        ).fetchall()
+        last = connection.execute(
+            "SELECT status, effective_start_at FROM ARCHIVE_CAPTURE_LOG WHERE idRaceNum = '11' "
+            "AND data_spec = '0B31' AND offset_minutes = '2'"
+        ).fetchone()
+    assert prediction == [("archived",)]
+    # The 2-minute capture moved to 05:57; the check ended at 05:57:20, within the 60 s
+    # late tolerance, so the capture still ran on the changed schedule.
+    assert last == ("archived", "2026-11-15T14:59:00+09:00")
+    assert "start moved earlier for race 2026111505050411" in capsys.readouterr().err
+
+
+def test_the_features_live_loop_holds_a_held_race_without_calculating_it() -> None:
+    from cli.reference_datamart import FetchLookup, run_live_races
+    from models.serialization.reference_datamart import TargetSchedule
+
+    jst = timezone(timedelta(hours=9))
+    schedule = TargetSchedule(
+        "2026111505050411",
+        datetime(2026, 11, 15, 15, 0, tzinfo=jst),
+        datetime(2026, 11, 15, 14, 55, tzinfo=jst),
+    )
+    clock = [datetime(2026, 11, 15, 14, 55, 1, tzinfo=jst)]
+    reported: list[object] = []
+
+    def complete(*_: object) -> object:
+        raise AssertionError("a held race must not be calculated or published")
+
+    outcomes = run_live_races(
+        [schedule],
+        now=lambda: clock[0],
+        sleep=lambda seconds: None,
+        poll_seconds=1,
+        deadline_seconds=180,
+        find_fetch=lambda _: FetchLookup(
+            "terminal", reason="race_day_fetch_held: start_moved_earlier"
+        ),
+        complete=complete,  # type: ignore[arg-type]
+        report=reported.append,
+    )
+
+    assert [(item.status, item.reason) for item in outcomes] == [
+        ("held", "race_day_fetch_held: start_moved_earlier")
+    ]
+    assert reported == outcomes

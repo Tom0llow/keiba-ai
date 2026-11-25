@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #37、Refs #57・#52・#53・#54・#30・#31・#46・#55・#59・#61・#64・#66・#67
 - Supersedes: ADR-036のDecision 3の形式番号（format_version 1）と、Option B（2段階の構築）を採用しない判断のみ
-- Superseded by: N/A
+- Superseded by: [ADR-049](ADR-049-handle-race-day-start-time-changes.md)（「発走時刻の変更には追従しない」をfreezeについての記述に狭め、繰上げの保留を加えるのみ）
 
 ---
 
@@ -256,3 +256,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-12 | Accepted | 当日のレースごとに、freeze後に開始した0B41/0B42の取得で参考特徴量を構築することを決定。ADR-036のformat_versionとOption Bの判断を置き換える |
 | 2026-11-14 | Accepted | 当日の朝の`latest`の順序をADR-041で前日夜の`latest`に置き換えた |
+| 2026-11-25 | Accepted | ADR-049が、Risksの「発走時刻の変更には追従しない」をfreezeについての記述に狭め、繰上げの印（予測用の取得の`held`）があるレースの特徴量を公開しない保留を加えた |

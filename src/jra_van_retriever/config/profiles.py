@@ -50,6 +50,8 @@ class RaceDayOddsProfile(JVLinkProfile):
     offsets_minutes: tuple[int, ...] = (30, 10, 5, 2)
     late_tolerance_seconds: int = 60
     execution_timeout_seconds: int = 120
+    tc_check_timeout_seconds: int = 20
+    tc_check_lead_seconds: int = 40
     # Minutes before the start of the 0B41/0B42 prediction fetch (ADR-032 Amendment 2).
     prediction_offset_minutes: int | None = None
 
@@ -200,6 +202,12 @@ def _load_race_day_odds(config: dict[str, Any]) -> RaceDayOddsProfile | None:
         execution_timeout_seconds=_require_positive_int(
             section, "execution_timeout_seconds", "race_day_odds"
         ),
+        tc_check_timeout_seconds=_require_positive_int(
+            section, "tc_check_timeout_seconds", "race_day_odds"
+        ),
+        tc_check_lead_seconds=_require_positive_int(
+            section, "tc_check_lead_seconds", "race_day_odds"
+        ),
         prediction_offset_minutes=(
             _require_positive_int(section, "prediction_offset_minutes", "race_day_odds")
             if "prediction_offset_minutes" in section
@@ -208,6 +216,18 @@ def _load_race_day_odds(config: dict[str, Any]) -> RaceDayOddsProfile | None:
     )
     validate_race_day_odds_profile(profile)
     return profile
+
+
+def race_day_tc_profile() -> JVLinkProfile:
+    """Return the fixed 0B14-only profile used before race-day time points."""
+    return JVLinkProfile(
+        normal_update=False,
+        setup_update=False,
+        realtime_update=True,
+        normal_data_specs=frozenset(),
+        setup_data_specs=frozenset(),
+        realtime_data_specs=frozenset({"0B14"}),
+    )
 
 
 def _optional_race_key(config: dict[str, Any], section_name: str) -> RaceKey | None:

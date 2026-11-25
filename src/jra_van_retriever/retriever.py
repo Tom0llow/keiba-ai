@@ -125,6 +125,12 @@ class JraVanRetriever:
                 timeout_seconds=float(jvlink.race_day_odds.execution_timeout_seconds),
                 validate_executable=validate_executable,
             )
+            race_day_tc_runner = JVLinkToSQLiteRunner(
+                jvlink.executable,
+                paths.raw_db,
+                timeout_seconds=float(jvlink.race_day_odds.tc_check_timeout_seconds),
+                validate_executable=validate_executable,
+            )
             self._race_day_odds = RaceDayOddsRetriever(
                 race_day_odds_runner,
                 builder,
@@ -133,6 +139,7 @@ class JraVanRetriever:
                 paths.raw_db,
                 self._ledger_path,
                 paths.jvlink_runtime_dir,
+                tc_runner=race_day_tc_runner,
                 prediction_profile=(
                     jvlink.realtime_history
                     if jvlink.race_day_odds.prediction_offset_minutes is not None
