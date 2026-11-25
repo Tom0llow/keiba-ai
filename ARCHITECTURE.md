@@ -200,17 +200,18 @@ ADR-032 Amendment 2（ADR-037）により、`prediction_offset_minutes`がある
 
 | モジュール | 責務 |
 | --- | --- |
-| workflows/race_day_odds_plan.py | 取得予定の純粋な計画（種類`capture`/`prediction`）、遅延判定、ADR-013と同じ規則の結果分類、`JVOpen`/`JVRTOpen`の`-211`・`-303`（`JVLinkAgent`の停止）の判定。 |
-| workflows/race_day_odds.py | 起動時復旧（`--recover`も使う公開の`recover`）、実行XMLの起動時検証、予定時刻までの待機、ロック内の1件ずつの取得の組立（XMLの生成は`running`の確定より前）、`-211`・`-303`の取得を記録した後の停止と停止理由の返却。時計とsleepは注入可能。 |
-| acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化（0B31/0B41が共有する`RT_O1`などは1回だけ）、取得記録`ARCHIVE_CAPTURE_LOG`、DataSpec別SAVEPOINTでのarchive（予測用の0B41/0B42は複数行の時系列として`ARCHIVE_O1`/`O2`へ）、種類ごとの終了済みの判定。 |
+| workflows/race_day_odds_plan.py | 取得予定の純粋な計画（種類`capture`/`prediction`）、発走時刻変更のTC行からの変更後の発走時刻・繰上げ・採用の記録の計算と`capture`の再計画（ADR-049）、遅延判定、ADR-013と同じ規則の結果分類、`JVOpen`/`JVRTOpen`の`-211`・`-303`（`JVLinkAgent`の停止）の判定。 |
+| workflows/race_day_odds.py | 起動時復旧（`--recover`も使う公開の`recover`）、実行XMLの起動時検証、未処理の予定から最も早い時点を選ぶ待機、各時点の前のTC確認（`0B14`）と未完了のオッズ取得の再計画、繰上げのレースの予測用の取得の`held`、ロック内の1件ずつの取得の組立（XMLの生成は`running`の確定より前）、`-211`・`-303`の取得を記録した後の停止と停止理由の返却。時計とsleepは注入可能。 |
+| acquisition/odds_archive.py | 取得用stagingの検証付き退避・初期化（0B31/0B41が共有する`RT_O1`などは1回だけ）、取得記録`ARCHIVE_CAPTURE_LOG`（24列の表への`effective_start_at`の追加）、TC確認の記録`ARCHIVE_TC_CHECK_LOG`と変更の蓄積`ARCHIVE_TC_INFO`、`0B14`の受け皿の表の削除、DataSpec別SAVEPOINTでのarchive（予測用の0B41/0B42は複数行の時系列として`ARCHIVE_O1`/`O2`へ）、種類ごとの終了済みの判定。 |
 | acquisition/acquisition_lock.py | 取得記録の`running`行がある間、全取得モードを拒否する。race-day-oddsの起動時復旧と`--recover`だけが解除する。 |
-| acquisition/setting_xml.py | 実行XMLの生成と、生成した実時間XMLが対象のDataSpecとレースキーを有効にしていることの検証。 |
+| acquisition/setting_xml.py | 実行XMLの生成と、生成した実時間XMLが対象のDataSpecとレースキー（TC確認では日付のキー）を有効にしていることの検証。 |
 | progress/raw_observation.py | 指定日の`NL_RA_RACE`のキー・区分・発走時刻の読取。 |
 
 3連複・3連単の子表のarchiveは、親表の`headDataKubun`/`HappyoTime`を列として加え、全列`TEXT`とする。
 同じ`HappyoTime`で行集合が異なる取得は`happyo_conflict`として退避する。`running`の確定後の書込み失敗では
 `running`とstagingを残して停止し、次回起動時にstagingを退避・初期化して`interrupted`とする。
-発走時刻の変更には追従しない。
+発走時刻の変更は、各時点の前のTC確認で読み、まだ行っていないオッズの取得だけを変更後の発走時刻で計画し直す。
+予測用の取得・特徴量のfreeze・予測・購入案は出馬表の予定のままとし、繰上げのレースは予測用の取得を`held`にする（ADR-049）。
 
 台帳は完全RaceKeyとDataSpecをキーとし、初期archive欠損をpendingとする。
 captured JVOpen/JVRTOpen=-1だけを自動provider_missingとし、証拠なし空応答はfailedで停止する。

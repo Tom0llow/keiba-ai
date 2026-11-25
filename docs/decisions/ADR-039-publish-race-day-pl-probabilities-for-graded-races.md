@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #53、Refs #57・#54・#36・#35・#31・#46・#49・#61
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: [ADR-049](ADR-049-handle-race-day-start-time-changes.md)（発走時刻変更を検出しない制限を繰下げについての記述に狭めるのみ）
 
 ---
 
@@ -263,3 +263,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-13 | Accepted | 当日の重賞のPL確率の常駐CLI・出力形式・出馬表の正規化の共有を決定 |
 | 2026-11-14 | Accepted | 当日の朝の`latest`の順序をADR-041で前日夜の`latest`に置き換えた |
+| 2026-11-25 | Accepted | ADR-049が、発走時刻変更を検出しない制限（`:115-116`・`:212`）を繰下げについての記述に狭めた。繰上げのレースは特徴量が公開されず、`features_not_published`で保留する |

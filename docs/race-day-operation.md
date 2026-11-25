@@ -60,6 +60,12 @@ uv run python src/main.py --retrieve --mode=race-day-odds --date <開催日>
 
 `setup failed`が出た場合は取得を続けず、stderrとstdoutの出力を控える。
 
+race-day-oddsは、各時点の40秒前に`0B14`で発走時刻の変更を確認し、まだ行っていないオッズの取得を変更後の発走時刻へ
+動かす（ADR-049）。予測用の取得と特徴量・予測・購入案は出馬表の予定のままである。繰上げが分かると、stderrに
+`race-day-odds start moved earlier for race <race_id>: ...`が出る。予測用の取得の前なら、そのレースの特徴量・予測・購入案は
+保留される。予測用の取得の後なら、公開済みの予測と購入案は取り消されないので、当日の発表で発走時刻を確かめてから購入を
+判断する。確認の失敗はstderrに`race-day-odds TC check failed: ...`と出て、取得はそのまま続く。
+
 ### 端末2: 特徴量の常駐CLI
 
 端末1を起動した後、時刻付きのログを残して起動する。`<CURRENTのID>`には前日の夜に控えた値を入れる。
@@ -157,7 +163,24 @@ race-day-oddsの実行中は、`latest`、`preprocess rebuild`、対象日の`--
 
 - race-day-oddsが途中で止まった場合は、`--recover`で`running`の取得を`interrupted`にしてから、`--date <開催日>`で再起動する。常駐CLIを再起動する場合は、新しい`--output`を指定し、後に続く常駐CLIの`--features-root`・`--predictions-root`を端末3・4の節のとおりに付け替える。
 - `JVOpen`/`JVRTOpen`が`-211`や`-303`を返す場合: race-day-oddsはその取得を記録した後、残りの取得を実行せずに終了し、stderrに`race-day-odds stopped: <stop_reason>; see docs/race-day-operation.md`の1行を出してstdoutに要約のJSONを出す。終了コードは1であり、人がrace-day-oddsを止める必要はない。停止を検知した取得そのものは、`execution_timeout_seconds`の上限（120秒）まで待つことがある。2026-11-14・15の原因は、JV-Linkのサービス`JVLinkAgent`の異常終了だった。JV-Link側の不具合であり、JRA-VANも同じ事象を確認している。サービス停止後は`JVOpen -211`が返り、その後の取得で`-303`が続く。`Get-Service JVLinkAgent`が`Stopped`を示すことと、WindowsのApplicationログに`JVLinkAgent.exe`のApplication Errorがあることを確認する。JV-Linkを使うのはrace-day-oddsだけで、特徴量・予測・購入案の常駐CLIはJV-Linkを使わない。特徴量・予測・購入案の常駐CLIは動かしたままにする。管理者として起動したPowerShellで`Start-Service JVLinkAgent`を試す（実機の運用PCではまだ試していない）。JV-Linkの設定画面が開くことを確認し、開かない場合またはサービスが起動しない場合はPCを再起動する。PCを再起動しない場合は、race-day-oddsだけを`--date <開催日>`で起動し直す。PCを再起動した場合は、race-day-oddsと特徴量・予測・購入案の常駐CLIを起動し直す。常駐CLIは新しい`--output`を指定し、予測CLIと購入案CLIの`--features-root`には特徴量CLIの新しい出力先、購入案CLIの`--predictions-root`には予測CLIの新しい出力先を指定する。購入案CLIの`--ledger`は同じ台帳のパスのまま使う。race-day-oddsは`--date <開催日>`で起動すると、開始時に`running`の取得を復旧する。サービスキーは記録しない。エラーコード、最後の取得、停止・復旧の時刻を残す。
-- `features_not_published`は、特徴量の計算が遅れた場合だけでなく、予測用の取得が`jvlink_error`などで失敗した場合にも起きる。予測のログだけで判断せず、特徴量のログの保留理由（`race_day_fetch_failed: ...`など）と取得記録を照合する。
+- `features_not_published`は、特徴量の計算が遅れた場合だけでなく、予測用の取得が`jvlink_error`などで失敗した場合や、繰上げで`held`になった場合（特徴量のログの`race_day_fetch_held: start_moved_earlier`）にも起きる。予測のログだけで判断せず、特徴量のログの保留理由（`race_day_fetch_failed: ...`など）と取得記録を照合する。
+
+## 発走時刻の変更への追従を切り戻すとき
+
+ADR-049の実装の前のコードへ戻すときは、取得記録の追加の列を削除してから戻す。古いコードは`ARCHIVE_CAPTURE_LOG`の列の並び
+（24列）を厳密に検査するため、列が残っていると取得を拒否する。raw DBの複製を戻すと、その後の開催日の取得（発走の後には
+取り直せない）を失うので戻さない。
+
+1. race-day-odds、`latest`、historical-odds、`--mode=realtime`、`preprocess rebuild`が動いていないことを確かめる。
+2. `uv run python -c "import sqlite3; print(sqlite3.sqlite_version)"`が3.35以上であることを確かめる。
+3. `data/raw/race.db`を複製する。
+4. 次を実行し、列の並びが24列に戻ったことと、行数が変わらないことを確かめる。
+
+```powershell
+uv run python -c "import sqlite3; c=sqlite3.connect('data/raw/race.db'); n=c.execute('SELECT COUNT(*) FROM ARCHIVE_CAPTURE_LOG').fetchone()[0]; c.execute('ALTER TABLE ARCHIVE_CAPTURE_LOG DROP COLUMN effective_start_at'); c.commit(); print(len(c.execute('PRAGMA table_info(ARCHIVE_CAPTURE_LOG)').fetchall()), n, c.execute('SELECT COUNT(*) FROM ARCHIVE_CAPTURE_LOG').fetchone()[0])"
+```
+
+5. 古いコードへ戻す。`ARCHIVE_TC_INFO`・`ARCHIVE_TC_CHECK_LOG`は古いコードが読まないので残してよい。
 
 ## 記録として残すもの
 

@@ -83,6 +83,8 @@ snapshot IDは`098ce3f4b5d7480282269218d80cef05`。39表、7,979列、251,654,38
 | `ARCHIVE_CAPTURE_O6_ODDS_SANRENTAN` | `RT_O6_ODDS_SANRENTAN`と同じ列（`0B36`の親表） |
 | [ARCHIVE_CAPTURE_O6_OddsSanrentanInfo](ARCHIVE_CAPTURE_O6_OddsSanrentanInfo.md) | `0B36`の子表＋親の`headDataKubun`/`HappyoTime` |
 | [ARCHIVE_CAPTURE_LOG](ARCHIVE_CAPTURE_LOG.md) | 取得×DataSpecごとの取得記録。ADR-032 Amendment 2の予測用の取得（0B41/0B42）の行も含む |
+| [ARCHIVE_TC_INFO](ARCHIVE_TC_INFO.md) | `0B14`の発走時刻変更（`RT_TC_INFO`）の行を、TC確認のたびに重複なく蓄積する表（ADR-049） |
+| [ARCHIVE_TC_CHECK_LOG](ARCHIVE_TC_CHECK_LOG.md) | `race-day-odds`のTC確認（`0B14`）ごとの結果の記録（ADR-049） |
 
 `RT_O3_ODDS_WIDE`〜`RT_O6_OddsSanrentanInfo`のstaging表は、2026-11-08の事前確認でraw DBに作成された。
 上の表一覧の39表は2026-10-20時点の照合であり、これらのstaging表を含まない。

@@ -42,6 +42,17 @@
 
 ---
 
+### Amendment 1: `latest`の速報系の取得をやめる（2026-11-25）
+
+- 2026-11-25に人間の承認を受けてこのADRへ追加した（ADRのStatusはAcceptedのまま）。Issue #31の調査（PR #116）による。
+- `[latest]`の`realtime_update`を`false`、`realtime_data_specs`を空にする。`latest`はnormalの差分（RACE・SLOP・WOOD・DIFN）
+  だけを取得する。既存の`data/runtime/jvlink/latest.xml`が速報系を有効にしていても、実行の設定を作るときに速報系の節と
+  すべての速報系のDataSpecを無効にする。
+- 根拠: これまでの`latest`の速報系（`0B12`・`0B15`・`0B11`・`0B14`・`0B13`・`0B17`）は、シードの設定の`KaisaiDate`
+  （2026-03-02）のまま、毎回固定の過去日を要求していた。raw DBには速報系の`WE`・`AV`・`JC`・`TC`・`CC`の表がなく、
+  オッズ以外の`RT_*`の表を読む処理もない（`docs/experiments/race-day-start-time-change.md`）。当日の発走時刻の変更は、
+  race-day-oddsが`0B14`で確認する（[ADR-049](ADR-049-handle-race-day-start-time-changes.md)）。
+
 ## Rationale
 
 - latestの差分取得は、ADR-006の永続的な読込位置の仕組みに乗るので、新しい取得モードを作らずに済む。
@@ -185,3 +196,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-13 | Accepted | 当日のlatestにSLOP・WOOD・DIFNを加え、normalの読込位置の下限を設定に持たせる |
 | 2026-11-14 | Accepted | 決定3の当日の朝の`latest`の順序をADR-041で前日夜の`latest`に置き換えた |
+| 2026-11-25 | Accepted | Amendment 1: `latest`の速報系の取得をやめる（固定の過去日を要求していた。#31・PR #116） |

@@ -1,9 +1,9 @@
 # ADR-049: 当日の発走時刻変更を速報で確認し、取得と保留を分けて扱う
 
-- Status: Proposed
+- Status: Accepted
 - Date: 2026-11-24
 - Decision Owners: Repository maintainers
-- Related Issues/PRs: Refs #31・#57
+- Related Issues/PRs: Closes #31（PR #116）、Refs #57・#108
 - Supersedes: N/A
 - Superseded by: N/A
 
@@ -29,23 +29,23 @@ race-day-oddsは起動時に前日夜の`latest`の出馬表から`HassoTime`を
 `scheduled_start_at`が一致することを前提にしている（ADR-037）。なお、学習用datamartは確定した
 `HassoTime`（変更があったレースでは変更後の時刻）の5分前をfreezeにしている（ADR-034）。
 
-このADRは、実装の前に方針を決めるProposedの記録である。確認の時点や記録の形式などの仕組みの細部は、
-後続の実装のIssueで決め、このADRをAcceptedにするときに書き足す（「実装で決める事項」）。現時点では
-コード、保存形式、既存ADRの本文を変えない。
+このADRは、2026-11-24に方針をProposedとして決め、2026-11-25に実装（PR #116）とともにAcceptedにした。
+仕組みの細部は、実装の設計で決めた内容を「実装での決定」に書き足した。
 
 ---
 
 ## Decision
 
 1. **変更の情報源と確認。** race-day-oddsは、対象日の日付のキーで`0B14`を要求し、`RT_TC_INFO`を読む
-   （以下、TC確認）。TC確認は、起動・再開のときと、各時点（同時刻の`kind="prediction"`と
-   `kind="capture"`をまとめたもの）の前に行う。予測用取得の時点も含む。TC確認のために取得を予定時刻より
-   後へ遅らせない。時点の前にTC確認を終えられないときは、その時点の取得を直前に分かっている予定で行う。
+   （以下、TC確認）。TC確認は、各時点（同時刻の`kind="prediction"`と
+   `kind="capture"`をまとめたもの）の前に行う。起動・再開のときは、それまでに蓄積した変更を復元してから、
+   最初の時点の前の確認に進む。予測用取得の時点も含む。TC確認は、上限時間まで
+   続いても次の取得の予定時刻までに終わるときだけ行う（確認の後のロックや記録の数秒は遅れうるが、遅延の判定の許容の範囲内）。時点の前にTC確認を終えられないときは、その時点の取得を直前に分かっている予定で行う。
 2. **変更後の発走時刻と再計画。** TC行は、その日のTC確認で得た行を蓄積して扱う。後の成功した応答に
    以前の行が無くても、その行は消えたものとせず、新しい情報がないものとする。レースの変更後の発走時刻は、
    その日に蓄積したそのレースのTC行のうち、最も新しい発表（`HappyoTime`）の変更後の時刻とする。変更後の発走時刻が起動時に読んだ出馬表の
    `HassoTime`より後なら繰下げ、前なら繰上げ、同じなら変更なし（いったん変わった後に元へ戻った場合を含む）
-   とする。まだ完了していない（取得記録に終端の状態`archived`・`no_data`・`failed`・`skipped_late`・
+   とする。まだ完了していない（取得記録に終端の状態`archived`・`no_data`・`failed`・`held`・`skipped_late`・
    `interrupted`のいずれもない）`kind="capture"`の30・10・5・2分前の取得は、方向に関係なく、その時点の
    変更後の発走時刻（変更なしなら出馬表の`HassoTime`）で計画し直す。`kind="prediction"`は、繰下げでも
    繰上げでも出馬表の予定のままとする。遅延の判定は既存どおり各取得の予定時刻（再計画した取得では
@@ -54,7 +54,7 @@ race-day-oddsは起動時に前日夜の`latest`の出馬表から`HassoTime`を
    直前に分かっている予定で続ける（出馬表の予定へは戻さない）。失敗はstderrに出す。`JVOpen`または
    `JVRTOpen`の`-211`・`-303`は、ADR-032 Amendment 3の既存規則どおり、記録後に残りの取得を実行せず終了する。
    TC確認の結果と、どのTC行（少なくともレースごとに採った変更後の時刻と`HappyoTime`）で計画したかを
-   永続して残す。その記録先と形式は実装で決める。
+   永続して残す（記録先と形式は「実装での決定」）。
 4. **freeze、予測、購入案の時刻。** 当日の特徴量のfreeze、`kind="prediction"`の取得、PL予測の
    `after_sales_close`、購入案の要求時刻は、前日夜の`latest`の出馬表にあった変更前の予定のままとする。
    最終RAの差分では繰下げだけが観測されているため、繰下げなら予測は変更後の発売締切より前に出る。
@@ -64,9 +64,12 @@ race-day-oddsは起動時に前日夜の`latest`の出馬表から`HassoTime`を
 5. **繰上げの保留。** その日に蓄積したそのレースのTC行のどれかの変更後の時刻が出馬表の`HassoTime`より
    前のとき、繰上げを検出したとする（同じTC確認で元の時刻へ戻る行も得て、変更後の発走時刻が繰上げに
    ならない場合を含む）。このとき、race-day-oddsは決定2のとおり未完了の`kind="capture"`だけを
-   計画し直し、stderrへ通知する。さらに、そのレースについて、当日の特徴量、PL予測、購入案の3つの常駐CLIが
-   読める永続の印を残す。印のあるレースでは、特徴量の常駐CLIはそのレースの特徴量を公開せず、PL予測の
-   常駐CLIは予測を公開せず、購入案の常駐CLIは購入案を公開しない。3つとも、保留の理由（繰上げ）を出力する。
+   計画し直し、stderrへ通知する。さらに、そのレースについて、特徴量の常駐CLIが読む永続の印（予測用の取得の`held`）を
+   残す。印のあるレースでは、特徴量の常駐CLIはそのレースの特徴量を公開せず、PL予測の
+   常駐CLIは予測を公開せず、購入案の常駐CLIは購入案を公開しない。保留の理由は、特徴量が
+   `race_day_fetch_held: start_moved_earlier`、PL予測が`features_not_published`（特徴量が公開されないため）、
+   購入案が`prediction_not_published`（予測が公開されないため）とする（2026-11-25の人の決定。PL予測と購入案の
+   常駐CLIのコードは変えない）。
    印は、その後の発表で出馬表の時刻へ戻っても、その日の間は消さない（3つの常駐CLIは保留のままとする）。
    予測用取得の前のTC確認で繰上げを検出した場合は、その予測用取得より前に印を残す。予測用取得の後に
    検出した繰上げでは、既に公開した特徴量、予測、購入案をこのADRでは取り消さない。印とstderrに残し、
@@ -78,10 +81,22 @@ race-day-oddsは起動時に前日夜の`latest`の出馬表から`HassoTime`を
    失敗した取得（`failed/capture_not_recorded`）は、その実行の中では使ったものとして計画し直さず、再開のときは
    今の再開の規則（取得記録の行がない取得は行う）に従う。
 
-### 実装で決める事項
+### 実装での決定
 
-次は、後続の実装のIssueで決め、このADRをAcceptedにするときに本文へ書き足す。各項目の要件は、
-このADRのレビューで確かめた制約である。
+次の事項は、Proposedの時点で「実装で決める事項」としていたもので、実装（PR #116、2026-11-25）で決めた。
+
+| 事項 | 決定 |
+| --- | --- |
+| TC確認の時点と上限時間 | `[race_day_odds]`の`tc_check_timeout_seconds`（20）と`tc_check_lead_seconds`（40。上限時間より大きいこと）。race-day-oddsは未処理の予定から最も早い時点を毎回選ぶ。確認がまだ間に合う時点のうち、確認が上限時間まで続いても次の取得より前に終わるものがあれば、その確認を先に行う。確認は時点の`lead`秒前に、上限時間を`tc_check_timeout_seconds`にした別のJVLinkToSQLiteの実行で`0B14`を1回要求する。その時点から`lead`秒以内の時点は同じ確認で兼ねる。現在が`lead`秒前を過ぎていたらその時点だけ確認を省略して`skipped`を記録し（記録は取得のロックの中で行う）、取得を遅らせない。再計画で動いた時点は改めて確認する。`0B14`だけを有効にしたprofileはコードで組み立て、設定XMLは日付のキーを設定して起動時に検証する。 |
+| TC確認の結果の記録先 | raw DBの新しい表`ARCHIVE_TC_CHECK_LOG`（全列TEXT、列の完全一致を検査）。確認ごとに時点、時刻、結果（`ok`・`no_data`・`failed`・`agent_down`・`skipped`）、理由、API名と戻り値、応答の行数、繰上げのレース、確認の後に採った変更後の発走時刻（JSON）を残す。 |
+| TC行の蓄積と永続 | raw DBの新しい表`ARCHIVE_TC_INFO`（`RT_TC_INFO`と同じ列、全列TEXT）。結果が`ok`のときだけ`RT_TC_INFO`の行を`EXCEPT`で重複なく追記する。同じレース・同じ`HappyoTime`の行は、`headMakeDate`、次に行の全列の値の昇順で最後の行を採る。`headDataKubun`が`0`（削除。提供ミス）の行は変更として数えず、同じレース・同じ`HappyoTime`の発表を取り消す。 |
+| `0B14`が作る他の表 | TC確認の前と後に`RT_TC_INFO`・`RT_AV_INFO`・`RT_WE_WEATHER`・`RT_JC_INFO`・`RT_CC_INFO`を削除する。前回の応答を今回の応答として読まず、受け皿の表は完全snapshotに入らない。 |
+| 再開時の復元 | 起動時に`ARCHIVE_TC_INFO`のその日の行から変更後の発走時刻と繰上げを復元してから、最初の時点の確認に進む。 |
+| `effective_start_at`の移行と切り戻し | `ARCHIVE_CAPTURE_LOG`が24列の旧い並びなら、最初の書込みで末尾に`effective_start_at`を1回だけ加える（既存の行はNULL）。新しく作る表も同じ25列の並び。切り戻しの手順は下の「Rollback」と`docs/race-day-operation.md`。 |
+| 繰上げの永続の印 | 予測用の取得の前に繰上げを検出したら、race-day-oddsはその予測用の取得を行わず、`0B41`・`0B42`の取得記録を状態`held`・理由`start_moved_earlier`で書き、レース別の版を公開する。特徴量の常駐CLIは既存の経路（終端の状態の予測用の取得）でそのレースを保留する。`held`は終端の状態なので、その日の間は消えない。 |
+| ADR-047の評価での時点のずれ | ADR-047の評価はまだ実装していない（ゲートAの後、#108）。繰下げのあったレースの時点のずれ（下の要件）を、その実装の要件としてADR-047に記した。 |
+
+Proposedの時点の要件は次のとおりで、上の決定はこれらを満たす。
 
 | 事項 | 要件 |
 | --- | --- |
@@ -96,19 +111,18 @@ race-day-oddsは起動時に前日夜の`latest`の出馬表から`HassoTime`を
 
 ### 既存ADRとの関係
 
-このADRがAcceptedになるまで、既存ADRの決定は変わらない。決定1〜6の実装（race-day-oddsと3つの常駐CLI）は
-1つのPRで行い、そのPRでこのADRをAcceptedにする（PRの中で段階ごとにコミットやレビューを分けてよい）。
-そのPRで、対象ADRの`Superseded by`とDecision Historyに、下表の範囲であることを相互に記す。既存ADR全体を
-Supersededにはしない。
+決定1〜6はPR #116で実装し、このADRをAcceptedにした。対象ADRの`Superseded by`とDecision Historyに、下表の
+範囲であることを相互に記した。既存ADR全体をSupersededにはしていない。PL予測と購入案の常駐CLIは、コードを変えずに
+特徴量と予測の公開がないことで保留する（決定5）。
 
-| ADR | 実装時に置き換える・狭める記述 | 加える規則 | 維持する記述 |
+| ADR | 置き換える・狭める記述 | 加える規則 | 維持する記述 |
 | --- | --- | --- | --- |
 | ADR-032 | 発走時刻変更に追従しない取得予定、同じRisks行、取得予定の更新を送るFollow-upを置き換える | TC確認と`kind="capture"`の再計画、TC確認の記録、`effective_start_at`、繰上げの永続の印の書込みとstderrの通知 | 取得時点、券種、遅延判定、`-211`・`-303`の停止規則。 |
 | ADR-037 | 「発走時刻の変更には追従しない」（`:201`）を、freezeについての記述に狭める | 繰上げの永続の印があるレースの特徴量を公開しない保留 | freezeが変更前の予定の5分前であること。既存の保留の規則。 |
-| ADR-039 | 発走時刻変更を検出しない制限（`:115-116`・`:212`）を、繰下げについての記述に狭める | 繰上げの永続の印があるレースの予測を公開しない保留（既存の保留の理由に加える） | `after_sales_close`を変更前の予定で判定する時刻契約。既存の保留の理由。 |
+| ADR-039 | 発走時刻変更を検出しない制限（`:115-116`・`:212`）を、繰下げについての記述に狭める | 繰上げのレースの予測の保留（特徴量が公開されないため、既存の`features_not_published`で保留する。PL予測の常駐CLIは印を読まない） | `after_sales_close`を変更前の予定で判定する時刻契約。既存の保留の理由。 |
 | ADR-041 | 発走時刻変更の追従を#31へ送る記述を、このADRへの参照に置き換える | なし | freezeを発走5分前、提示期限を発売締切とする決定。 |
 | ADR-046 | なし | 繰上げの永続の印があるレースの購入案を公開しない保留 | 購入案の要求時刻を出馬表の発走時刻（変更前の予定）から決めること。 |
-| ADR-047 | なし | 評価で、繰下げのあったレースの特徴量・PL確率（変更前の予定のfreeze）とワイド・馬単のオッズ（確定の`HassoTime`−300秒のfreeze）の時点のずれの扱い（実装で決める） | freezeを確定の`HassoTime`−300秒とし、その時点以前に公開され600秒以内の取得を選ぶ規則。5分前の取得が通常の取得になること（時点の前に変更が分かり取得を計画し直せば、繰下げのあったレースでも成り立つ）。 |
+| ADR-047 | なし | 評価で、繰下げのあったレースの特徴量・PL確率（変更前の予定のfreeze）とワイド・馬単のオッズ（確定の`HassoTime`−300秒のfreeze）の時点のずれの扱い（評価の実装の要件、#108） | freezeを確定の`HassoTime`−300秒とし、その時点以前に公開され600秒以内の取得を選ぶ規則。5分前の取得が通常の取得になること（時点の前に変更が分かり取得を計画し直せば、繰下げのあったレースでも成り立つ）。 |
 
 ---
 
@@ -129,7 +143,7 @@ Supersededにはしない。
 監査できる。既存の完了判定を変えないため、再開時に同じoffsetの取得を重複させない。
 
 仕組みの細部は、取得の時間配分、raw DBとsnapshotの型、作り直されうる受け皿の表、切り戻しの損失など、
-実装の設計と一緒に確かめるべき制約に強く依存する。そのため方針と分けて実装のIssueで決める。
+実装の設計と一緒に確かめるべき制約に強く依存する。そのため方針と分けて、実装の設計で決めた（「実装での決定」）。
 
 ---
 
@@ -164,9 +178,8 @@ Supersededにはしない。
 ### Neutral / Follow-on effects
 
 - 繰下げ時もfreeze、予測用取得、`after_sales_close`、購入案の要求時刻は変更前の予定のままである。
-- `0B14`の保持期間、当日の速報の到達時点、当日の途中状態は、必要なら後続の実装の前に追加で観測する（Follow-up）。`latest`の速報設定が固定日のままである問題は、
-  この決定の実装範囲外である。
-- このADRがProposedの間は、保存形式やCLIの実装は変わらない。
+- `0B14`の保持期間、当日の速報の到達時点、当日の途中状態は、必要なら後続の実装の前に追加で観測する（Follow-up）。
+- `latest`の速報系の取得は、ADR-040 Amendment 1でやめた（固定の過去日を要求していた）。
 
 ---
 
@@ -237,18 +250,17 @@ Reason not selected:
 
 ## Implementation Notes
 
-後続の実装は1つのIssueと1つのPRで行い、PRの中で次の段階に分ける。各段階は、上の「実装で決める事項」の
-うち関係する項目を先に決める。
+PR #116で次のとおり実装した。
 
-1. race-day-oddsへ、TC確認、未完了の`kind="capture"`の再計画、TC確認の結果とTC行の永続、
-   `ARCHIVE_CAPTURE_LOG.effective_start_at`の移行、再開時の復元と重複防止、繰上げの永続の印の書込みを加える。
-2. 当日の特徴量とPL予測の常駐CLIが、印のあるレースを保留するようにする。
-3. 購入案の常駐CLIが同じ印を読み、対象レースを保留するようにする。
-4. ADR-047の評価で、繰下げのあったレースの特徴量・PL確率とオッズの時点のずれの扱い（そのまま使う、印を
-   付ける、評価から外すなど）を決める（ADR-047の評価の実装がまだなら、その実装の要件として記録する）。
+1. race-day-odds（`workflows/race_day_odds.py`・`race_day_odds_plan.py`）: 未処理の予定から最も早い時点を選ぶ
+   ループ、各時点の前のTC確認、未完了の`kind="capture"`の再計画、TC確認の記録とTC行の蓄積
+   （`acquisition/odds_archive.py`）、`ARCHIVE_CAPTURE_LOG.effective_start_at`の移行、再開時の復元、繰上げの
+   予測用の取得の`held`と公開。
+2. 当日の特徴量の常駐CLI: コードは変えない。`held`の予測用の取得を既存の終端の経路で保留する。
+3. PL予測と購入案の常駐CLI: コードは変えない。特徴量と予測が公開されないため保留する。
+4. ADR-047の評価の時点のずれは、評価の実装（#108）の要件としてADR-047に記した。
 
-このPRでADR-049をAcceptedにする。これは#31から引き継ぐ後続Issue候補であり、このADRだけでは実装しない。
-`latest`の固定日の設定は、必要なら別の後続Issueで扱う。
+`latest`の速報系の固定日の設定は、同じPRでADR-040 Amendment 1として取得をやめた。
 
 ## Validation
 
@@ -256,20 +268,21 @@ Reason not selected:
 - 実装時は、`0B14`のTC行（同じレースに複数の行がある場合と、元の時刻へ戻る場合を含む）、`-1`、その他の失敗、確認が間に合わない場合、`-211`・`-303`、繰下げ、繰上げ（予測用取得の前と後）、起動、再開を対象に、予定、TC確認の記録、取得記録、保留状態を検証する。TC確認で取得が予定時刻より後へ遅れないことも検証する。
 - `ARCHIVE_CAPTURE_LOG`の移行後に、既存行の`effective_start_at`が`NULL`であり、同じ`race_id`・`offset`・`kind`を再取得しないことを検証する。
 - 新しい表や`0B14`の`RT_*`の表を含むraw DBから、完全snapshotの再構築が通ることを検証する。
-- 繰上げの印を当日の特徴量、PL予測、購入案の各常駐CLIが読み、対象レースを保留することを検証する。
+- 特徴量の常駐CLIが`held`の予測用の取得のレースを計算・公開せずに保留し、PL予測と購入案の常駐CLIは上流が公開されないことで保留することを検証する。
 
 ## Risks
 
 | Risk | Impact | Mitigation |
 | --- | --- | --- |
 | `0B14`が一時的に失敗する | 変更を反映できない取得がある。繰上げの検出が予測用取得の後になると、特徴量・予測・購入案を保留できない | 新しい情報がないものとして直前の予定で続け、失敗を残す。`-211`・`-303`は既存規則どおり停止する。TC確認の失敗が続くときは、人が当日の発表で発走時刻を確かめる。 |
-| TC確認が遅い・止まる、または前の時点の取得が長引く | 確認が時点に間に合わない。繰上げの検出が遅れると、上と同じく保留できないことがある | 取得を遅らせず、直前の予定で取得する。確認の上限時間と省略の記録は実装で決める。 |
+| TC確認が遅い・止まる、または前の時点の取得が長引く | 確認が時点に間に合わない。繰上げの検出が遅れると、上と同じく保留できないことがある | 取得を遅らせず、直前の予定で取得する。確認は上限20秒で、間に合わなければ`skipped`を記録する。 |
 | 速報の保持期間を越えてTCを確認する | 過去日の変更を再確認できない | 当日の各時点の前に確認し、結果とTC行を永続する。保持期間は、必要なら後続の実装の前に追加で観測する（今回の観測では3日以上9日未満）。 |
-| 繰上げの印が下流CLIへ届かない | 発売締切後のfreezeで予測または購入案を出す | stderrだけに依存せず、3つの常駐CLIが読む永続の印を実装する。 |
+| 繰上げの印が下流CLIへ届かない | 発売締切後のfreezeで予測または購入案を出す | stderrだけに依存せず、特徴量の常駐CLIが読む永続の印（`held`）を残す。PL予測と購入案は上流が公開されないことで保留する。 |
 | 予測用取得の後に繰上げが分かる | 公開済みの予測や購入案が残る | 印とstderrに残し、人が当日の発表で判断する。 |
+| 前日夜の`latest`より前に発表された繰下げが2段以上ある（例: 10:00→10:10→10:20で、出馬表は10:20） | `0B14`の応答に途中の行（変更後10:10）が含まれると、出馬表より前の行として繰上げと判定し、そのレースを保留する（その日の間は解けない） | 発走時刻の変更は通常は当日の朝に発表されるため、まれと見込む。保留の理由（`race_day_fetch_held: start_moved_earlier`）が出たら、人が当日の発表を確かめる。 |
 | 繰下げで当日のfreezeが学習より早くなる | 大きな繰下げでは古い時点の情報で予測・購入案を出す | 変更の約87%は+1分。大きな繰下げのレースは、人が当日の発表を見て購入を判断する。 |
 | 繰下げのあった先の重賞の購入が台帳の確認に間に合わない | 後の重賞の購入案の上限が残りの予算を多く見積もる | 先の重賞の発走時刻が変わったら、人は変更後の発売締切の後に台帳を確認する。 |
-| `ARCHIVE_CAPTURE_LOG`の列追加後に古いコードへ戻す | 旧コードの列完全一致検査がDBを拒否する。DBの複製を戻すと当日の取得を失う | 当日の取得を失わない切り戻しの方法を実装で決める。 |
+| `ARCHIVE_CAPTURE_LOG`の列追加後に古いコードへ戻す | 旧コードの列完全一致検査がDBを拒否する。DBの複製を戻すと当日の取得を失う | 行を残して`effective_start_at`の列だけを削除してから戻す（Rollback）。 |
 
 ## Security / Privacy Impact
 
@@ -278,43 +291,41 @@ Reason not selected:
 
 ## Operational Impact
 
-当日のrace-day-oddsは、起動、再開、各時点の前に`0B14`を確認する。確認の失敗と繰上げはstderrに出て、
+当日のrace-day-oddsは、起動・再開のときに蓄積した変更を復元し、各時点の前に`0B14`を確認する。確認の失敗と繰上げはstderrに出て、
 TC確認の結果は永続する。繰上げの永続の印があるレースは、当日の特徴量、PL予測、購入案を保留する。
 
 ## Migration / Rollback
 
 ### Migration
 
-実装時に、既存の`ARCHIVE_CAPTURE_LOG`へ`effective_start_at`を1回だけ追加する。既存行は`NULL`とし、
-`scheduled_start_at`の意味を変更しない。TC確認の記録、TC行の永続、繰上げの印の形式は、実装で決める。
+race-day-oddsの最初の書込みで、24列の`ARCHIVE_CAPTURE_LOG`の末尾へ`effective_start_at`を1回だけ追加する。
+既存行は`NULL`とし、`scheduled_start_at`の意味を変更しない。`ARCHIVE_TC_INFO`・`ARCHIVE_TC_CHECK_LOG`は最初の
+TC確認で作られる。手作業の移行はない。
 
 ### Rollback
 
-当日の取得は発走の後には取り直せないため、切り戻しはそれを失わない方法で行う。具体的な手順は実装で決め、
-このADRをAcceptedにするときに書き足す（「実装で決める事項」）。
+当日の取得は発走の後には取り直せないため、DBの複製は戻さず、行を残したまま追加の列だけを削除する。
+race-day-oddsと他の取得モードが動いていないときに、raw DBを複製してから、SQLite 3.35以上で
+`ALTER TABLE "ARCHIVE_CAPTURE_LOG" DROP COLUMN "effective_start_at"`を実行し、列の並び（24列）と行数を確かめてから
+古いコードへ戻す。`ARCHIVE_TC_INFO`・`ARCHIVE_TC_CHECK_LOG`は古いコードが読まないため残してよい。`held`の行は
+古いコードでは`running`以外の終端の状態として扱われる。手順は`docs/race-day-operation.md`に記す。
 
 ## Documentation Changes
 
-このADRをAcceptedにする実装PRで、該当する文書を更新する。
+PR #116で次の文書を更新した。
 
-- [ ] `docs/decisions/ADR-032-capture-race-day-odds-for-all-bet-types.md`
-- [ ] `docs/decisions/ADR-037-build-race-day-reference-features-after-freeze.md`
-- [ ] `docs/decisions/ADR-039-publish-race-day-pl-probabilities-for-graded-races.md`
-- [ ] `docs/decisions/ADR-041-keep-freeze-at-five-minutes-and-present-by-sales-close.md`
-- [ ] `docs/decisions/ADR-046-record-actual-purchases-and-cap-proposals-by-them.md`
-- [ ] `docs/decisions/ADR-047-connect-wide-and-exacta-race-day-odds-to-expected-value-decisions.md`
-- [ ] `docs/table-definition/ARCHIVE_CAPTURE_LOG.md`（`effective_start_at`）と、`ARCHIVE_CAPTURE_LOG`を書き出すレース別のParquet（`snapshot_builder`）の文書
-- [ ] TC確認の記録とTC行の永続に新しい表を置くなら、その定義書。`0B14`が作る`RT_*`の表の扱い
-- [ ] `ARCHITECTURE.md`（race-day-oddsの「発走時刻の変更には追従しない」）
-- [ ] `README.md`のrace-day-oddsの説明と、当日の特徴量・PL予測（「前日夜のsnapshotの後の発走時刻の変更は検出しない（#31）」と保留の理由の一覧）・購入案の説明
-- [ ] 当日の運用文書と、実装で変更するそのほかの保存形式の文書
-- [ ] このADRの「実装で決める事項」を、決めた内容で本文へ書き足す
+- [x] ADR-032・037・039・041・046・047の`Superseded by`とDecision History（このADRとの範囲）
+- [x] ADR-040 Amendment 1（`latest`の速報系の取得をやめる）
+- [x] `docs/table-definition/ARCHIVE_CAPTURE_LOG.md`（`effective_start_at`・`held`）、`ARCHIVE_TC_INFO.md`・`ARCHIVE_TC_CHECK_LOG.md`の新しい定義書と一覧
+- [x] `ARCHITECTURE.md`、`README.md`（race-day-odds・`latest`・PL予測の説明）、`docs/race-day-operation.md`（当日の動作と切り戻し）
+- [x] `docs/specification.md`と`docs/implementation-design.md`のDEC-12
 
 ## Follow-up Actions
 
-- [ ] #31から引き継ぐ1つのIssueで、Implementation Notesの段階1〜4（race-day-odds、3つの常駐CLIの保留、ADR-047の評価での時点のずれの扱い）を1つのPRで実装し、このADRをAcceptedにする。
+- [x] Implementation Notesの1〜4をPR #116で実装し、このADRをAcceptedにした。
+- [ ] マージの後の最初の開催日に、TC確認の所要時間、日中の変更の発表、stderrと`ARCHIVE_TC_CHECK_LOG`を人が照合する。
 - [ ] 必要なら後続の実装前に、`0B14`の保持期間、当日の速報の到達時点、当日の途中状態を追加観測する。
-- [ ] `latest`の固定日の速報設定を別のIssue候補として評価する。
+- [x] `latest`の固定日の速報設定は、ADR-040 Amendment 1で取得をやめた。
 
 ## Decision History
 
@@ -322,3 +333,4 @@ TC確認の結果は永続する。繰上げの永続の印があるレースは
 | --- | --- | --- |
 | 2026-11-24 | Proposed | `0B14`の`RT_TC_INFO`の実測と中間ゲートの決定に基づき、当日の発走時刻変更の扱いの方針を提案した |
 | 2026-11-25 | Proposed | 人の決定により、方針に絞り仕組みの細部を「実装で決める事項」とした。繰上げの印をその日の間は消さないこと、TC行をその日の中で蓄積すること、実装を1つのPRで行いそのPRでAcceptedにすることを加えた |
+| 2026-11-25 | Accepted | PR #116で決定1〜6を実装し、「実装での決定」を書き足した。決定5の保留の理由を、特徴量`race_day_fetch_held: start_moved_earlier`・PL予測`features_not_published`・購入案`prediction_not_published`とした（人の決定） |

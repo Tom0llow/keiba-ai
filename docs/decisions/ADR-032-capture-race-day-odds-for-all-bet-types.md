@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: #27, #29（Amendment 1）, #37（Amendment 2）, #79（Amendment 3）
 - Supersedes: N/A
-- Superseded by: N/A
+- Superseded by: [ADR-049](ADR-049-handle-race-day-start-time-changes.md)（発走時刻変更に追従しない取得予定、同じRisks行、取得予定の更新を送るFollow-upのみ）
 
 ---
 
@@ -48,7 +48,7 @@ historical-oddsは`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`の行�
      「同じ列名と列順」の例外である。
    - 既存の`ARCHIVE_O1_ODDS_TANFUKUWAKU`/`ARCHIVE_O2_ODDS_UMAREN`へは書き込まない。
 3. 取得×DataSpecごとに1行を`ARCHIVE_CAPTURE_LOG`（全列`TEXT`）へ記録する。予定・開始・完了のUTC時計、
-   状態（`running`/`archived`/`no_data`/`failed`/`skipped_late`/`interrupted`）、理由、process終了コード、
+   状態（`running`/`archived`/`no_data`/`failed`/`skipped_late`/`interrupted`。ADR-049で`held`を追加）、理由、process終了コード、
    API名と戻り値、親の`headDataKubun`/`HappyoTime`、観測行数と挿入行数を持つ。
 4. 取得結果の分類はADR-013と同じとする。fatal specは`failed/jvlink_error`、空のstagingは
    `no_data_specs`の証跡がある場合だけ`no_data/jvopen_no_data`、証跡がなければ
@@ -302,3 +302,4 @@ Reason not selected:
 | 2026-11-11 | Accepted | Amendment 1: 実行タイムアウト、実行XMLの起動時検証と`running`確定前の生成、`--recover`を追加 |
 | 2026-11-12 | Accepted | Amendment 2: freezeの時刻の0B41/0B42の予測用の取得と、レース別Parquetへの公開を追加（ADR-037） |
 | 2026-11-20 | Accepted | Amendment 3: `JVOpen`/`JVRTOpen`の`-211`・`-303`で残りの取得を実行せずに停止する挙動を追加（#79） |
+| 2026-11-25 | Accepted | ADR-049が、発走時刻変更に追従しない取得予定（決定）、同じRisks行、取得予定の更新を送るFollow-upを置き換えた（TC確認、`kind="capture"`の再計画、TC確認の記録、`effective_start_at`、繰上げの保留の印）。取得記録の`status`（決定の一覧）に`held`（繰上げで予測用の取得を保留）を加えた |

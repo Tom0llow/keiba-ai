@@ -46,6 +46,7 @@ class JVLinkSettingBuilder:
         *,
         source: Path | None = None,
         race_key: RaceKeyLike | None = None,
+        race_date: date | None = None,
     ) -> Path:
         """Apply one profile to the seed or a persisted runtime setting."""
         source_path = self._seed_setting if source is None else source.expanduser().resolve()
@@ -75,8 +76,12 @@ class JVLinkSettingBuilder:
                 profile.start_datetime,
                 profile.start_datetimes,
             )
+        if race_key is not None and race_date is not None:
+            raise ValueError("realtime setting cannot use both a race key and a date key")
         if race_key is not None:
             _set_race_key(realtime, profile.realtime_data_specs, race_key)
+        if race_date is not None:
+            _set_date_key(realtime, profile.realtime_data_specs, race_date)
 
         destination = destination.expanduser().resolve()
         destination.parent.mkdir(parents=True, exist_ok=True)
@@ -169,11 +174,27 @@ def _set_race_key(
         key = data_spec_setting.find("JVRaceKey")
         if key is None:
             raise ValueError(f"{data_spec} setting must contain a JVRaceKey")
+        if data_spec_setting.find("JVKaisaiDateKey") is not None:
+            raise ValueError(f"{data_spec} setting must not contain both realtime keys")
         _set_required_text(key, "KaisaiDate", race_key.race_date.isoformat() + "T00:00:00")
         _set_required_text(key, "JyoCD", race_key.jyo_code)
         _set_required_text(key, "Kaiji", race_key.kaiji)
         _set_required_text(key, "Nichiji", race_key.nichiji)
         _set_required_text(key, "RaceNum", race_key.race_number)
+
+
+def _set_date_key(realtime: ET.Element, enabled_specs: frozenset[str], race_date: date) -> None:
+    settings = _required_child(realtime, "DataSpecSettings")
+    for data_spec_setting in settings.findall("JVDataSpecSetting"):
+        data_spec = data_spec_setting.findtext("DataSpec")
+        if data_spec not in enabled_specs:
+            continue
+        key = data_spec_setting.find("JVKaisaiDateKey")
+        if key is None:
+            raise ValueError(f"{data_spec} setting must contain a JVKaisaiDateKey")
+        if data_spec_setting.find("JVRaceKey") is not None:
+            raise ValueError(f"{data_spec} setting must not contain both realtime keys")
+        _set_required_text(key, "KaisaiDate", race_date.isoformat() + "T00:00:00")
 
 
 def verify_realtime_race_key(
@@ -214,9 +235,42 @@ def verify_realtime_race_key(
         key = data_spec_setting.find("JVRaceKey")
         if key is None:
             raise ValueError(f"{data_spec} setting must contain a JVRaceKey")
+        if data_spec_setting.find("JVKaisaiDateKey") is not None:
+            raise ValueError(f"{data_spec} setting must not contain both realtime keys")
         for tag, value in expected.items():
             if key.findtext(tag) != value:
                 raise ValueError(f"generated {data_spec} JVRaceKey.{tag} does not match the race")
+    missing = data_specs - found
+    if missing:
+        raise ValueError(f"setting is missing data specs: {', '.join(sorted(missing))}")
+
+
+def verify_realtime_date_key(setting: Path, data_specs: frozenset[str], race_date: date) -> None:
+    """Check that a generated setting enables the requested DataSpecs for one date."""
+    details = _required_child(ET.parse(setting).getroot(), "Details")
+    realtime = _required_child(details, "JVRealTimeDataUpdateSetting")
+    if realtime.findtext("IsEnabled") != "true":
+        raise ValueError("generated setting does not enable realtime updates")
+    expected = race_date.isoformat() + "T00:00:00"
+    found: set[str] = set()
+    for data_spec_setting in _required_child(realtime, "DataSpecSettings").findall(
+        "JVDataSpecSetting"
+    ):
+        data_spec = data_spec_setting.findtext("DataSpec")
+        if data_spec not in data_specs:
+            continue
+        found.add(data_spec)
+        if data_spec_setting.findtext("IsEnabled") != "true":
+            raise ValueError(f"generated setting does not enable {data_spec}")
+        key = data_spec_setting.find("JVKaisaiDateKey")
+        if key is None:
+            raise ValueError(f"{data_spec} setting must contain a JVKaisaiDateKey")
+        if data_spec_setting.find("JVRaceKey") is not None:
+            raise ValueError(f"{data_spec} setting must not contain both realtime keys")
+        if key.findtext("KaisaiDate") != expected:
+            raise ValueError(
+                f"generated {data_spec} JVKaisaiDateKey.KaisaiDate does not match the date"
+            )
     missing = data_specs - found
     if missing:
         raise ValueError(f"setting is missing data specs: {', '.join(sorted(missing))}")

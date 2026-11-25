@@ -148,8 +148,13 @@ realtime_data_specs = ["0B31", "0B32", "0B33", "0B34", "0B35", "0B36"]
 offsets_minutes = [30, 10, 5, 2]
 late_tolerance_seconds = 60
 execution_timeout_seconds = 120
+tc_check_timeout_seconds = 20
+tc_check_lead_seconds = 40
 prediction_offset_minutes = 5
 ```
+
+`tc_check_timeout_seconds`と`tc_check_lead_seconds`は、発走時刻の変更の確認（TC確認）の上限の秒数と、各時点の何秒前に
+確認するかで、どちらも必須である。`tc_check_lead_seconds`は`tc_check_timeout_seconds`より大きくする（[ADR-049](docs/decisions/ADR-049-handle-race-day-start-time-changes.md)）。
 
 `execution_timeout_seconds`は、1回の取得でJVLinkToSQLiteを待つ上限の秒数で、必須である。超えた取得は
 `failed/jvlink_error`と記録して次の取得へ進む。ただし、`JVOpen`/`JVRTOpen`が`-211`・`-303`を返した取得は、記録した後に
@@ -240,7 +245,7 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   うち、現在のarchiveに確定の行（`headDataKubun`の`4`・`5`）がないものだけを受け付ける。当日の予測用の取得の行だけがある
   項目も受け付ける（ADR-013 Amendment 1）。
 - `--retrieve --mode=latest`: rawデータを更新してから、更新した完全なParquet snapshotを
-  公開する。RACEに加えて、当日の特徴量が読む坂路調教（SLOP→`NL_HC_HANRO`）・ウッドチップ調教
+  公開する。normalの差分だけを取得し、速報系は取得しない（ADR-040 Amendment 1）。RACEに加えて、当日の特徴量が読む坂路調教（SLOP→`NL_HC_HANRO`）・ウッドチップ調教
   （WOOD→`NL_WC_WOOD`）・競走馬マスタ（DIFN→`NL_UM_UMA`）も差分取得する（ADR-040）。BLDN・DIFFは取得しない（特徴量は
   `NL_UM_UMA`の親のIDだけを読み、DIFNがそれを更新するので、前日夜に実行する`latest`の取得を短く保つ）。
   これらの種別の読込位置は`data/runtime/jvlink/latest.xml`に保存され、`[latest.normal_start_floors]`より前の位置は
@@ -253,7 +258,14 @@ uv run python src/main.py --retrieve --mode=race-day-odds --recover
   保存する。当日の`NL_RA_RACE`は、前日の夜の`latest`で取得しておく。取得ごとに
   `race-day-odds capture <capture_id> <race> -<offset>m <spec>=<status> ...`を出力し、最後の行に件数の要約を
   JSONで出す。失敗があれば終了コード1、Ctrl+Cでは130となる。予定時刻を`late_tolerance_seconds`より過ぎた取得は
-  `skipped_late`とし、発走時刻の変更には追従しない。最初の取得の前に実行XMLを一度生成して検証し、設定に誤りが
+  `skipped_late`とする。各時点の`tc_check_lead_seconds`前に`0B14`（その日の日付のキー）を要求して発走時刻の変更を
+  読み（TC確認。結果は`ARCHIVE_TC_CHECK_LOG`、変更の行は`ARCHIVE_TC_INFO`に残し、`0B14`の受け皿の`RT_*`の表は削除する）、
+  まだ行っていない`0B31`〜`0B36`の取得を、最も新しい発表の変更後の発走時刻で計画し直す（取得記録の`effective_start_at`）。
+  予測用の取得（0B41/0B42）は出馬表の予定のままとする。確認の時間がないときは確認を省略して記録し、取得を遅らせない。
+  予測用の取得の前に繰上げが分かったレースは、予測用の取得を行わずに`held`（`start_moved_earlier`）と記録して公開し、
+  当日の特徴量・予測・購入案はそのレースを保留する。予測用の取得の後に分かった繰上げは、stderrに
+  `race-day-odds start moved earlier for race <race_id>: ...`を出すだけで、公開済みの出力は取り消さない（ADR-049）。
+  最初の取得の前に実行XMLを一度生成して検証し、設定に誤りが
   あれば取得を始めずに、stderrへ`race-day-odds setup failed: ...`、stdoutへ要約を出して終了コード1で終わる。
   seedのファイル自体がない場合は、従来どおり起動時に例外で終わる（`--recover`も同じ）。
   `JVOpen`または`JVRTOpen`が`-211`・`-303`を返した取得は記録した後に残りの取得を実行せず、stderrへ`race-day-odds stopped: <stop_reason>; see docs/race-day-operation.md`を出してstdoutへ要約JSONを出し、終了コード1で終わる。`--date`で起動し直すと、予定時刻を過ぎた取得は`skipped_late`となる。
@@ -697,7 +709,9 @@ uv run python src/main.py model predict-pl-live `
     不備（馬番・`horse_id`の重複など）は、構築では市場の検査の後に判定されるので、市場の理由と異なることがある
 - stdoutには、レースごとに1行のJSON（`race_id`・`status`（`predicted`/`held`/`out_of_scope`）・`stage`・`reason`・`detail`・`output`・
   `after_sales_close`・`win`）を出す。stderrには最後に要約を出す。
-- 前日夜のsnapshotの後の発走時刻の変更は検出しない。予測と`after_sales_close`は変更前の予定による（#31）。
+- 前日夜のsnapshotの後の発走時刻の変更は検出しない。予測と`after_sales_close`は変更前の予定による（繰下げなら変更後の発売締切より前に出る）。
+  予測用の取得の前に繰上げが分かったレースは、特徴量が`race_day_fetch_held: start_moved_earlier`で保留されるため、
+  `features_not_published`で保留する。購入案は、そのレースを`prediction_not_published`で保留する（ADR-049）。
 - モデル・snapshot（対象日のレースがない場合を含む）・最も早いfreezeとモデルのラベルの境界の検査に失敗すると、`--output`を作らずに終了コード1で終わる。
   監視中の致命的な失敗は1、Ctrl+Cは130で、公開済みのレースは残る。再起動では新しい`--output`を指定する。
 

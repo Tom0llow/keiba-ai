@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #54、Refs #57・#30・#31・#59・#66・#69
 - Supersedes: ADR-040の決定3（当日の順序）のみ。ADR-037・ADR-039のOperational Impactにある当日の朝の`latest`の記述も置き換える
-- Superseded by: N/A
+- Superseded by: [ADR-049](ADR-049-handle-race-day-start-time-changes.md)（発走時刻変更の追従を#31へ送る記述のみ）
 
 ---
 
@@ -194,3 +194,4 @@ Reason not selected:
 | --- | --- | --- |
 | 2026-11-14 | Accepted | freezeを発走5分前に保ち、提示期限を発売締切とした |
 | 2026-11-15 | Accepted | 2日分の計測を記録し、freezeを5分前のまま維持した |
+| 2026-11-25 | Accepted | ADR-049が、発走時刻変更の追従を#31へ送る記述を置き換えた。freezeを発走5分前、提示期限を発売締切とする決定は変えない |

@@ -629,6 +629,7 @@ def test_race_day_odds_setup_error_exits_1_with_message_and_summary() -> None:
         "archived": 0,
         "no_data": 0,
         "failed": 0,
+        "held": 0,
         "skipped_late": 0,
         "interrupted": 2,
     }

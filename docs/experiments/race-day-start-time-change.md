@@ -139,7 +139,7 @@ TCInfoBeforeFun
 JVLinkToSQLiteの初期設定と`data/runtime/jvlink/latest.xml`のいずれも、`0B12`・`0B15`・`0B14`の
 `KaisaiDate`を`2026-03-02`、`TimeIntervalUnit`を`P121DT18H`としていた。そのため`latest`は固定された
 過去の日付を要求する。raw DBには、速報の`WE`・`AV`・`JC`・`TC`・`CC`に対応する`RT_`または`NL_`の表はない。
-この設定は別の後続Issue候補である。
+この取得は、同じPR #116でADR-040 Amendment 1としてやめた。
 
 ## 限界と未観測範囲
 

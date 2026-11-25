@@ -1988,6 +1988,10 @@ def _race_day_seed(path: Path) -> None:
         f"<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>{spec}</DataSpec>{key}"
         "</JVDataSpecSetting>"
         for spec in sorted(LIVE_SPECS)
+    ) + (
+        "<JVDataSpecSetting><IsEnabled>false</IsEnabled><DataSpec>0B14</DataSpec>"
+        "<JVKaisaiDateKey><KaisaiDate>2026-03-02T00:00:00+09:00</KaisaiDate></JVKaisaiDateKey>"
+        "</JVDataSpecSetting>"
     )
     path.write_text(
         '<?xml version="1.0" encoding="utf-8"?><JVLinkToSQLiteSetting><Details>'
@@ -2000,6 +2004,19 @@ def _race_day_seed(path: Path) -> None:
         "</Details></JVLinkToSQLiteSetting>",
         encoding="utf-8",
     )
+
+
+class _NoTCRunner:
+    """Answer each 0B14 time-change check with JV-Link's no-data return."""
+
+    def execute(self, setting: Path, *, skip_last_modified_update: bool = False) -> object:
+        assert setting.name == "race-day-tc.xml"
+        return JVLinkExecutionResult(
+            {"0B14": -1},
+            no_data_specs=frozenset({"0B14"}),
+            api_results={"0B14": ("JVRTOpen", -1)},
+            process_returncode=0,
+        )
 
 
 def _run_race_day_odds(tmp_path: Path, raw: dict[str, object], processed: Path) -> None:
@@ -2035,6 +2052,7 @@ def _run_race_day_odds(tmp_path: Path, raw: dict[str, object], processed: Path) 
             **common,  # type: ignore[arg-type]
             realtime_data_specs=frozenset({"0B41", "0B42"}),
         ),
+        tc_runner=_NoTCRunner(),  # type: ignore[arg-type]
     )
     retriever.retrieve(END, publisher=SnapshotBuilder(paths).update_race)
 

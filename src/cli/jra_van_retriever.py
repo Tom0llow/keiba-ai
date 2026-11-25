@@ -348,6 +348,7 @@ def retrieve_race_day_odds(
         "archived": 0,
         "no_data": 0,
         "failed": 0,
+        "held": 0,
         "skipped_late": 0,
         "interrupted": 0,
     }

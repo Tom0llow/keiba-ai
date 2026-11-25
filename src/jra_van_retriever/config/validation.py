@@ -147,6 +147,12 @@ def validate_race_day_odds_profile(profile: RaceDayOddsProfile) -> None:
         raise ValueError("race-day-odds late_tolerance_seconds must be a positive integer")
     if type(profile.execution_timeout_seconds) is not int or profile.execution_timeout_seconds <= 0:
         raise ValueError("race-day-odds execution_timeout_seconds must be a positive integer")
+    if type(profile.tc_check_timeout_seconds) is not int or profile.tc_check_timeout_seconds <= 0:
+        raise ValueError("race-day-odds tc_check_timeout_seconds must be a positive integer")
+    if type(profile.tc_check_lead_seconds) is not int or profile.tc_check_lead_seconds <= 0:
+        raise ValueError("race-day-odds tc_check_lead_seconds must be a positive integer")
+    if profile.tc_check_lead_seconds <= profile.tc_check_timeout_seconds:
+        raise ValueError("race-day-odds tc_check_lead_seconds must exceed tc_check_timeout_seconds")
     offset = profile.prediction_offset_minutes
     if offset is not None and (
         type(offset) is not int or not MIN_PREDICTION_OFFSET <= offset <= MAX_PREDICTION_OFFSET
@@ -171,3 +177,13 @@ def validate_race_day_prediction_profile(profile: JVLinkProfile) -> None:
         raise ValueError("race-day prediction fetch normal/setup data specs must be empty")
     if profile.realtime_data_specs != PREDICTION_SPECS:
         raise ValueError("race-day prediction fetch requires exactly 0B41 and 0B42")
+
+
+def validate_race_day_tc_profile(profile: JVLinkProfile) -> None:
+    """Validate the code-built 0B14 profile used for time-change checks."""
+    if profile.normal_update or profile.setup_update or not profile.realtime_update:
+        raise ValueError("race-day TC check requires only realtime updates")
+    if profile.normal_data_specs or profile.setup_data_specs:
+        raise ValueError("race-day TC check normal/setup data specs must be empty")
+    if profile.realtime_data_specs != frozenset({"0B14"}):
+        raise ValueError("race-day TC check requires exactly 0B14")

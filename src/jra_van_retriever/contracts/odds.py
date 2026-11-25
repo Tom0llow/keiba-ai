@@ -35,3 +35,15 @@ CAPTURE_TABLES = {
     ),
 }
 ARCHIVE_CAPTURE_LOG = "ARCHIVE_CAPTURE_LOG"
+ARCHIVE_TC_INFO = "ARCHIVE_TC_INFO"
+ARCHIVE_TC_CHECK_LOG = "ARCHIVE_TC_CHECK_LOG"
+
+# 0B14 can create these response tables. They are discarded after each successful
+# check, while the TC rows themselves are accumulated in ARCHIVE_TC_INFO.
+TC_STAGING_TABLES = (
+    "RT_TC_INFO",
+    "RT_AV_INFO",
+    "RT_WE_WEATHER",
+    "RT_JC_INFO",
+    "RT_CC_INFO",
+)
