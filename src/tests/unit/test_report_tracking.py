@@ -463,6 +463,17 @@ def test_overlong_tag_value_is_rejected_before_tracking() -> None:
         report_record(data, report_dir="d" * 8001, file_sha256=files)
 
 
+def test_overlong_variant_param_is_rejected_instead_of_truncated() -> None:
+    report = pl_report()
+    variants = cast("list[dict[str, object]]", report["variants"])
+    variants[1]["excluded_columns"] = ["c" * 100] * (MAX_PARAM_LENGTH // 100)
+
+    with pytest.raises(
+        ValueError, match=f"param 'excluded_columns' is longer than {MAX_PARAM_LENGTH}"
+    ):
+        _record(report)
+
+
 def test_report_hash_must_match_the_listed_report_file() -> None:
     data = json.dumps(pl_report()).encode()
 

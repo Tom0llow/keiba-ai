@@ -795,7 +795,7 @@ uv run mlflow ui --backend-store-uri sqlite:///output/mlflow/mlflow.db
   （tag `report_sha256`）をたどれる。
 - 同じreportをもう一度記録すると、何もせずに`already recorded`を出す。途中で失敗したrunは`FAILED`になり（終了コード1、Ctrl+Cは130）、
   記録し直せる。
-- 既定の保存先は`output/mlflow/mlflow.db`と`output/mlflow/artifacts`で、`--database`・`--artifact-root`で変えられる（cwdの`output/`の下に限る）。
+- 既定の保存先は`output/mlflow/mlflow.db`と`output/mlflow/artifacts`で、`--database`・`--artifact-root`で変えられる（cwdの`output/`の下で、`--report-dir`と重ならないパスに限る）。
   `--report-dir`のファイルは変えず、Parquetは複製しない。runのtagには出力ディレクトリの絶対パスが入るので、MLflowの内容は外へ共有しない。
 
 ## 実購入額を台帳に記録する

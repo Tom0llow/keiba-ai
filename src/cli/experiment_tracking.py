@@ -45,6 +45,10 @@ def model_track_report(
         if not report_dir.is_dir():
             raise ValueError("--report-dir must be an existing directory")
         source = report_dir.resolve()
+        for option, path in (("--database", database_path), ("--artifact-root", artifact_path)):
+            # The published output directory is read-only; MLflow must not write into it.
+            if path.is_relative_to(source) or source.is_relative_to(path):
+                raise ValueError(f"{option} must not overlap --report-dir")
         report_path = source / REPORT_FILE
         if not report_path.is_file():
             raise ValueError(f"--report-dir has no {REPORT_FILE}")

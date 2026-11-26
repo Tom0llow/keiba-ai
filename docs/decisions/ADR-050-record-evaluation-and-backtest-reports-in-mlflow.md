@@ -30,7 +30,7 @@ PLの評価は約1時間、バックテストは数分かかる。どちらの�
 
 1. **事後の記録のCLI。** `model track-report --report-dir <出力ディレクトリ>`を加える。公開済みの`report.json`を読み、
    ローカルのMLflow（既定は`output/mlflow/mlflow.db`、artifactは`output/mlflow/artifacts`）にrunとして記録する。
-   `--database`と`--artifact-root`は作業ディレクトリの`output/`の下の異なるパスに限る（ADR-027と同じ規則）。
+   `--database`と`--artifact-root`は作業ディレクトリの`output/`の下の異なるパスに限り（ADR-027と同じ規則）、`--report-dir`と重なるパス（その中、またはそれを含むパス）は拒否する。
    `model evaluate-pl`・`model backtest-betting`などの既存のCLIはMLflowを呼ばず、振る舞いも変えない。
 2. **対象の形式。** `pl_probability_evaluation` v1と`ev_betting_backtest` v2だけを記録する。それ以外の形式・版、必要な項目が
    欠けたreport（重賞の集合`race_subsets`を持たない初期のv1のPLの評価を含む）、MLflowが受け付けないキー（出力ディレクトリの
@@ -42,7 +42,7 @@ PLの評価は約1時間、バックテストは数分かかる。どちらの�
      PLの評価では`datamart_manifest_sha256`・`datamart_contract_sha256`、バックテストでは`pl_report_sha256`・
      `pl_predictions_sha256`・`pl_variant`も記録し、バックテストのrunを元のPLの評価のrunとtagで照合できるようにする。
      paramsは`config`をドット区切りで平らにした値（文字列以外はJSON）とし、6,000文字を超える値は記録せずtag
-     `params_omitted`にキーを残す。artifactは`report.json`の複製と`config.json`とする。
+     `params_omitted`にキーを残す（`config`以外のparamが6,000文字を超えるときは、MLflowが切り詰めないよう記録の前に拒否する）。artifactは`report.json`の複製と`config.json`とする。
    - PLの評価では、variantごとに子run（tag `run_role: variant`、`mlflow.parentRunId`で親に結ぶ）を作り、pooled・重賞の
      市場との比較（raw・calibratedの6指標それぞれの`model_mean`・`market_mean`・`mean_difference`・区間）、段階別NLL、
      test年をstepとしたfoldごとの差・`best_iteration`・`best_valid_nll`・温度を記録する。同じ指標名でvariantどうしを並べて比べられる。

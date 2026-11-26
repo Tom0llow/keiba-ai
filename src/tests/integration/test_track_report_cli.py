@@ -7,6 +7,7 @@ import json
 import subprocess
 import sys
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 import pytest
@@ -109,6 +110,30 @@ def test_backtest_report_is_recorded_as_one_run_with_yearly_steps(workdir: Path)
     assert run.data.metrics["all/recovery_rate"] == 0.9
     history = client.get_metric_history(run.info.run_id, "method/pl_mid/flat_recovery_rate")
     assert sorted((item.step, item.value) for item in history) == [(2024, 0.7), (2025, 0.75)]
+
+
+def test_params_and_tags_beyond_one_log_batch_are_all_recorded(workdir: Path) -> None:
+    report = backtest_report()
+    config = cast("dict[str, object]", report["config"])
+    config["many"] = {f"key_{index:03}": index for index in range(250)}
+    files = [f"part_{index:03}.parquet" for index in range(150)]
+    report_dir = _report_dir(workdir, "backtest-wide", report, *files)
+
+    result = _track(report_dir)
+
+    assert result.exit_code == 0, result.output
+    client = _client(workdir)
+    experiment = client.get_experiment_by_name("betting-backtest")
+    assert experiment is not None
+    (run,) = client.search_runs([experiment.experiment_id])
+    params = run.data.params
+    assert {key for key in params if key.startswith("many.")} == {
+        f"many.key_{index:03}" for index in range(250)
+    }
+    assert params["many.key_249"] == "249"
+    hashes = _hashes(report_dir)
+    for name in files:
+        assert run.data.tags[f"file_sha256.{name}"] == hashes[name]
 
 
 def test_recording_the_same_report_again_adds_no_run(workdir: Path) -> None:
@@ -226,6 +251,29 @@ def test_tracking_paths_outside_output_or_equal_are_rejected(
     assert message in result.stderr
     assert not (workdir / "output/mlflow").exists()
     assert not (workdir / "output/same").exists()
+
+
+@pytest.mark.parametrize(
+    ("options", "message"),
+    [
+        (("--database", "output/pl-eval/mlflow.db"), "--database must not overlap"),
+        (("--artifact-root", "output/pl-eval/artifacts"), "--artifact-root must not overlap"),
+        (("--artifact-root", "output/pl-eval"), "--artifact-root must not overlap"),
+        (("--artifact-root", "output"), "--artifact-root must not overlap"),
+    ],
+)
+def test_tracking_paths_overlapping_the_report_dir_are_rejected(
+    workdir: Path, options: tuple[str, ...], message: str
+) -> None:
+    report_dir = _report_dir(workdir, "pl-eval", pl_report(), "predictions.parquet")
+    before = _hashes(report_dir)
+
+    result = _track(report_dir, *options)
+
+    assert result.exit_code == 1
+    assert message in result.stderr
+    assert _hashes(report_dir) == before
+    assert not (workdir / "output/mlflow").exists()
 
 
 def test_missing_or_unsupported_report_is_rejected_before_mlflow(workdir: Path) -> None:

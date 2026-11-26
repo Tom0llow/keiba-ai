@@ -388,6 +388,10 @@ def _validate_run(run: RunRecord) -> None:
     for key, value in run.tags.items():
         if len(value) > MAX_TAG_LENGTH:
             raise ValueError(f"run {run.name!r} tag {key!r} is longer than {MAX_TAG_LENGTH}")
+    # MLflow truncates an over-long param with only a warning; config params are omitted earlier.
+    for key, value in run.params.items():
+        if len(value) > MAX_PARAM_LENGTH:
+            raise ValueError(f"run {run.name!r} param {key!r} is longer than {MAX_PARAM_LENGTH}")
 
 
 def _append(metrics: list[MetricValue], key: str, value: object, step: int = 0) -> None:
