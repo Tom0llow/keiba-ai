@@ -7,6 +7,7 @@ from collections.abc import Callable
 from dataclasses import replace
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
+from typing import cast
 
 import numpy as np
 import pytest
@@ -54,11 +55,21 @@ def _source() -> dict[str, object]:
 
 @pytest.fixture(scope="module")
 def model(tmp_path_factory: pytest.TempPathFactory) -> PLModel:
+    return _trained_model(tmp_path_factory, PLVariant("all_columns"))
+
+
+@pytest.fixture(scope="module")
+def subset_model(tmp_path_factory: pytest.TempPathFactory) -> PLModel:
+    # The operational default excludes datamart columns (ADR-051 without_added_columns).
+    return _trained_model(tmp_path_factory, PLVariant("without_noise", ("noise",)))
+
+
+def _trained_model(tmp_path_factory: pytest.TempPathFactory, variant: PLVariant) -> PLModel:
     arrays = synthetic_race_arrays((2020, 2021, 2022, 2023), races_per_year=60, seed=11)
     settings = PLTrainingSettings(
         train_start_year=2020,
         valid_year=2022,
-        variant=PLVariant("all_columns"),
+        variant=variant,
         lightgbm=pl_parameters(),
         num_boost_round=80,
         early_stopping_rounds=10,
@@ -210,6 +221,25 @@ def test_a_prediction_holds_every_horse_and_combination_in_number_order(model: P
     )
     assert sum(entry["probability"] for entry in combos["trifecta"]) == pytest.approx(1.0)
     assert sum(entry["probability"] for entry in combos["wide"]) == pytest.approx(3.0)
+
+
+def test_a_model_without_a_datamart_column_predicts_and_ignores_that_column(
+    subset_model: PLModel,
+) -> None:
+    assert subset_model.feature_names == ("signal", "market_feature")
+    target = _target()
+    features = _features(target)
+    blank = replace(features, rows=[{**row, "noise": None} for row in features.rows])
+    changed = replace(
+        features,
+        rows=[{**row, "noise": 1000.0 + index} for index, row in enumerate(features.rows)],
+    )
+    results = [_predict(subset_model, target, value) for value in (features, blank, changed)]
+    assert all(isinstance(result, RacePrediction) for result in results)
+    horses = [cast(RacePrediction, result).payload["horses"] for result in results]
+    # A missing or different excluded column neither holds the race nor changes it.
+    assert horses[1] == horses[0]
+    assert horses[2] == horses[0]
 
 
 def test_the_json_is_strict_sorted_and_reproducible(model: PLModel) -> None:

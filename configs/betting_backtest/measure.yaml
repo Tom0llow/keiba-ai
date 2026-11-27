@@ -1,10 +1,13 @@
 defaults:
   - evaluate
   - _self_
-# Fixed before the measurement (ADR-043). Do not change these values after the measurement.
+# The policy, final_odds and estimation values were fixed before the measurement (ADR-043,
+# ADR-044); do not change them after the measurement. test_years follows the yearly rebuild
+# (ADR-048). pl_variant names the 36-column variant, the same inputs ADR-043 measured as
+# all_columns (ADR-051).
 # Pass processed_root, pl_evaluation_path and the two SHA-256 values with --override.
 # final_odds repeats ADR-042's fixed place_mid settings (configs/final_odds_evaluation/measure.yaml).
-pl_variant: all_columns
+pl_variant: without_added_columns
 test_years: [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
 bet_types: [win, place]
 policy:

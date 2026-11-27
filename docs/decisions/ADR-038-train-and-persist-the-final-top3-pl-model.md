@@ -268,3 +268,4 @@ Reason not selected:
 | 2026-11-12 | Accepted | #71: `predict_scores`の±infの拒否と、書込みの前のmanifestの検証を追記。成果物の形式は変えない |
 | 2026-11-21 | Accepted | Amendment 1: 再学習で欠損の枝の照合に拒否されたら、評価と最終学習の両方に同じ`bin_construct_sample_cnt`を入れ、評価・バックテスト・推定器を計測し直してから学習する（#72） |
 | 2026-11-21 | Accepted | ADR-048が決定2の運用の年の固定を、年1回の作り直しの規則（train 2006〜`Y−2`・valid `Y−1`）に置き換えた。Amendment 1の手順3（今のモデルと推定器で運用を続ける）は、年明けの作り直しでは年`Y−1`の推定器を使えないため、ADR-048の決定9が改めた（#55） |
+| 2026-11-26 | Accepted | [ADR-051](ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)が閉じた数値列を44列にし、最終学習の既定のvariantを元の36列の`without_added_columns`にした。加えた列の採否は年末の作り直しで人間が決める（#83） |

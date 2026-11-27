@@ -145,3 +145,4 @@ Reason not selected: 現在の構築は失敗時にstagingを削除して何も�
 | Date | Status | Notes |
 | --- | --- | --- |
 | 2026-11-21 | Accepted | GATE 1の前に人間が、年1回の全期間再構築、3成果物の同時切替、切替失敗時の購入案停止を決定した |
+| 2026-11-26 | Accepted | [ADR-051](ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)の決定4が、決定7で初回の作り直し後のPRに予定した`configs/betting_backtest/measure.yaml`の注記の書き直しを済ませた。ADR-051の決定5は、加えた列の採否による既定のvariantの変更を、そのPRの項目に加える。ADR-051の閉じた数値列の変更は、決定9の別checkoutの手順で2027年向けの作り直しとして行う（#83） |

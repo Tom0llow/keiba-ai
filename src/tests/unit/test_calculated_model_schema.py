@@ -1,7 +1,9 @@
 """Verify the closed numeric schema and reproducible semantic calculation identity."""
 
 import copy
-from dataclasses import replace
+import hashlib
+import json
+from dataclasses import astuple, replace
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
@@ -18,6 +20,11 @@ from models.dataset.calculated import (
 from models.dataset.rows import FeatureRow, FeatureValue
 from models.dataset.schema import FeatureSchema, validate_feature_names
 from models.dataset.validation import validate_feature_rows
+from tests.closed_column_fixtures import (
+    ADDED_CLOSED_COLUMNS,
+    ORIGINAL_CLOSED_COLUMNS,
+    ORIGINAL_CLOSED_COLUMNS_DEFINITION_SHA256,
+)
 from tests.model_projection_fixtures import SELECTED_COLUMNS
 from tests.observation_fixtures import at, evidence, parameters
 
@@ -129,13 +136,35 @@ def test_closed_numeric_columns_enumerate_every_dynamic_family_in_contract_order
     semantic = CalculationContract.create(p, SELECTED_COLUMNS).settings["parameters"]
     assert isinstance(semantic, dict)
     columns = closed_numeric_columns(semantic)
-    assert len(columns) == 36
-    assert [column.name for column in columns[-16:-12]] == [
+    assert len(columns) == 44
+    assert [column.name for column in columns[20:24]] == [
         f"recent_performance__past_finish_lag{lag}" for lag in range(1, 5)
     ]
     assert columns[18].name == "recent_stability__past_elapsed_sec_mean"
     assert columns[19].name == "within_race_relative__relative_elapsed_sec_rank"
     assert all(resolve_numeric_column(column.name, semantic) == column for column in columns)
+
+
+def test_closed_numeric_columns_keep_the_original_36_and_append_the_added_columns() -> None:
+    columns = closed_numeric_columns({"metric": "elapsed_sec", "lag_count": 4})
+    assert tuple(column.name for column in columns) == (
+        *ORIGINAL_CLOSED_COLUMNS,
+        *ADDED_CLOSED_COLUMNS,
+    )
+    original = json.dumps([astuple(column) for column in columns[:36]], separators=(",", ":"))
+    assert hashlib.sha256(original.encode()).hexdigest() == (
+        ORIGINAL_CLOSED_COLUMNS_DEFINITION_SHA256
+    )
+    assert [column.unit for column in columns[36:]] == [
+        "ordinal",
+        "count",
+        "years",
+        "fraction",
+        *["seconds"] * 4,
+    ]
+    assert columns[40].meaning == (
+        "prior signed finish-time margin (winner: minus margin to second), lag 1"
+    )
 
 
 _METRIC_UNITS = {
@@ -158,14 +187,19 @@ _LAG_FAMILIES = (
 def test_closed_numeric_columns_follow_lag_count_and_metric(lag_count: int, metric: str) -> None:
     columns = closed_numeric_columns({"metric": metric, "lag_count": lag_count})
     names = [column.name for column in columns]
-    # 18 fixed columns, two metric-dependent columns, then lag_count per lag family.
-    assert len(columns) == 18 + 2 + 4 * lag_count
+    # 18 fixed columns, two metric-dependent columns, lag_count per lag family, then the
+    # four added fixed columns and lag_count added signed-gap lags (ADR-051).
+    assert len(columns) == 18 + 2 + 4 * lag_count + 4 + lag_count
     assert names[18] == f"recent_stability__past_{metric}_mean"
     assert names[19] == f"within_race_relative__relative_{metric}_rank"
     assert columns[18].unit == _METRIC_UNITS[metric]
     assert columns[19].unit == "rank"
-    assert names[20:] == [
+    assert names[20 : 20 + 4 * lag_count] == [
         f"{family}_lag{lag}" for family in _LAG_FAMILIES for lag in range(1, lag_count + 1)
+    ]
+    assert names[20 + 4 * lag_count :] == [
+        *ADDED_CLOSED_COLUMNS[:4],
+        *(f"past_racing_ability__past_signed_gap_sec_lag{lag}" for lag in range(1, lag_count + 1)),
     ]
     assert len(set(names)) == len(names)
     settings = {"metric": metric, "lag_count": lag_count}
@@ -173,6 +207,10 @@ def test_closed_numeric_columns_follow_lag_count_and_metric(lag_count: int, metr
         resolve_numeric_column(name, settings) == column
         for name, column in zip(names, columns, strict=True)
     )
+    with pytest.raises(ValueError, match="closed numeric allow-list"):
+        resolve_numeric_column(
+            f"past_racing_ability__past_signed_gap_sec_lag{lag_count + 1}", settings
+        )
 
 
 @pytest.mark.parametrize(

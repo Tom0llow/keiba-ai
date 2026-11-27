@@ -63,7 +63,7 @@ from make_features.reference_raw import (
     result_boundary,
 )
 from make_features.reference_snapshot import CARD_MAPPING_MISMATCH, reference_pedigree
-from models.dataset.calculated import closed_numeric_columns
+from models.dataset.calculated import NumericColumn, closed_numeric_columns
 from models.serialization.reference import prepare_reference_payload
 from models.serialization.reference_datamart import (
     MARKET_NOT_OBSERVED_AFTER_FREEZE,
@@ -72,6 +72,7 @@ from models.serialization.reference_datamart import (
     ReferenceYearOutput,
     label_free_target_cards,
 )
+from tests.closed_column_fixtures import ORIGINAL_CLOSED_COLUMNS
 from tests.reference_fixtures import (
     RICH_TARGET_DAYS,
     ROOT,
@@ -543,6 +544,75 @@ def test_reader_rejects_changed_bytes_and_manifest_contract_changes(
     manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     with pytest.raises(ValueError, match="contract"):
         read_reference_datamart(path, expected_columns=builder.columns)
+
+
+def test_a_datamart_with_the_original_36_column_contract_is_rejected(tmp_path: Path) -> None:
+    # A datamart built before ADR-051 holds the original 36 columns and their contract.
+    def original(settings: dict[str, object]) -> tuple[NumericColumn, ...]:
+        return closed_numeric_columns(settings)[: len(ORIGINAL_CLOSED_COLUMNS)]
+
+    with patch("models.serialization.reference_datamart.closed_numeric_columns", original):
+        path, _, legacy = _write(tmp_path)
+    assert tuple(column.name for column in legacy.columns) == ORIGINAL_CLOSED_COLUMNS
+    current = closed_numeric_columns(legacy.settings)
+    with pytest.raises(ValueError, match="columns differ from the expected closed contract"):
+        read_reference_datamart(path, expected_columns=current)
+
+
+def _consistent_rich_input() -> tuple[dict[str, object], str, str]:
+    """Return the rich input with margins that follow the places, ages that differ by horse,
+    and one target horse that has never started before."""
+    raw = rich_raw_input()
+    tables = cast(dict[str, list[Row]], raw["tables"])
+    for name in ("history_se", "label_se"):
+        for row in tables[name]:
+            place = int(cast(str, row["KakuteiJyuni"]))
+            row["TimeDiff"] = "-002" if place == 1 else f"+{place:03d}"
+    for name in ("history_se", "label_se", "target_se"):
+        for row in tables[name]:
+            row["Barei"] = f"{3 + int(cast(str, row['KettoNum'])[-1]) % 4:02d}"
+    race, debut = _race(RICH_TARGET_DAYS[0], "09"), "2020109999"
+    for name in ("target_se", "label_se"):
+        for row in tables[name]:
+            if _race_id(row) == race and row["KettoNum"] == "2020100001":
+                row["KettoNum"] = debut
+    return raw, race, debut
+
+
+def test_added_columns_carry_the_card_values_and_the_prior_signed_margins() -> None:
+    raw, debut_race, debut = _consistent_rich_input()
+    _, outputs = _build(raw)
+    rows = _rows(outputs)
+    card = {
+        (_race_id(row), cast(str, row["KettoNum"])): row
+        for row in cast(dict[str, list[Row]], raw["tables"])["target_se"]
+    }
+    field_sizes = Counter(race for race, _ in card)
+    gate, field = (
+        "basic_conditions_and_weight__gate_number",
+        "basic_conditions_and_weight__frozen_field_size",
+    )
+    age, top3 = "basic_conditions_and_weight__horse_age_years", "recent_performance__past_top3_rate"
+    gaps = [f"past_racing_ability__past_signed_gap_sec_lag{lag}" for lag in range(1, 5)]
+    finishes = [f"recent_performance__past_finish_lag{lag}" for lag in range(1, 5)]
+    assert len(rows) == 20
+    assert len({row[age] for row in rows.values()}) > 1
+    for key, row in rows.items():
+        entry = card[key]
+        assert row[gate] == float(cast(str, entry["Wakuban"]))
+        assert row[age] == float(cast(str, entry["Barei"]))
+        assert row[field] == float(field_sizes[key[0]])
+        assert (row[top3] is None) == (row["recent_performance__past_win_rate"] is None)
+        for gap, finish in zip(gaps, finishes, strict=True):
+            place = cast(float | None, row[finish])
+            # The winner holds minus its margin to second; the others their margin behind.
+            assert row[gap] == (None if place is None else -0.2 if place == 1 else place / 10)
+    winners = [row for row in rows.values() if row[finishes[0]] == 1]
+    assert winners
+    assert all(row[gaps[0]] == -0.2 for row in winners)
+    first_start = rows[(debut_race, debut)]
+    assert first_start[top3] is None
+    assert all(first_start[gap] is None for gap in gaps)
 
 
 def test_reader_rejects_a_changed_contract_even_with_its_hash_recomputed(tmp_path: Path) -> None:

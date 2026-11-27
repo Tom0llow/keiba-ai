@@ -99,6 +99,9 @@ ADR044_RACES = pa.schema(
 # in 2025 the datamart holds it at target_outcome, in 2024 it is unattributed.
 HELD = race_id(2025, 2)
 
+# The 36-column variant that configs/betting_backtest/measure.yaml selects (ADR-051).
+PL_VARIANT = "without_added_columns"
+
 
 def _race_ids() -> list[str]:
     return [race_id(year, number) for year in YEARS for number in (1, 2, 3)]
@@ -196,7 +199,17 @@ def _write_pl_evaluation(
     path: Path, *, datamart: Path, manifest_sha256: str, ra_sha256: str
 ) -> tuple[str, str]:
     path.mkdir()
-    rows = [row for year in TEST_YEARS for row in prediction_rows(race_id(year, 1))]
+    # The configured variant (measure.yaml pl_variant) holds the probabilities the expected
+    # bets follow. A second variant reverses them; the bets prove it is never read.
+    rows = [
+        row for year in TEST_YEARS for row in prediction_rows(race_id(year, 1), variant=PL_VARIANT)
+    ]
+    for year in TEST_YEARS:
+        decoy = prediction_rows(race_id(year, 1), variant="all_columns")
+        for row, reversed_row in zip(decoy, reversed(decoy), strict=True):
+            rows.append(
+                {**row, **{key: reversed_row[key] for key in ("p_win", "p_top2", "p_top3")}}
+            )
     pq.write_table(pa.Table.from_pylist(rows), path / "predictions.parquet")
     report = {
         "format": "pl_probability_evaluation",
@@ -204,7 +217,10 @@ def _write_pl_evaluation(
         "test_years": list(TEST_YEARS),
         "config": {
             "datamart_path": datamart.as_posix(),
-            "variants": [{"name": "all_columns", "excluded_columns": []}],
+            "variants": [
+                {"name": PL_VARIANT, "excluded_columns": ["fixture_added_column"]},
+                {"name": "all_columns", "excluded_columns": []},
+            ],
         },
         "datamart": {"manifest_sha256": manifest_sha256},
         "race_subsets": {

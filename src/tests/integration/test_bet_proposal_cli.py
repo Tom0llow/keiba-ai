@@ -11,7 +11,7 @@ import hashlib
 import json
 import shutil
 from collections.abc import Callable
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any, cast
@@ -209,11 +209,19 @@ def proposals(tmp_path_factory: pytest.TempPathFactory) -> Proposals:
 
 
 def _estimator(
-    tmp_path: Path, method: Method = "blend_mid", year: int = DAY.year
+    tmp_path: Path, method: Method = "blend_mid", year: int = DAY.year, variant: str | None = None
 ) -> tuple[Path, str]:
     directory = tmp_path / f"estimator-{method}-{year}"
     directory.mkdir()
-    return directory, write_betting_estimator(directory, estimator_record(year, method))
+    record = estimator_record(year, method)
+    if variant is not None:
+        sources = dict(record.sources)
+        sources["pl_evaluation"] = {
+            **cast(dict[str, object], sources["pl_evaluation"]),
+            "variant": variant,
+        }
+        record = replace(record, sources=sources)
+    return directory, write_betting_estimator(directory, record)
 
 
 def _run(
@@ -227,8 +235,9 @@ def _run(
     year: int = DAY.year,
     pl_digest: str | None = None,
     ledger: Path | None = None,
+    variant: str | None = None,
 ) -> tuple[Result, Path]:
-    estimator, digest = _estimator(tmp_path, method, year)
+    estimator, digest = _estimator(tmp_path, method, year, variant)
     output = tmp_path / "proposals"
     if ledger is None:
         ledger = tmp_path / "ledger.jsonl"
@@ -501,6 +510,21 @@ def test_an_estimator_for_another_year_fails_before_creating_the_output(
 
     assert result.exit_code == 1
     assert f"the estimator is for {DAY.year - 1}" in result.stderr
+    assert not output.exists()
+
+
+def test_an_estimator_of_another_pl_variant_fails_before_creating_the_output(
+    tmp_path: Path, proposals: Proposals
+) -> None:
+    clock = _Clock(MORNING, [])
+
+    result, output = _run(proposals, tmp_path, clock, variant="without_added_columns")
+
+    assert result.exit_code == 1
+    assert (
+        "the estimator was measured on PL variant 'without_added_columns', "
+        "but the PL model uses variant 'all_columns'"
+    ) in result.stderr
     assert not output.exists()
 
 

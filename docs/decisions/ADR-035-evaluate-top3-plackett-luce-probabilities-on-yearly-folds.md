@@ -313,3 +313,4 @@ Reason not selected:
 | 2026-11-10 | Accepted | Amendment 1: 固定snapshotの`NL_RA_RACE`による平地重賞（GradeCD A・B・C × TrackCD 10〜24）の部分集合評価を追加 |
 | 2026-11-12 | Accepted | ADR-038が、同じ学習の手順で最終モデルを学習し、成果物として保存することを決めた。評価（`model evaluate-pl`）は引き続きモデルを永続化しない |
 | 2026-11-21 | Accepted | Amendment 2: ADR-038で加えた予約キー`use_missing`・`zero_as_missing`が評価の`model evaluate-pl`にも効くことを記録（#72） |
+| 2026-11-26 | Accepted | [ADR-051](ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)が閉じた数値列に8列を加え（36列→44列）、評価のvariantに元の36列の`without_added_columns`と列群ごとのablationを加えた。この記録の「36列」の`all_columns`は、以後の`without_added_columns`と同じ入力である（#83） |

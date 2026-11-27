@@ -21,7 +21,7 @@ from main import app
 from models.artifacts.betting_estimator import read_betting_estimator
 from models.experiments.betting_backtest import fit_year_estimators, width_observations
 from models.serialization.betting_inputs import BlendTraining
-from tests.integration.test_betting_backtest_cli import _inputs, _invoke
+from tests.integration.test_betting_backtest_cli import PL_VARIANT, _inputs, _invoke
 from tests.reference_fixtures import ROOT
 
 
@@ -79,7 +79,7 @@ def test_the_estimator_is_published_from_a_backtest_output(tmp_path: Path) -> No
     assert record.sources["pl_evaluation"] == {
         "report_sha256": report["inputs"]["pl_evaluation"]["report_sha256"],
         "predictions_sha256": report["inputs"]["pl_evaluation"]["predictions_sha256"],
-        "variant": "all_columns",
+        "variant": PL_VARIANT,
     }
     snapshot = record.sources["snapshot"]
     assert isinstance(snapshot, dict)
@@ -132,7 +132,7 @@ def _blend_training(tmp_path: Path, test_years: tuple[int, ...]) -> BlendTrainin
     from models.serialization.betting_inputs import PL_BLEND_COLUMNS, blend_training_races
 
     rows = read_parquet(tmp_path / "pl" / "predictions.parquet", columns=PL_BLEND_COLUMNS)
-    return blend_training_races(rows.to_pylist(), variant="all_columns", test_years=test_years)
+    return blend_training_races(rows.to_pylist(), variant=PL_VARIANT, test_years=test_years)
 
 
 @pytest.mark.parametrize("kind", ["existing", "parentless", "backtest", "processed", "pl"])

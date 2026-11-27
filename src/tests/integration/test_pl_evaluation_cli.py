@@ -160,7 +160,17 @@ def _write_datamart(path: Path, snapshot: dict[str, object]) -> str:
     return writer.finish(manifest, [])
 
 
+# The fixture datamart has fewer lags than the measure profile's ablation variants name,
+# so runs keep the two original variants unless a test passes its own.
+_TWO_VARIANTS = (
+    "variants=[{name:all_columns,excluded_columns:[]},"
+    f"{{name:without_market,excluded_columns:[{MARKET_COLUMN}]}}]"
+)
+
+
 def _overrides(path: Path, digest: str, processed_root: Path, *extra: str) -> list[str]:
+    if not any(value.startswith("variants=") for value in extra):
+        extra = (_TWO_VARIANTS, *extra)
     values = [
         f"datamart_path={path.as_posix()}",
         f"datamart_manifest_sha256={digest}",
@@ -444,7 +454,7 @@ def test_evaluate_pl_requires_processed_root(tmp_path: Path) -> None:
     assert sorted(path.name for path in tmp_path.iterdir()) == ["datamart", "processed"]
 
 
-def test_measure_profile_resolves_the_full_period_folds_and_two_variants() -> None:
+def test_measure_profile_resolves_the_full_period_folds_and_the_ablation_variants() -> None:
     config = load_pl_evaluation_config(CONFIGS, config_name="measure", overrides=_BASE)
 
     assert config["train_start_year"] == 2006
@@ -452,6 +462,11 @@ def test_measure_profile_resolves_the_full_period_folds_and_two_variants() -> No
     assert [variant["name"] for variant in cast(list[dict[str, object]], config["variants"])] == [
         "all_columns",
         "without_market",
+        "without_added_columns",
+        "without_post_position",
+        "without_horse_age",
+        "without_signed_gap",
+        "without_top3_rate",
     ]
 
 

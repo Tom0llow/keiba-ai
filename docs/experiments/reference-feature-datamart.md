@@ -34,7 +34,7 @@ uv run python src/main.py datamart build-reference --config-name measure --overr
 ├─ manifest.json            # 計算契約、列一覧、snapshotの表のSHA-256、各ファイルのSHA-256と件数
 ├─ held_races.json          # 保留したレース（役割・段階・理由）
 └─ year=<YYYY>/
-   ├─ part-0.parquet        # 馬ごとの行: 閉じた数値列の全列（36列）、群ごとのavailable_at、着順
+   ├─ part-0.parquet        # 馬ごとの行: 閉じた数値列の全列（この記録の当時は36列。ADR-051の後は44列）、群ごとのavailable_at、着順
    └─ races.parquet         # レースごとの行: 頭数、ラベル利用境界、ラベルのダイジェスト、履歴の利用境界
 ```
 

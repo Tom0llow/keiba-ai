@@ -11,8 +11,23 @@
 最終開催日の翌日（JST）以後に開始し、最初の開催日より前に終える。historical-oddsは実行日の前日までのレースだけを対象とするため、最終開催日の当日の夜に始めると、その日のレースが取得から漏れる。2027年向けの初回では、2026年の最終開催日の翌日以後に実行する。年ごとに`Y`を翌年として読み替える。
 
 - datamartの全期間再構築は約2.6〜3.1時間、ピークcommitは約8 GBである。
-- PL評価は約20分、購入方策のバックテストは約7分、推定器の作成は約3〜3.5分、最終学習は約2分である。
+- PL評価は、2 variantのときに約20分だった。[ADR-051](decisions/ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)で7 variantにしたため、約1時間かかる（試行の実測で約59分・ピークcommit約4 GB、[計算済みの列の追加の試行](experiments/pl-added-columns.md)）。購入方策のバックテストは約7分、推定器の作成は約3〜3.5分（いずれも2 variantの評価結果での実測）、最終学習は約2分である。7 variantの評価結果でも、バックテストは約3分、推定器の作成は約3分、ピークcommitはどちらも約3.5 GBだった（試行の実測）。
 - 最終開催日より前からhistorical-oddsを進めておく。race-day-oddsまたは開催日の常駐CLIと、datamartの構築を重ねない。
+
+## 2027年向けの作り直しでの注意（ADR-051）
+
+[ADR-051](decisions/ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)は閉じた数値列に8列を加えた。この変更のコードは、それまでの36列の学習用datamartを、特徴量の常駐CLI・`model evaluate-pl`・`model train-pl`で拒否する。そのため、この変更のPRは2027年向けの切替の夜にマージする。2027年向けの作り直しは「臨時の作り直し」の節と同じく、手順1の取得とsnapshotの固定を当日の運用のcheckoutで行い、手順2〜6をこの変更のブランチのworktree（別のcheckout・環境）で、運用のcheckoutの`data/processed`と`output/`を絶対パスで指定して行う。このブランチのコードは、切替の夜まで当日の運用のcheckoutに入れない（このPRのマージ前なら、当日の修正などのために運用のcheckoutでmainを`git pull`するのは差し支えない）。切替の夜は、運用のcheckoutの`git rev-parse HEAD`を記録してから、PRのマージの後に運用のcheckoutを`git pull`で更新し、「切替」の節の新しい3成果物で常駐CLIを起動する。切り戻しでは、運用のcheckoutで記録したコミットを`git checkout`し、前年のdatamartとPLモデルで常駐CLIを動かす。その後に当日の修正をmainから取り込むには、先にこの変更を取り消すPRが要る（rulesetがCIと最後のpushへの承認を求めるので、切替の夜には間に合わない）。記録したコミットの`git checkout`では運用のcheckoutがブランチから外れ、`git pull`できない。取り消しのPR（または直した版）がマージされたら、`git switch main`と`git pull`でブランチへ戻す。
+
+手順2の前に、このブランチにmainを取り込み、PRを最新にしておく。作り直しの成果物は、取り込んだ後のコードで作る。作り直しの後、マージまでにmainが進んだら、マージの前に必ずもう一度取り込む（`main`のrulesetは最新のブランチでの`Quality`・`Test`と、最後のpushへのcode ownerの承認を求める。取り込みのpushはClaude Codeが行い、人間はその最後のpushを承認する）。進んだ変更が特徴量・datamart・学習・予測のコードに関わるなら、取り込んだうえで手順2から作り直す。datamart・PLモデルの読込は記録された計算契約と入力を照合するが、動いているコードとの違いは検出しないためである。取り込み・CI・承認と、必要なら作り直しの時間を、切替の夜より前に見込んでおく。
+
+手順3の評価の後、人間が加えた8列を運用で使うかを決める。test年2026の結果（2016〜2025年は列を選ぶのに使ったので、それだけでは決めない）で、`all_columns`（44列）と`without_added_columns`（元の36列）を比べる。使うと決めたら、手順4に`--override pl_variant=all_columns`を、手順6に`--override variant.name=all_columns`と`--override 'variant.excluded_columns=[]'`を足す。推定器（手順5）はバックテストのreportのvariantを引き継ぐ。使わないなら、既定（`without_added_columns`）のまま進める。
+
+使うかを決める前に、頭数（`basic_conditions_and_weight__frozen_field_size`）の意味が学習と当日でずれるレースを数えて記録する（試行の評価はこのずれを含まない。[計算済みの列の追加の試行](experiments/pl-added-columns.md)の「制約」）。
+
+- freezeの時点の中間O1で取消・除外が分かるレースと、O1の馬番が出走表と違うレースは、学習でも当日でも保留になる（`make_features/reference_snapshot.py`の`normalize_reference_target`）。ここではずれない。
+- ずれるのは、freezeの時点のO1に出ていない取消・除外のあるレースである。当日はその馬を含む出走表の頭数で予測するが、学習ではそのレースが通常結果でない（`make_features/reference_raw.py`の`normal_result`）ため除かれ、学習の頭数はいつも走った馬の数に等しい。競走中止・失格・降着・同着のレースは、学習から除かれるだけで頭数の意味は変わらない（元の36列のモデルと同じ選び方である）。
+- 数え方: 手順2のdatamartの`held_races.json`で段階が`target_outcome`の年2026のレースのうち、平地重賞（`NL_RA_RACE`の`GradeCD` A・B・C、`TrackCD` 10〜24）で、固定snapshotの`NL_SE_RACE_UMA`に`IJyoCD`が1〜3の行があるもの。CLIはないので、ローカルのスクリプトで数え、件数を「記録として残すもの」に残す。
+- 件数が無視できないと人間が判断したら、`all_columns`はそのまま採らない。既定（`without_added_columns`）には頭数の列がないので、そのまま手順4へ進める。頭数を除いて加えた列を使う道を探るなら、ADR-051の決定5（`all_columns`か`without_added_columns`か）の外であり、評価のvariantの追加と既定の決め直しが要るので、手順4の前に止め、その間は「間に合わないとき・切り戻し」の節に従って運用する。
 
 ## 手順
 
@@ -57,6 +72,8 @@ uv run python src/main.py datamart build-reference `
 
 (Get-FileHash output/reference-datamart-2006-2026/manifest.json -Algorithm SHA256).Hash.ToLower()
 ```
+
+2027年向けの初回（ADR-051の44列の最初の構築）では、所要時間に加えてCPU時間とピークcommitを、子孫のプロセスまで含めて測り、「記録として残すもの」に残す。試行では測れなかった（[計算済みの列の追加の試行](experiments/pl-added-columns.md)）。venvの`python.exe`は実体のインタープリタを子として起動するため、起動したプロセスだけを測ると、CPU時間は0になり、ピークcommitも実体より小さく出る。Windowsのジョブ（Job Object）を作り、構築のプロセスを停止状態で起動してジョブに入れてから再開し、終了後にジョブ全体のCPU時間とピークcommitを読む（Win32 APIの`CreateJobObject`・`AssignProcessToJobObject`・`QueryInformationJobObject`。起動後にジョブに入れると、先に起動した子がジョブの外に残る）。
 
 ### 3. PL確率を評価する
 
@@ -131,8 +148,9 @@ uv run python src/main.py model train-pl `
 - `datamart build-reference`・`model fit-betting-estimator`・`model train-pl`のstdoutの要約の`manifest_sha256`が、各`manifest.json`の`Get-FileHash`の値（小文字）と一致する。`model evaluate-pl`と`model backtest-betting`はSHA-256を出力しない。それらのファイルは、次の段階が渡されたSHA-256で固定して照合する。
 - 評価とバックテストの`report.json`のtest年が、2016〜2026年のちょうどすべての年である。途中の年が抜けても推定器の`target_year`は2027のままで、CLIは検出しない（2026年が抜けると`target_year`が2026になり、購入案の常駐CLIが2027年の`--date`で起動を拒否する）。
 - 推定器の`target_year`が2027であること、最終モデルのvalid年が2026であることを確認する。
+- バックテストの`report.json`の`config.pl_variant`と、PLモデルの`manifest.json`の`features.variant`が同じで、PLモデルの`features.excluded_columns`が評価の`report.json`の同名のvariantの`excluded_columns`と同じである。購入案の常駐CLIは名前の違いだけを起動時に拒否する。
 - PLモデルの`training.label_usable_through`が、切替後の最初の開催日の最も早いfreezeより前である。
-- 評価のtest年2026の成績、バックテストの回収率と95%区間、推定器の`method`・`α`・`β`を前年の記録と並べる。ADR-042〜045の採否、方策、方法の選択を変えうる差があれば、人間が判断する。
+- 評価のtest年2026の成績、バックテストの回収率と95%区間、推定器の`method`・`α`・`β`を前年の記録と並べる。2026年までの記録の`all_columns`は元の36列で、2027年向けの`all_columns`（44列）とは列が違う。前年と比べる相手は、同じ36列の`without_added_columns`である。ADR-042〜045の採否、方策、方法の選択を変えうる差があれば、人間が判断する。
 
 提示額は0円のままとし、この確認で方策や提示額を変更しない。
 
@@ -183,7 +201,8 @@ uv run python src/main.py --retrieve --mode=historical-odds
 
 作り直しと切替の記録を残すPRを作る。次を更新する。
 
-- `configs/pl_evaluation/measure.yaml`と`configs/betting_backtest/measure.yaml`の`test_years`（`configs/betting_backtest/measure.yaml`の「計測の後に値を変えない」という注記は、ADR-043・044で固定した方策と補正の値についてのもので、`test_years`は対象ではない。初回のPRで注記の対象をそれらの値に限るよう書き直す）
+- `configs/pl_evaluation/measure.yaml`と`configs/betting_backtest/measure.yaml`の`test_years`（`configs/betting_backtest/measure.yaml`の「計測の後に値を変えない」という注記は、ADR-043・044で固定した方策と補正・推定の値に限るよう、ADR-051で書き直した）
+- 加えた8列を使うと決めた場合は、`configs/betting_backtest/measure.yaml`の`pl_variant`と`configs/pl_training/final.yaml`の`variant`を`all_columns`へ変え、それを固定して確かめるテスト（`src/tests/integration/test_pl_variant_configs.py`など）とREADMEの最終学習・バックテストの節を合わせる。列の群ごとのvariant（`without_post_position`など）を翌年以降の評価に残すかも決める（残すと評価の時間が延びる）
 - `configs/pl_training/final.yaml`の`valid_year`
 - 上の値の年を書いた先頭のコメント（`configs/pl_evaluation/measure.yaml`の「test 2016-2025」、`configs/pl_training/final.yaml`の「train 2006-2024 ... 2025」）
 - 上の運用の年を固定して確かめるテスト（評価・バックテスト・最終学習のCLIの統合テストで、`measure.yaml`の`test_years`や`final.yaml`の`valid_year`の値を確かめているもの）。変えないと`Test`のCIが失敗する
@@ -209,6 +228,8 @@ uv run python src/main.py --retrieve --mode=historical-odds
 - datamart、PL評価、バックテスト、推定器、最終モデルの出力先。
 - 評価のtest年、推定器の`target_year`、最終モデルのvalid年、前年との成績・回収率・95%区間・`method`・`α`・`β`の比較。
 - 切替日、切り戻しの有無と理由、前年の版で運用した開催日、当日の常駐CLIの起動結果。
+- ADR-051の切替の夜は、マージ前の運用のcheckoutのコミット（`git rev-parse HEAD`）。
+- 2027年向けの初回は、44列のdatamartの構築のCPU時間・ピークcommitと、頭数の意味がずれる年2026の平地重賞の件数。
 
 ## 版の履歴
 

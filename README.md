@@ -642,7 +642,10 @@ uv run python src/main.py model evaluate-pl --config-name measure --override pro
 ```
 
 `configs/pl_evaluation/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が実データ用の明示値
-（train 2006年から、test 2016〜2025年、市場の単勝オッズ列あり・なしの2 variant）を持つ。processed root、datamartの
+（train 2006年から、test 2016〜2025年、7 variant）を持つ。variantは、閉じた数値列の全44列（`all_columns`）、市場の単勝オッズ列を
+除く列（`without_market`）、ADR-051で加えた8列を除く元の36列（`without_added_columns`）、加えた列の群を1つずつ除く4つ
+（`without_post_position`・`without_horse_age`・`without_signed_gap`・`without_top3_rate`）である
+（[ADR-051](docs/decisions/ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)）。processed root、datamartの
 パス、`datamart build-reference`が出したmanifestのSHA-256は`--override`で渡す。手順・出力形式・結果は
 [着順確率モデルの評価](docs/experiments/pl-probability-model.md)と
 [ADR-035](docs/decisions/ADR-035-evaluate-top3-plackett-luce-probabilities-on-yearly-folds.md)を参照する。
@@ -661,13 +664,19 @@ uv run python src/main.py model train-pl --config-name final --override datamart
 ```
 
 - `configs/pl_training/train.yaml`はすべて必須値`???`で、`final.yaml`が運用の値を持つ。train 2006〜2024年・valid 2025年・
-  variant`all_columns`（市場の単勝オッズ列を含む）で、LightGBMの引数などは評価の`measure.yaml`と同じである。
+  variant`without_added_columns`（市場の単勝オッズ列を含む元の36列。評価の同名のvariantと同じ）で、LightGBMの引数などは評価の
+  `measure.yaml`と同じである。ADR-051で加えた8列を使うかは、年1回の作り直しで人間が決める。使うときは、最終学習に
+  `--override variant.name=all_columns`と`--override 'variant.excluded_columns=[]'`の両方を、バックテストに
+  `--override pl_variant=all_columns`を足す（名前だけを変えると、元の36列のまま`all_columns`という名前のモデルになる。
+  [年次の再学習手順](docs/retraining-operation.md)）。
 - 成果物は`model.txt`と`manifest.json`の2ファイルで、stdoutの要約のmanifestのSHA-256で識別する。読込は、hash・形式・列・
   反復数・温度・ラベルの境界・LightGBMのversionを検証する。LightGBMを更新したら、モデルを学習し直す。
 - 書込みと読込は、学習で欠損のあった列のすべての分岐が、欠損の枝を持つことを確かめ、なければ拒否する。LightGBMは欠損の扱いを
   ビンを作る標本（`bin_construct_sample_cnt`、既定20万行）から決めるためである。拒否されたら、`final.yaml`と評価の
   `measure.yaml`の両方に同じ`bin_construct_sample_cnt`（学習の行数以上）を入れ、評価・バックテスト・推定器を計測し直してから
-  学習し直す（[ADR-038](docs/decisions/ADR-038-train-and-persist-the-final-top3-pl-model.md) Amendment 1）。今の36列では、この拒否は事実上起きない。
+  学習し直す（[ADR-038](docs/decisions/ADR-038-train-and-persist-the-final-top3-pl-model.md) Amendment 1）。既定の36列では、この拒否は事実上起きない。
+  加えた8列を使う`all_columns`（44列）でも、試行の学習（2006〜2025年）は書込みと読戻しの照合を通った。ただし、枠番・頭数・馬齢は
+  学習で欠損がないため、使うと決めたときは、当日にこれらが欠けたレースは予測できず保留になる（[計算済みの列の追加の試行](docs/experiments/pl-added-columns.md)）。
 - 予測は、ラベルなしの行列と列名から行う。学習で欠損のなかった列（市場の単勝オッズ列など）に欠損があれば、呼出し全体を拒否する（欠けたレースを除くか保留にするのは呼出し側）。
   予測の特徴量は、モデルと同じ学習用datamartから作られ、freezeがモデルのラベルの境界より後でなければならない。
 - PLのモデルはMLflowで管理しない（ADR-027に対する例外）。結果は[最終モデルの学習](docs/experiments/pl-final-model.md)を参照する。
@@ -746,7 +755,8 @@ uv run python src/main.py model backtest-betting --config-name measure --overrid
 
 - `configs/betting_backtest/evaluate.yaml`はすべて必須値`???`で、`measure.yaml`が計測の前に固定した方策（期待受取倍率1.10以上、
   1/4ケリー、基準資金・年間の枠10万円、1レース5,000円、100円単位）、ADR-042の複勝の補正の値、ADR-044の推定の値
-  （合成の最少レース数1,000・許容1e-10・最大100回、幅の帯`[1.0, 1.5, 2.0, 3.0, 5.0]`）を持つ。
+  （合成の最少レース数1,000・許容1e-10・最大100回、幅の帯`[1.0, 1.5, 2.0, 3.0, 5.0]`）を持つ。PLの評価のvariantは
+  `without_added_columns`（ADR-043が`all_columns`として計測した元の36列と同じ列・同じ順。ADR-051）で、最終学習のvariantと同じにする。
 - PLの評価の`report.json`・`predictions.parquet`はSHA-256で固定し、reportが記録する重賞の出典のsnapshotとdatamartを使う。
 - `report.json`（format_version 2。年ごとに選んだ方法、各方法の定額・方策の結果を含む）・`bets.parquet`（買い目ごと）・
   `races.parquet`（購入レースごとの資金推移）だけを新しいディレクトリへ公開する。2つの表は選んだ方法の経路で、`method`列を持つ。
@@ -848,7 +858,8 @@ uv run python src/main.py model propose-bets-live `
 ```
 
 - `--predictions-root`は`predict-pl-live`の`--output`で、`--features-root`・`--pl-model`・`--snapshot-id`は`predict-pl-live`と同じ値を渡す。
-  推定器の`target_year`が`--date`の年と違えば、`--output`を作らずに終了コード1で終わる。`--ledger`の台帳がない・不正・シンボリック
+  推定器の`target_year`が`--date`の年と違えば、`--output`を作らずに終了コード1で終わる。推定器を計測したPLの評価のvariant
+  （`sources.pl_evaluation.variant`）とPLモデルのvariant（`features.variant`）の名前が違う場合も同じである（ADR-051）。`--ledger`の台帳がない・不正・シンボリック
   リンク・他の入出力の中にある場合も同じである。
 - 各重賞は、台帳の最新の確認が、そのレースより前に発走する当日の重賞の発売締切以後（最初の重賞は当日0時（JST）以後）になるまで
   待つ。発売締切までに届かなければ`ledger_unconfirmed`、台帳が読めない・不正なら`ledger_unavailable`・`ledger_invalid`で保留する。

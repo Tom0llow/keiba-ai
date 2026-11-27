@@ -5,7 +5,7 @@
 - Decision Owners: Repository maintainers
 - Related Issues/PRs: Closes #36、Refs #57・#35・#67・#81・#56・#82
 - Supersedes: N/A
-- Superseded by: N/A（決定1・3・4・8・9は[ADR-044](ADR-044-select-a-selection-bias-estimate-each-year-from-earlier-graded-flat-results.md)が選択した経路について改めた。Amendment 1）
+- Superseded by: N/A（決定1・3・4・8・9は[ADR-044](ADR-044-select-a-selection-bias-estimate-each-year-from-earlier-graded-flat-results.md)が選択した経路について改めた。Amendment 1。決定1のvariant`all_columns`は、[ADR-051](ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)の決定4で同じ列・同じ順の`without_added_columns`と読み替えた）
 
 ---
 
@@ -276,3 +276,4 @@ CLIと`models/betting/`などの新しいモジュールを削除すれば戻せ
 | 2026-11-16 | Proposed | GATE 1で人間が決めた方策を計測の前に固定した |
 | 2026-11-17 | Accepted | 実データで評価し、全test年の回収率0.810（95%区間0.670〜0.963）を記録した |
 | 2026-11-17 | Accepted（Amendment 1） | ADR-044が決定1・3・4・8・9を選択した経路について改めた（人間の承認、#92） |
+| 2026-11-26 | Accepted | [ADR-051](ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)が閉じた数値列に8列を加えたため、決定1の`all_columns`（36列）を同じ列・同じ順の`without_added_columns`と読み替えた。方策・補正の値と計測の入力は変わらない（#83） |

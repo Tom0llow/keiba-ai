@@ -2,14 +2,23 @@ defaults:
   - train
   - _self_
 # Operational profile: train 2006-2024, early-stop and calibrate on 2025, with the market
-# column (all_columns). LightGBM settings, rounds and temperature bounds equal
-# configs/pl_evaluation/measure.yaml. Pass datamart_path and datamart_manifest_sha256 with
-# --override.
+# column and the original 36 columns (without_added_columns; ADR-051 decides adoption of the
+# added columns at the yearly rebuild). The variant equals the measure.yaml variant of the same
+# name. LightGBM settings, rounds and temperature bounds equal configs/pl_evaluation/measure.yaml.
+# Pass datamart_path and datamart_manifest_sha256 with --override.
 train_start_year: 2006
 valid_year: 2025
 variant:
-  name: all_columns
-  excluded_columns: []
+  name: without_added_columns
+  excluded_columns:
+    - basic_conditions_and_weight__gate_number
+    - basic_conditions_and_weight__frozen_field_size
+    - basic_conditions_and_weight__horse_age_years
+    - recent_performance__past_top3_rate
+    - past_racing_ability__past_signed_gap_sec_lag1
+    - past_racing_ability__past_signed_gap_sec_lag2
+    - past_racing_ability__past_signed_gap_sec_lag3
+    - past_racing_ability__past_signed_gap_sec_lag4
 lightgbm:
   learning_rate: 0.05
   num_leaves: 31

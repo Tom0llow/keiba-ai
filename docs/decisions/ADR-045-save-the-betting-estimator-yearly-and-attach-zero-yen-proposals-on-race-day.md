@@ -206,3 +206,4 @@ Reason not selected: 人間が単勝・複勝だけを選んだ。
 | --- | --- | --- |
 | 2026-11-17 | Accepted | GATE 1で人間が方法の延長・0円の提示・券種・常駐CLIを決め、2026年の成果物と2026-11-15の再生で確かめた |
 | 2026-11-18 | Accepted | ADR-046が実購入額の台帳による上限と`ev_race_proposal` format_version 2で決定4・5の一部を改めた（人間の承認、#56） |
+| 2026-11-26 | Accepted | [ADR-051](ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)の決定6が、決定4の起動の検査に、推定器の`sources.pl_evaluation.variant`とPLモデルの`features.variant`の一致を加えた。違えば`--output`を作らずに終了する（#83） |
