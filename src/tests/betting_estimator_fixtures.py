@@ -19,7 +19,11 @@ from tests.betting_scenario import scenario_hits
 NO_EXCLUSIONS = {"market_incomplete": 0, "zero_probability": 0, "winner_count": 0}
 SOURCES: dict[str, object] = {
     "backtest_report_sha256": "a" * 64,
-    "pl_evaluation": {"report_sha256": "b" * 64, "predictions_sha256": "c" * 64, "variant": "v"},
+    "pl_evaluation": {
+        "report_sha256": "b" * 64,
+        "predictions_sha256": "c" * 64,
+        "variant": "all_columns",
+    },
     "snapshot": {"snapshot_id": "d" * 32, "tables": {"NL_RA_RACE": "e" * 64}},
 }
 

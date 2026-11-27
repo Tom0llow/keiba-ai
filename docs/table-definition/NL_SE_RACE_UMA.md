@@ -35,6 +35,23 @@
 全列を同名・同順で保存し、SQLiteの文字列値と`NULL`をParquetの`string`/`NULL`として書き出す。
 空白・日付風の値を置換せず、行の除外、結合、重複除去、集計、日時解析、欠損補完は行わない。
 
+## 過去成績の着差で使う列（ADR-051）
+
+[ADR-051](../decisions/ADR-051-add-calculated-card-and-history-columns-and-decide-at-the-yearly-rebuild.md)の
+`past_signed_gap_sec`は、`make_features/reference_raw.py`の`normal_result`が通常結果と認めたレースの`TimeDiff`を10で割り、
+秒にした値である。`normal_result`は、出走馬の全員が`headDataKubun`=7・`IJyoCD`=0・`DochakuKubun`=0であることに加え、
+`NL_RA_RACE`の`headDataKubun`=7、着順がちょうど1〜頭数、`SyussoTosu`=`NyusenTosu`=出走馬の数、各行の`headMakeDate`が
+レース日から結果の利用開始日の前日までであることを求める。固定snapshot
+`098ce3f4b5d7480282269218d80cef05`の中央10場（1,880,223行、1954〜2026年）の全行で、2026-11-27に値の形と意味を確かめた。
+意味は値の観測であり、JV-Dataの仕様書との照合はしていない。
+
+| 確認の範囲 | 結果 |
+| --- | --- |
+| 値の形（全行） | `+`または`-`と3桁の数字が1,856,544行。`9999`が16,611行で、すべて`headDataKubun`=7・`KakuteiJyuni`=`00`。符号のない`0000`が7,068行（`headDataKubun`=9が6,071行、2が980行、7が17行で1954〜1956年）。 |
+| 2005〜2025年で出走馬の全員が`headDataKubun`=7・`IJyoCD`=0・`DochakuKubun`=0のレース（62,828レース・887,591行。`normal_result`が認めるレースを含む、それより広い集合） | 全行が符号付きの3桁。2着以下の全824,763行が「自馬の`Time`−1着馬の`Time`」（0.1秒単位）に等しく、正が806,338行・`+000`が18,425行・負が0行。1着馬の全62,828行が「−（2着以下で最も速い`Time`−1着馬の`Time`）」に等しく、負が47,321行・`-000`が15,507行・正が0行。 |
+| 符号の例外（全期間） | 確定着順が2着以下で負の値の65行は、すべて`IJyoCD`=7・`NyusenJyuni`=`01`（入線1着の降着馬、1991〜2012年）。確定1着で正の値の7行は、すべて`NyusenJyuni`=`02`の繰り上がり（2006〜2011年）。降着のあるレースは通常結果でないため、過去成績に入らない。 |
+| 試行のdatamart（2006〜2025年、835,398行） | `past_finish_lag{k}`が1なら`past_signed_gap_sec_lag{k}`≤0、2以上なら≥0。lag1〜4のどれも違反は0件（lag1の組は741,314）。着順と着差の片方だけがある行も0件。 |
+
 ## 列定義
 
 `NULL可`はParquetスキーマの許容設定であり、実データ中のNULL存在数を示さない。
@@ -107,7 +124,7 @@
 | `ChakuUmaInfo1Bamei` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `ChakuUmaInfo1Bamei` (`TEXT`) | 文字列/NULLを保持 | To confirm |
 | `ChakuUmaInfo2KettoNum` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `ChakuUmaInfo2KettoNum` (`TEXT`) | 文字列/NULLを保持 | To confirm |
 | `ChakuUmaInfo2Bamei` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `ChakuUmaInfo2Bamei` (`TEXT`) | 文字列/NULLを保持 | To confirm |
-| `TimeDiff` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `TimeDiff` (`TEXT`) | 文字列/NULLを保持 | To confirm |
+| `TimeDiff` | 1着馬とのタイム差（符号付き、観測） | 異常区分（`IJyoCD`。取消・除外・降着など）と同着のない確定成績のレース（2005〜2025年で全行を照合）では、2着以下は自馬の`Time`−1着馬の`Time`（`+`と3桁、0.1秒単位）、1着馬は2着とのタイム差の負の値（`-`と3桁、同タイムは`-000`）。`9999`は着順`00`の未計測。1954〜1956年の確定成績には符号のない`0000`が17行ある。降着のあるレースは例外で、降着した入線1着馬が負の値（65行）、繰り上がった確定1着馬が正の値（7行）を持つことがある（「過去成績の着差で使う列」を参照） | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `TimeDiff` (`TEXT`) | 文字列/NULLを保持 | To confirm |
 | `RecordUpKubun` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `RecordUpKubun` (`TEXT`) | 文字列/NULLを保持 | To confirm |
 | `DMKubun` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `DMKubun` (`TEXT`) | 文字列/NULLを保持 | To confirm |
 | `DMTime` | To confirm | To confirm | `string`・長さ宣言なし | 可（スキーマ） | 宣言なし | なし | `DMTime` (`TEXT`) | 文字列/NULLを保持 | To confirm |

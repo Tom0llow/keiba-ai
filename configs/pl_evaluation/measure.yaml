@@ -6,11 +6,37 @@ defaults:
 processed_root: ???
 train_start_year: 2006
 test_years: [2016, 2017, 2018, 2019, 2020, 2021, 2022, 2023, 2024, 2025]
+# all_columns holds the 44 closed numeric columns; without_added_columns equals the original
+# 36 columns in their original order. The other variants leave one added group out (ADR-051).
 variants:
   - name: all_columns
     excluded_columns: []
   - name: without_market
     excluded_columns: [market_characteristics__market_win_odds]
+  - name: without_added_columns
+    excluded_columns:
+      - basic_conditions_and_weight__gate_number
+      - basic_conditions_and_weight__frozen_field_size
+      - basic_conditions_and_weight__horse_age_years
+      - recent_performance__past_top3_rate
+      - past_racing_ability__past_signed_gap_sec_lag1
+      - past_racing_ability__past_signed_gap_sec_lag2
+      - past_racing_ability__past_signed_gap_sec_lag3
+      - past_racing_ability__past_signed_gap_sec_lag4
+  - name: without_post_position
+    excluded_columns:
+      - basic_conditions_and_weight__gate_number
+      - basic_conditions_and_weight__frozen_field_size
+  - name: without_horse_age
+    excluded_columns: [basic_conditions_and_weight__horse_age_years]
+  - name: without_signed_gap
+    excluded_columns:
+      - past_racing_ability__past_signed_gap_sec_lag1
+      - past_racing_ability__past_signed_gap_sec_lag2
+      - past_racing_ability__past_signed_gap_sec_lag3
+      - past_racing_ability__past_signed_gap_sec_lag4
+  - name: without_top3_rate
+    excluded_columns: [recent_performance__past_top3_rate]
 lightgbm:
   learning_rate: 0.05
   num_leaves: 31

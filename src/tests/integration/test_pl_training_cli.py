@@ -25,6 +25,7 @@ from make_features.real_market import MARKET_COLUMN
 from make_features.reference_raw import result_boundary
 from models.artifacts.pl_model import read_pl_model
 from models.experiments.provenance import experiment_provenance
+from tests.closed_column_fixtures import ADDED_CLOSED_COLUMNS
 from tests.reference_fixtures import RICH_TARGET_DAYS, ROOT, datamart_from_raw, rich_raw_input
 
 YEARS = (2024, 2025, 2026)
@@ -104,6 +105,10 @@ def _write_datamart(path: Path) -> str:
 
 
 def _overrides(path: Path, digest: str, *extra: str) -> list[str]:
+    # The fixture datamart has fewer lags than the final profile's variant excludes, so
+    # runs train on every column unless a test passes its own variant.
+    if not any(value.startswith("variant=") for value in extra):
+        extra = ("variant={name:all_columns,excluded_columns:[]}", *extra)
     values = [
         f"datamart_path={path.as_posix()}",
         f"datamart_manifest_sha256={digest}",
@@ -183,6 +188,29 @@ def test_train_pl_publishes_a_model_readable_by_its_manifest_identity(
     for phase in ("read", "train", "publish"):
         assert f"phase={phase}" in result.stderr
     assert sorted(item.name for item in tmp_path.iterdir()) == ["model"]
+
+
+def test_train_pl_drops_the_excluded_columns_and_keeps_the_datamart_order(
+    tmp_path: Path, datamart: tuple[Path, str]
+) -> None:
+    path, digest = datamart
+    manifest = json.loads((path / "manifest.json").read_text(encoding="utf-8"))
+    columns = [column["name"] for column in manifest["columns"]]
+    # The fixture has fewer lags than the profile; exclude the added columns it does have.
+    excluded = [name for name in ADDED_CLOSED_COLUMNS if name in columns]
+    assert len(excluded) >= 5  # the card columns, the top-3 rate and a signed gap
+    output = tmp_path / "model"
+    variant = f"variant={{name:without_added_columns,excluded_columns:[{','.join(excluded)}]}}"
+
+    result = _invoke(output, _overrides(path, digest, variant))
+
+    assert result.exit_code == 0, result.output
+    model_sha256 = result.stdout.strip().rsplit("manifest_sha256=", 1)[1]
+    model = read_pl_model(output, expected_manifest_sha256=model_sha256)
+    assert model.feature_names == tuple(name for name in columns if name not in excluded)
+    features = cast(dict[str, dict[str, object]], model.manifest)["features"]
+    assert features["variant"] == "without_added_columns"
+    assert features["excluded_columns"] == excluded
 
 
 @pytest.mark.parametrize(
@@ -287,5 +315,11 @@ def test_the_final_profile_trains_exactly_as_the_evaluation_measured() -> None:
     assert isinstance(measured, dict)
     for key in ("lightgbm", "num_boost_round", "early_stopping_rounds", "temperature_bounds"):
         assert final[key] == measured[key], key
-    assert final["variant"] == {"name": "all_columns", "excluded_columns": []}
+    # The operational model is the measured variant of the same name (ADR-051).
+    variants = cast(list[dict[str, object]], measured["variants"])
+    assert final["variant"] in variants
+    assert final["variant"] == {
+        "name": "without_added_columns",
+        "excluded_columns": list(ADDED_CLOSED_COLUMNS),
+    }
     assert (final["train_start_year"], final["valid_year"]) == (2006, 2025)

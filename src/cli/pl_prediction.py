@@ -469,6 +469,23 @@ def _check_apart(
         raise ValueError("--output must stay outside processed_root")
 
 
+def _check_same_variant(
+    estimator_sources: Mapping[str, object], model_manifest: Mapping[str, object]
+) -> None:
+    """Reject an estimator measured on another PL variant than the model's (ADR-051).
+
+    Both readers validated their manifests, so the variants are nonempty strings. Only the
+    names are compared: the estimator does not record the variant's columns.
+    """
+    measured = cast(Mapping[str, object], estimator_sources["pl_evaluation"])["variant"]
+    trained = cast(Mapping[str, object], model_manifest["features"])["variant"]
+    if measured != trained:
+        raise ValueError(
+            f"the estimator was measured on PL variant {measured!r}, "
+            f"but the PL model uses variant {trained!r}"
+        )
+
+
 def _check_ledger(ledger_path: Path, *roots: Path) -> None:
     if ledger_path.is_symlink():
         raise ValueError("--ledger must not be a symbolic link")
@@ -596,6 +613,7 @@ def model_propose_bets_live(
                 f"not {target_day.year}; build the estimator for this year"
             )
         model = read_pl_model(pl_model, expected_manifest_sha256=pl_model_manifest_sha256)
+        _check_same_variant(estimator.record.sources, model.manifest)
         snapshot = FixedSnapshot(processed_root, snapshot_id=snapshot_id)
         snapshot.pin(_TABLES)
         targets, startup, graded_starts = plan_race_day(snapshot, target_day)

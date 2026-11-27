@@ -147,6 +147,29 @@ _LAGS = {
         "metres_per_second",
     ),
 }
+# Appended after the original 36 columns (ADR-051) so that excluding them restores the
+# original inputs in their original order.
+_ADDED_COLUMNS = (
+    NumericColumn(
+        "basic_conditions_and_weight", "gate_number", "frozen gate (bracket) number", "ordinal"
+    ),
+    NumericColumn(
+        "basic_conditions_and_weight", "frozen_field_size", "frozen card runner count", "count"
+    ),
+    NumericColumn("basic_conditions_and_weight", "horse_age_years", "frozen horse age", "years"),
+    NumericColumn(
+        "recent_performance",
+        "past_top3_rate",
+        "selected prior starts top-three fraction",
+        "fraction",
+    ),
+)
+_ADDED_LAGS = {
+    ("past_racing_ability", "past_signed_gap_sec"): (
+        "prior signed finish-time margin (winner: minus margin to second)",
+        "seconds",
+    ),
+}
 _METRIC_UNITS = {
     "elapsed_sec": "seconds",
     "velocity_mps": "metres_per_second",
@@ -176,12 +199,15 @@ def closed_numeric_columns(parameters: Mapping[str, object]) -> tuple[NumericCol
             "rank",
         ),
     )
-    lags = tuple(
-        NumericColumn(group, f"{prefix}_lag{lag}", f"{meaning}, lag {lag}", unit)
-        for (group, prefix), (meaning, unit) in _LAGS.items()
-        for lag in range(1, lag_count + 1)
+    lags, added_lags = (
+        tuple(
+            NumericColumn(group, f"{prefix}_lag{lag}", f"{meaning}, lag {lag}", unit)
+            for (group, prefix), (meaning, unit) in families.items()
+            for lag in range(1, lag_count + 1)
+        )
+        for families in (_LAGS, _ADDED_LAGS)
     )
-    columns = (*_COLUMNS, *dynamic, *lags)
+    columns = (*_COLUMNS, *dynamic, *lags, *_ADDED_COLUMNS, *added_lags)
     if len({column.name for column in columns}) != len(columns):
         raise ValueError("closed numeric column names must be unique")
     for column in columns:
@@ -192,7 +218,7 @@ def closed_numeric_columns(parameters: Mapping[str, object]) -> tuple[NumericCol
 
 def resolve_numeric_column(name: str, parameters: Mapping[str, object]) -> NumericColumn:
     """Resolve exact names or strictly bounded, explicitly enumerated lag families."""
-    for column in _COLUMNS:
+    for column in (*_COLUMNS, *_ADDED_COLUMNS):
         if name == column.name:
             return column
     metric = str(parameters["metric"])
@@ -215,7 +241,7 @@ def resolve_numeric_column(name: str, parameters: Mapping[str, object]) -> Numer
         column = NumericColumn(group, f"{prefix}_{metric}_{suffix}", meaning, unit)
         if name == column.name:
             return column
-    for (group, prefix), (meaning, unit) in _LAGS.items():
+    for (group, prefix), (meaning, unit) in (*_LAGS.items(), *_ADDED_LAGS.items()):
         match = re.fullmatch(re.escape(f"{group}__{prefix}_lag") + r"([1-9][0-9]*)", name)
         if match and int(match[1]) <= cast(int, parameters["lag_count"]):
             return NumericColumn(
