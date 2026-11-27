@@ -22,6 +22,13 @@
 
 手順3の評価の後、人間が加えた8列を運用で使うかを決める。test年2026の結果（2016〜2025年は列を選ぶのに使ったので、それだけでは決めない）で、`all_columns`（44列）と`without_added_columns`（元の36列）を比べる。使うと決めたら、手順4に`--override pl_variant=all_columns`を、手順6に`--override variant.name=all_columns`と`--override 'variant.excluded_columns=[]'`を足す。推定器（手順5）はバックテストのreportのvariantを引き継ぐ。使わないなら、既定（`without_added_columns`）のまま進める。
 
+使うかを決める前に、頭数（`basic_conditions_and_weight__frozen_field_size`）の意味が学習と当日でずれるレースを数えて記録する（試行の評価はこのずれを含まない。[計算済みの列の追加の試行](experiments/pl-added-columns.md)の「制約」）。
+
+- freezeの時点の中間O1で取消・除外が分かるレースと、O1の馬番が出走表と違うレースは、学習でも当日でも保留になる（`make_features/reference_snapshot.py`の`normalize_reference_target`）。ここではずれない。
+- ずれるのは、freezeの時点のO1に出ていない取消・除外のあるレースである。当日はその馬を含む出走表の頭数で予測するが、学習ではそのレースが通常結果でない（`make_features/reference_raw.py`の`normal_result`）ため除かれ、学習の頭数はいつも走った馬の数に等しい。競走中止・失格・降着・同着のレースは、学習から除かれるだけで頭数の意味は変わらない（元の36列のモデルと同じ選び方である）。
+- 数え方: 手順2のdatamartの`held_races.json`で段階が`target_outcome`の年2026のレースのうち、平地重賞（`NL_RA_RACE`の`GradeCD` A・B・C、`TrackCD` 10〜24）で、固定snapshotの`NL_SE_RACE_UMA`に`IJyoCD`が1〜3の行があるもの。CLIはないので、ローカルのスクリプトで数え、件数を「記録として残すもの」に残す。
+- 件数が無視できないと人間が判断したら、`all_columns`はそのまま採らない。既定（`without_added_columns`）には頭数の列がないので、そのまま手順4へ進める。頭数を除いて加えた列を使う道を探るなら、ADR-051の決定5（`all_columns`か`without_added_columns`か）の外であり、評価のvariantの追加と既定の決め直しが要るので、手順4の前に止め、その間は「間に合わないとき・切り戻し」の節に従って運用する。
+
 ## 手順
 
 以下の値は初回の`Y`=2027を例にする。翌年以降は、対象終了日、test年、valid年、出力名の末尾を年`Y`に合わせて読み替える。各段階のstdoutの要約と、以下で示すSHA-256の値を残す。CLIへ渡すSHA-256は小文字の16進でなければならない。`Get-FileHash`は大文字を出すので、`(Get-FileHash <ファイル> -Algorithm SHA256).Hash.ToLower()`で得る。失敗した段階は、同じ入力と設定で新しい`--output`を指定してやり直す。
@@ -65,6 +72,8 @@ uv run python src/main.py datamart build-reference `
 
 (Get-FileHash output/reference-datamart-2006-2026/manifest.json -Algorithm SHA256).Hash.ToLower()
 ```
+
+2027年向けの初回（ADR-051の44列の最初の構築）では、所要時間に加えてCPU時間とピークcommitを、子孫のプロセスまで含めて測り、「記録として残すもの」に残す。試行では測れなかった（[計算済みの列の追加の試行](experiments/pl-added-columns.md)）。venvの`python.exe`は実体のインタープリタを子として起動するため、起動したプロセスだけを測ると、CPU時間は0になり、ピークcommitも実体より小さく出る。Windowsのジョブ（Job Object）を作り、構築のプロセスを停止状態で起動してジョブに入れてから再開し、終了後にジョブ全体のCPU時間とピークcommitを読む（Win32 APIの`CreateJobObject`・`AssignProcessToJobObject`・`QueryInformationJobObject`。起動後にジョブに入れると、先に起動した子がジョブの外に残る）。
 
 ### 3. PL確率を評価する
 
@@ -220,6 +229,7 @@ uv run python src/main.py --retrieve --mode=historical-odds
 - 評価のtest年、推定器の`target_year`、最終モデルのvalid年、前年との成績・回収率・95%区間・`method`・`α`・`β`の比較。
 - 切替日、切り戻しの有無と理由、前年の版で運用した開催日、当日の常駐CLIの起動結果。
 - ADR-051の切替の夜は、マージ前の運用のcheckoutのコミット（`git rev-parse HEAD`）。
+- 2027年向けの初回は、44列のdatamartの構築のCPU時間・ピークcommitと、頭数の意味がずれる年2026の平地重賞の件数。
 
 ## 版の履歴
 
