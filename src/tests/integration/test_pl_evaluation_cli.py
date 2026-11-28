@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import cast
@@ -85,7 +86,12 @@ def _write_snapshot(
     }
 
 
-def _write_datamart(path: Path, snapshot: dict[str, object]) -> str:
+def _write_datamart(
+    path: Path,
+    snapshot: dict[str, object],
+    *,
+    feature_values: Callable[[int, int, int], Mapping[str, float]] | None = None,
+) -> str:
     """Write a valid three-year datamart with the rich fixture's columns and contract."""
     raw = rich_raw_input()
     raw["snapshot"] = snapshot
@@ -153,6 +159,8 @@ def _write_datamart(path: Path, snapshot: dict[str, object]) -> str:
                 row[MARKET_COLUMN] = float(odds[horse])
                 if race == 0 and horse == 0:
                     row[MARKET_COLUMN] = None
+                if feature_values is not None:
+                    row.update(feature_values(year, race, horse))
                 for group in builder.available_at_groups:
                     row[f"{group}__available_at"] = freeze
                 rows.append(row)

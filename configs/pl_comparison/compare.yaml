@@ -1,0 +1,10 @@
+# Compare pinned saved PL evaluations without rerunning their yearly folds.
+evaluation_path: ???
+pl_report_sha256: ???
+pl_predictions_sha256: ???
+processed_root: ???
+comparisons: ???
+bootstrap:
+  resamples: 2000
+  seed: 0
+  confidence: 0.95
