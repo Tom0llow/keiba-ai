@@ -31,6 +31,7 @@ def test_application_registers_every_command_once_in_existing_order() -> None:
         "fit-betting-estimator",
         "record-purchases",
         "track-report",
+        "compare-pl-variants",
     ]
     assert [command.name for command in datamart_app.registered_commands] == [
         "build",

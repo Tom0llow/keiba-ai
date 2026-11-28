@@ -313,3 +313,4 @@ Reason not selected:
 | 2026-11-10 | Accepted | Amendment 1: 固定snapshotの`NL_RA_RACE`による平地重賞（GradeCD A・B・C × TrackCD 10〜24）の部分集合評価を追加 |
 | 2026-11-12 | Accepted | ADR-038が、同じ学習の手順で最終モデルを学習し、成果物として保存することを決めた。評価（`model evaluate-pl`）は引き続きモデルを永続化しない |
 | 2026-11-21 | Accepted | Amendment 2: ADR-038で加えた予約キー`use_missing`・`zero_as_missing`が評価の`model evaluate-pl`にも効くことを記録（#72） |
+| 2026-11-28 | Accepted | [ADR-052](ADR-052-compare-pl-variants-and-residuals.md): 公開済み評価からvariant同士を比較し、固定区分ごとの残差を求める事後分析を追加（#120） |

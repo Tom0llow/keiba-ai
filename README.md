@@ -650,6 +650,46 @@ uv run python src/main.py model evaluate-pl --config-name measure --override pro
 boostingは`gbdt`だけを許す（反復数とearly stoppingは`num_boost_round`・`early_stopping_rounds`で指定する。最終学習の
 `model train-pl`と共通の予約キー。ADR-035 Amendment 2）。
 
+### 公開済みPL評価のvariantを比較する
+
+`model compare-pl-variants`は、公開済みのPL評価を再実行せず、`report.json`と`predictions.parquet`を
+SHA-256で固定してvariant同士の比較と区分別残差を求める。比較の組は`candidate`（候補）と`baseline`（基準）の
+リストで指定する。
+
+```powershell
+uv run python src/main.py model compare-pl-variants `
+  --override evaluation_path=output/pl-evaluation-2016-2025-graded-final3 `
+  --override pl_report_sha256=<report.jsonのSHA-256> `
+  --override pl_predictions_sha256=<predictions.parquetのSHA-256> `
+  --override processed_root=data/processed `
+  --override 'comparisons=[{candidate:all_columns,baseline:without_market}]' `
+  --output output/pl-variant-comparison-2016-2025
+```
+
+出力は`pl_variant_comparison` v1の`report.json`である。評価2ファイル、datamart manifest、固定snapshotの
+hashと識別、設定、provenance、test年、variantごとの指標、候補・基準の対応ありbootstrap比較、
+`jra_flat_graded_stakes_v1`部分集合、`pl_residual_segments_v1`の定義とvariantごとの勝ち・3着以内の
+`actual`・`expected`・`ratio`・`z`を含む。比較指標は`winner_log_loss`、`multiclass_brier`、
+`exacta_log_loss`、`quinella_log_loss`、`trifecta_log_loss`、`trio_log_loss`、`stage1_nll`、
+`stage2_nll`、`stage3_nll`の9つである。`z`は馬の事象を独立Bernoulliとみなす近似の標準化残差であり、
+検定の統計量や自動的な採否判定ではない。variantの採否はreportを確認した人間が行う。
+比較の各scopeは`pooled`と`by_test_year`を持ち、空でない値では`race_count`を9指標と同じ階層に
+1回だけ記録する。各指標には`candidate_mean`、`baseline_mean`、`mean_difference`、
+`confidence_interval_lower`、`confidence_interval_upper`、`conclusion`を記録する。
+`variants`はvariant名をキーとするobjectで、各variantは`all_test_races`と
+`jra_flat_graded_stakes_v1`を持つ。各scopeは`pooled`と`by_test_year`からなり、空でない値には
+`race_count`と9指標のレース平均を記録する。`segments`は`definition_version`、固定の
+`residual_definition`、各区分名を同じ階層のキーとして持つ。`residual_definition`は`ratio`の
+`actual / expected`（expectedが1頭あたり1e-12以下なら0としてnull）と、`z`の式・`sum(p * (1 - p))`が1頭あたり1e-12以下ならnull・独立Bernoulli近似で
+検定統計量ではないことを記録する。利用可能な区分には`definition`、`available: true`、
+`variants`を、利用できない区分には`definition`、`available: false`、`reason`を記録する。
+
+運用評価`output/pl-evaluation-2016-2025-graded-final3`（36列、`all_columns`と`without_market`）での
+確認では、両variantのpooled calibrated平均と29,754レースが保存済み予測から再現された。ダート4区分と
+馬齢3・6・7歳以上の残差はPR #119の試行値と一致し、符号付き着差を使う2区分は36列のdatamartに列がないため
+`unavailable`となった。`output/pl-comparison-2016-2025-graded-final3/report.json`の生成は約75秒、
+ピークcommitは3.1 GBだった。
+
 ## top-3 PLの最終モデルを学習して保存する
 
 `model train-pl`は、評価と同じ手順（validでearly stoppingと温度を決める）で最終モデルを学習し、成果物

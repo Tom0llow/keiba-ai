@@ -329,6 +329,8 @@ ADR-039の`model predict-pl-live`が、保存したモデルで当日の重賞�
 | evaluation/yearly_folds.py | train〜Y−2・valid Y−1・test Yのfold、次のsplitの最初のfreeze以後に結果が使えるレースの除外と監査。ADR-038の`plan_final_fit`はtestのない最終学習の分割（train〜V−1・valid V）と、モデルのラベルの利用境界を作る。 |
 | backends/lightgbm.py | `fit_native_pl_booster`: callable objectiveとvalidのfeval・early stoppingによる`lightgbm.train`。予約parameters（評価と最終学習で共通。`use_missing`・`zero_as_missing`を含む）と`gbdt`以外を拒否する。`load_pl_booster`: hashを確かめたnativeのテキストから、列名を照合してPLのboosterを読む。`split_missing_types`: boosterのdumpから、列ごとの分岐の欠損の扱いを返す。 |
 | experiments/pl_evaluation.py | variant×foldの学習・温度推定・testの確率と指標、市場（連勝式はHarville展開）との比較、report・予測表の組立。I/Oなし。 |
+| experiments/pl_comparison.py | 保存済みPL予測のvariant間の正規化、score・temperatureからの確率再計算、全testレース・`jra_flat_graded_stakes_v1`のpooled・test年ごとの9指標の対応ありbootstrap比較、`pl_residual_segments_v1`の区分別残差と`pl_variant_comparison` report本文の組立。I/Oなし。 |
+| serialization/residual_segments.py | `pl_residual_segments_v1`の固定された区分名・定義と、TrackCD・距離・馬番・頭数・馬齢・前走値からの馬ごとの所属判定。前走着差列が全体にない場合の区分の`unavailable`も扱う。I/Oなし。 |
 | experiments/pl_training.py | ADR-038の最終学習（foldと同じ学習と温度の関数）、variantの列、trainの列ごとの欠損の有無、成果物の記録の組立。I/Oなし。 |
 | artifacts/pl_model.py | 成果物`pl_top3_model`（`model.txt`と`manifest.json`）の書込みと厳密な検証付きの読込。書込みと読込で、学習で欠損のあった列のすべての分岐が欠損の枝（missing type `NaN`）を持つことを照合し、なければ拒否する（対処はADR-038 Amendment 1）。ラベルなしの予測（列の照合、±infの拒否、学習で欠損のなかった列の欠損の拒否、温度付きの確率）、予測の特徴量との結び付きとラベルの境界の検査。成果物の小さなバイトI/Oを自分で持ち、`data`・CLIをimportしない。 |
 | experiments/pl_prediction.py | ADR-039の1レースの予測の組立。モデルと特徴量の結び付き・予定・ラベルの境界・馬番の対応・頭数の検査（失敗は理由付きの保留）、馬番の順の行列、確率、`pl_race_prediction`のpayloadとJSON。I/Oなし。 |
@@ -416,6 +418,19 @@ ADR-037の`datamart build-reference-prediction-live`も同じモジュールが�
 snapshotに無いtestレースを拒否し、datamartに無い平地重賞の件数をtest年ごとに記録する。その後、manifestのSHA-256で固定した参考datamartを`read_reference_datamart`で検証して読み、
 ADR-035の評価を実行する。`report.json`と`predictions.parquet`を`publish_directory`で新しいディレクトリへ公開する。
 helpとimportは設定・datamart・snapshot・LightGBMを読まない。進捗・要約・終了コードは`datamart build-reference`と同じ規則である。
+`model compare-pl-variants`はcli/pl_comparison.pyが、configuration/pl_comparison.pyで合成した
+`configs/pl_comparison/`の`evaluation_path`・評価2ファイルのSHA-256・`processed_root`・比較の組を検査し、
+評価reportをSHA-256で照合し、形式と比較対象variantを検査してdatamartと固定snapshotを決める。予測の
+SHA-256を表の読込前に照合し、datamart manifestから閉じた数値列、区分に必須の列、test年の期間・会場を
+検査する。次に`NL_RA_RACE`・`NL_SE_RACE_UMA`のhashを固定してdatamart manifestと評価reportの出典に
+照合する。予測を読み、uniqueなvariant・test年、variant・test年・race・馬の対応、保存確率の再計算、
+評価reportのtest年と平均を検査し、SHA-256をもう一度照合する。その後にdatamartの全行と、snapshotのtest年の期間・会場の行を読み、
+全予測行をdatamartと出走表のキーへ結合してから、
+experiments/pl_comparison.pyで9指標の対応ありbootstrap比較と`pl_residual_segments_v1`の残差を組み立て、
+`pl_variant_comparison` v1の`report.json`を`publish_directory`で新しいディレクトリへ公開する。
+出力は評価・datamart・`processed_root`の中を拒否する。進捗はstderr、公開後の要約1行はstdoutへ出し、
+失敗は終了コード1、Ctrl+Cは130とし、どちらでもstagingを残さない。importとhelpは
+configuration/pl_comparison.pyとmodels/experiments/pl_comparison.pyを読み込まない。
 ADR-038の`model train-pl`はcli/pl_training.pyが、configuration/pl_training.pyで合成した`configs/pl_training/`の設定を読む。出力・設定・固定したdatamartのmanifest・列とvariant・年・LightGBMの予約キーを全体の読込より先に検査し、出典を記録してからdatamartを読み、最終学習を行う。stagingに書いた成果物を読み直してvalidのスコアの一致を確かめてから、`publish_directory`で公開する。stdoutには要約1行（manifestのSHA-256を含む）を出す。helpとimportは設定・学習・成果物のモジュールとLightGBMを読まない。
 ADR-039の`model predict-pl-live`はcli/pl_prediction.pyが、`read_pl_model`でモデルを読み、固定snapshotの`NL_RA_RACE`・`NL_SE_RACE_UMA`を固定して対象日の出馬表を`label_free_target_cards`で正規化し、`jra_flat_graded_stakes_v1`の重賞を決める。`--output`を作る前に、出力・SHA-256・モデル・snapshot・最も早いfreezeとラベルの境界を検査する。その後、freezeの早い順に`--poll-interval-seconds`ごとに`<features-root>/<race_id>/`の出現を見て、`read_reference_prediction_features`で読み、snapshotの一致と特徴量の保留を確かめ、experiments/pl_prediction.pyで予測を組み立て、`<output>/<race_id>/prediction.json`を`publish_directory`で公開する。1レースの読込・検査の失敗はそのレースの保留とし、発売締切（発走2分前）より後になっても公開されない特徴量は保留する。レースごとの結果はstdoutへ1行のJSON、要約はstderrへ出す。致命的な失敗は終了コード1、Ctrl+Cは130で、公開済みのレースは残す。helpとimportは成果物・予測の組立のモジュールとLightGBMを読まない。
 ADR-042の`model evaluate-final-odds`はcli/final_odds_evaluation.pyが、configuration/final_odds_evaluation.pyで合成した`configs/final_odds_evaluation/`の設定を、出力の検査の後、どの表も読む前に検査する。固定snapshotの`NL_RA_RACE`・`NL_HR_PAY`・O1・O2のhashを先に取り、`NL_RA_RACE`・`NL_HR_PAY`を期間・venue限定で読み、`jra_flat_graded_stakes_v1`を判定する。年ごとにO1・O2を`publication_reader`の`scan`→`select_publication_pairs`→`read_pairs`で読み、`build_race_observations`で観測を組み立てる。最後に`manifest()`でhashを再確認し、評価を実行して`report.json`だけを`publish_directory`で公開する。進捗は表と年ごとにstderrへ、要約1行はstdoutへ出す。失敗は終了コード1、Ctrl+Cは130で、stagingを残さない。helpとimportは設定・評価・補正・指標のモジュールを読まない。
